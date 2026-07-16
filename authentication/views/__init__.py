@@ -1,1 +1,5 @@
 from .register_view import RegisterAPIView
+from .login_view import LoginAPIView
+from .forgot_password_view import ForgotPasswordAPIView
+from .verify_otp_view import VerifyOTPAPIView
+from .reset_password_view import ResetPasswordAPIView
