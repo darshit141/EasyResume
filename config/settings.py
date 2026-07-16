@@ -47,6 +47,7 @@ INSTALLED_APPS = [
     # Third Party Apps
     "rest_framework",
     "corsheaders",
+    "drf_spectacular",
 
     # Local Apps
     "api",
@@ -139,6 +140,7 @@ REST_FRAMEWORK = {
     "DEFAULT_AUTHENTICATION_CLASSES": (
         "rest_framework_simplejwt.authentication.JWTAuthentication",
     ),
+    "DEFAULT_SCHEMA_CLASS": "drf_spectacular.openapi.AutoSchema",
 }
 
 SIMPLE_JWT = {
@@ -155,3 +157,9 @@ SIMPLE_JWT = {
 
 # Custom User Model
 AUTH_USER_MODEL = "authentication.User"
+
+SPECTACULAR_SETTINGS = {
+    "TITLE": "IntelliResume API",
+    "DESCRIPTION": "API documentation for IntelliResume Backend",
+    "VERSION": "1.0.0",
+}
