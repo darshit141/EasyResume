@@ -8,8 +8,11 @@ from authentication.serializers.reset_password_serializer import (
 from authentication.services.reset_password_service import (
     ResetPasswordService,
 )
+from drf_spectacular.utils import extend_schema
 
-
+@extend_schema(
+    request=ResetPasswordSerializer,
+)
 class ResetPasswordAPIView(APIView):
     """
     API for resetting user password.

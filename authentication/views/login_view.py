@@ -4,8 +4,11 @@ from rest_framework.views import APIView
 
 from authentication.serializers.login_serializer import LoginSerializer
 from authentication.services.login_service import LoginService
+from drf_spectacular.utils import extend_schema
 
-
+@extend_schema(
+    request=LoginSerializer,
+)
 class LoginAPIView(APIView):
     """
     API for user login.

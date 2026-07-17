@@ -9,7 +9,11 @@ from authentication.services.forgot_password_service import (
     ForgotPasswordService,
 )
 
+from drf_spectacular.utils import extend_schema
 
+@extend_schema(
+    request=ForgotPasswordSerializer,
+)
 class ForgotPasswordAPIView(APIView):
     """
     API for forgot password.

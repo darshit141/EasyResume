@@ -8,8 +8,11 @@ from authentication.serializers.verify_otp_serializer import (
 from authentication.services.verify_otp_service import (
     VerifyOTPService,
 )
+from drf_spectacular.utils import extend_schema
 
-
+@extend_schema(
+    request=VerifyOTPSerializer,
+)
 class VerifyOTPAPIView(APIView):
     """
     API for OTP verification.

@@ -4,8 +4,12 @@ from rest_framework.views import APIView
 
 from authentication.serializers.register_serializer import RegisterSerializer
 from authentication.services.register_service import RegisterService
+from drf_spectacular.utils import extend_schema
 
 
+@extend_schema(
+    request=RegisterSerializer,
+)
 class RegisterAPIView(APIView):
     """
     API for user registration.
