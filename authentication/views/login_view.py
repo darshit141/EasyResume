@@ -6,6 +6,7 @@ from authentication.serializers.login_serializer import LoginSerializer
 from authentication.services.login_service import LoginService
 from drf_spectacular.utils import extend_schema
 
+
 @extend_schema(
     request=LoginSerializer,
 )
@@ -24,30 +25,23 @@ class LoginAPIView(APIView):
                 password=serializer.validated_data["password"],
             )
 
-            if result is None:
+            # Login failed
+            if not result["success"]:
                 return Response(
                     {
-                        "message": "Invalid email or password."
+                        "message": result["message"],
                     },
-                    status=status.HTTP_401_UNAUTHORIZED,
+                    status=result["status"],
                 )
 
-            user = result["user"]
-
+            # Login successful
             return Response(
                 {
-                    "message": "Login successful.",
-                    "access": result["access"],
-                    "refresh": result["refresh"],
-                    "user": {
-                        "id": user.id,
-                        "name": user.name,
-                        "email": user.email,
-                        "phone": user.phone,
-                        "is_staff": user.is_staff,
-                    },
+                    "success": result["success"],
+                    "message": result["message"],
+                    "email": result["email"],
                 },
-                status=status.HTTP_200_OK,
+                status=result["status"],
             )
 
         return Response(

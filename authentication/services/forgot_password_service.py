@@ -37,7 +37,7 @@ class ForgotPasswordService:
         PasswordResetOTP.objects.create(
             user=user,
             otp=otp,
-            expires_at=timezone.now() + timedelta(minutes=10),
+            expires_at=timezone.now() + timedelta(minutes=5),
         )
 
         print("\n" + "=" * 50)

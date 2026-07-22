@@ -6,7 +6,7 @@ from authentication.views import (
     ForgotPasswordAPIView,
     VerifyOTPAPIView,
     ResetPasswordAPIView,
-
+    VerifyLoginOTPAPIView,
 )
 
 urlpatterns = [
@@ -19,6 +19,11 @@ urlpatterns = [
         "login/",
         LoginAPIView.as_view(),
         name="login",
+    ),
+    path(
+        "login/verify-otp/",
+        VerifyLoginOTPAPIView.as_view(),
+        name="login-verify-otp",
     ),
     path(
         "forgot-password/",
