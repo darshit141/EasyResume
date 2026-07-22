@@ -1,6 +1,7 @@
 from rest_framework import serializers
 
 from authentication.models import User
+from authentication.utils.password_validator import validate_password_strength
 
 
 class RegisterSerializer(serializers.ModelSerializer):
@@ -10,7 +11,6 @@ class RegisterSerializer(serializers.ModelSerializer):
 
     password = serializers.CharField(
         write_only=True,
-        min_length=8,
         style={"input_type": "password"},
     )
 
@@ -76,6 +76,12 @@ class RegisterSerializer(serializers.ModelSerializer):
             )
 
         return value
+
+    def validate_password(self, value):
+        """
+        Validate password strength.
+        """
+        return validate_password_strength(value)
 
     def validate(self, attrs):
         """

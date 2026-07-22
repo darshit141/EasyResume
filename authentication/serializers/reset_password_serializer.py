@@ -1,5 +1,7 @@
 from rest_framework import serializers
 
+from authentication.utils.password_validator import validate_password_strength
+
 
 class ResetPasswordSerializer(serializers.Serializer):
     """
@@ -18,7 +20,16 @@ class ResetPasswordSerializer(serializers.Serializer):
         style={"input_type": "password"},
     )
 
+    def validate_password(self, value):
+        """
+        Validate password strength.
+        """
+        return validate_password_strength(value)
+
     def validate(self, attrs):
+        """
+        Validate password confirmation.
+        """
         if attrs["password"] != attrs["confirm_password"]:
             raise serializers.ValidationError(
                 {
