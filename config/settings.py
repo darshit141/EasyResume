@@ -52,6 +52,7 @@ INSTALLED_APPS = [
     # Local Apps
     "api",
     "authentication",
+     "resumes",
 ]
 
 MIDDLEWARE = [
@@ -162,4 +163,10 @@ SPECTACULAR_SETTINGS = {
     "TITLE": "IntelliResume API",
     "DESCRIPTION": "API documentation for IntelliResume Backend",
     "VERSION": "1.0.0",
+
+    # Generate separate request schemas.
+    "COMPONENT_SPLIT_REQUEST": True,
 }
+
+MEDIA_URL = "/media/"
+MEDIA_ROOT = BASE_DIR / "media"

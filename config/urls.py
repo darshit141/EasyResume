@@ -1,5 +1,7 @@
 from django.contrib import admin
 from django.urls import include, path
+from django.conf import settings
+from django.conf.urls.static import static
 
 from drf_spectacular.views import (
     SpectacularAPIView,
@@ -15,6 +17,9 @@ urlpatterns = [
     # Authentication APIs
     path("api/auth/", include("authentication.urls")),
 
+    # Resume APIs
+    path("api/resumes/", include("resumes.urls")),
+
     # OpenAPI Schema
     path(
         "api/schema/",
@@ -29,3 +34,9 @@ urlpatterns = [
         name="swagger-ui",
     ),
 ]
+
+if settings.DEBUG:
+    urlpatterns += static(
+        settings.MEDIA_URL,
+        document_root=settings.MEDIA_ROOT,
+    )
