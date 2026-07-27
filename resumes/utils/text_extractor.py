@@ -17,6 +17,7 @@ class TextExtractor:
 
         extension = Path(file.name).suffix.lower()
 
+
         if extension == ".pdf":
             return TextExtractor._extract_pdf(file)
 

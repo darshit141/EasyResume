@@ -10,6 +10,9 @@ from resumes.serializers.resume_serializer import ResumeUploadSerializer
 from resumes.services.resume_upload_service import ResumeUploadService
 
 @extend_schema(
+    tags=["Resume"],
+    summary="Upload Resume",
+    description="API to upload a resume.",
     request=ResumeUploadSerializer,
     responses={
         status.HTTP_201_CREATED: ResumeUploadSerializer,
