@@ -1,5 +1,4 @@
 import logging
-
 from resumes.models import Resume
 from resumes.utils.ats_scorer import ATSScorer
 from resumes.utils.text_extractor import TextExtractor
@@ -17,7 +16,8 @@ class ResumeUploadService:
     def upload_resume(user, validated_data):
         uploaded_file = validated_data["file"]
 
-        resume = Resume.objects.filter(user=user).first()
+        # Latest resume record hi fetch hoga update ke liye
+        resume = Resume.objects.filter(user=user).order_by("-id").first()
         old_file_name = None
 
         if resume:

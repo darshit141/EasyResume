@@ -1,7 +1,5 @@
-from django.shortcuts import get_object_or_404
-
+from django.http import Http404
 from resumes.models import Resume
-
 
 class ResumeViewService:
     """
@@ -10,4 +8,10 @@ class ResumeViewService:
 
     @staticmethod
     def get_resume(user):
-        return get_object_or_404(Resume, user=user)
+        # Multiple records hone par crash hone ki jagah latest resume return karega
+        resume = Resume.objects.filter(user=user).order_by("-id").first()
+        
+        if not resume:
+            raise Http404("No resume found for this user.")
+            
+        return resume
