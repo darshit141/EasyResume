@@ -24,7 +24,7 @@ class ResumeAdmin(admin.ModelAdmin):
     )
 
     readonly_fields = (
-        "parsed_text",
+        "parsed_data",
         "created_at",
         "updated_at",
     )

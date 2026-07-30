@@ -1,8 +1,11 @@
 import logging
+
+from django.core.files.storage import default_storage
+
 from resumes.models import Resume
 from resumes.utils.ats_scorer import ATSScorer
+from resumes.utils.resume_parser import ResumeParser
 from resumes.utils.text_extractor import TextExtractor
-from django.core.files.storage import default_storage
 
 logger = logging.getLogger(__name__)
 
@@ -16,7 +19,7 @@ class ResumeUploadService:
     def upload_resume(user, validated_data):
         uploaded_file = validated_data["file"]
 
-        # Latest resume record hi fetch hoga update ke liye
+        # Fetch latest resume for update
         resume = Resume.objects.filter(user=user).order_by("-id").first()
         old_file_name = None
 
@@ -27,7 +30,7 @@ class ResumeUploadService:
             resume.file = uploaded_file
             resume.original_filename = uploaded_file.name
             resume.status = "processing"
-            resume.parsed_text = ""
+            resume.parsed_data = {}
             resume.ats_score = None
 
         else:
@@ -36,26 +39,35 @@ class ResumeUploadService:
                 file=uploaded_file,
                 original_filename=uploaded_file.name,
                 status="processing",
+                parsed_data={},
             )
 
         resume.save()
 
         try:
+            # Step 1: Extract resume text
             extracted_text = TextExtractor.extract_text(
                 resume.file
             )
-
-            ats_score = ATSScorer.calculate_score(
+            
+            # Step 2: Convert extracted text into structured JSON
+            parsed_data = ResumeParser.parse(
                 extracted_text
             )
 
-            resume.parsed_text = extracted_text
+            # Step 3: Calculate ATS score using structured JSON
+            ats_score = ATSScorer.calculate_score(
+                parsed_data
+            )
+
+            # Step 4: Save parsed data and ATS score
+            resume.parsed_data = parsed_data
             resume.ats_score = ats_score
             resume.status = "completed"
 
         except Exception:
             logger.exception(
-                "Failed to extract text from uploaded resume."
+                "Failed to process uploaded resume."
             )
             resume.status = "failed"
 
@@ -63,7 +75,7 @@ class ResumeUploadService:
             update_fields=[
                 "file",
                 "original_filename",
-                "parsed_text",
+                "parsed_data",
                 "ats_score",
                 "status",
             ]

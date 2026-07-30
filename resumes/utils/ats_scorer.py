@@ -1,30 +1,35 @@
 class ATSScorer:
     """
-    Utility class for calculating ATS score.
+    Utility class for calculating ATS score
+    from structured resume data.
     """
 
     @staticmethod
-    def calculate_score(text):
+    def calculate_score(parsed_data):
         score = 0
 
-        text = text.lower()
-
-        if "phone" in text or "email" in text:
+        # Contact Information
+        if parsed_data.get("email") or parsed_data.get("phone"):
             score += 20
 
-        if "professional summary" in text:
+        # Professional Summary
+        if parsed_data.get("summary"):
             score += 15
 
-        if "skills" in text:
+        # Skills
+        if parsed_data.get("skills"):
             score += 20
 
-        if "education" in text:
+        # Education
+        if parsed_data.get("education"):
             score += 15
 
-        if "experience" in text:
+        # Experience
+        if parsed_data.get("experience"):
             score += 20
 
-        if "projects" in text:
+        # Projects
+        if parsed_data.get("projects"):
             score += 10
 
         return score

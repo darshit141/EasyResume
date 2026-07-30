@@ -11,7 +11,7 @@ class ResumeViewSerializer(serializers.ModelSerializer):
             "original_filename",
             "status",
             "ats_score",
-            "parsed_text",
+            "parsed_data",
             "created_at",
             "updated_at",
         ]

@@ -11,7 +11,7 @@ from resumes.services.resume_edit_service import ResumeEditService
 @extend_schema(
     tags=["Resume"],
     summary="Edit Resume",
-    description="Update the parsed resume text and recalculate the ATS score.",
+    description="Update the parsed resume data and recalculate the ATS score.",
     request=ResumeEditSerializer,
     responses={
         status.HTTP_200_OK: ResumeEditSerializer,
@@ -26,7 +26,7 @@ class ResumeEditAPIView(APIView):
         if serializer.is_valid():
             resume = ResumeEditService.update_resume(
                 request.user,
-                serializer.validated_data["parsed_text"],
+                serializer.validated_data["parsed_data"],
             )
 
             return Response(
@@ -37,4 +37,7 @@ class ResumeEditAPIView(APIView):
                 status=status.HTTP_200_OK,
             )
 
-        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+        return Response(
+            serializer.errors,
+            status=status.HTTP_400_BAD_REQUEST,
+        )

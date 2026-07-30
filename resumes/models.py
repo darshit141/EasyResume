@@ -35,9 +35,9 @@ class Resume(models.Model):
         default="uploaded",
     )
 
-    parsed_text = models.TextField(
-        blank=True,
-        null=True,
+    parsed_data = models.JSONField(
+        default=dict,
+        blank=True
     )
 
     ats_score = models.DecimalField(
