@@ -1,0 +1,59 @@
+services:
+  ollama:
+    image: ollama/ollama:latest
+    restart: unless-stopped
+    volumes:
+      - ollama-data:/root/.ollama
+    networks:
+      - llm-network
+    healthcheck:
+      # The Ollama CLI performs an HTTP request to the local Ollama API.
+      test: ["CMD-SHELL", "ollama list >/dev/null 2>&1"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+    cpus: "6.0"
+    mem_limit: 6g
+
+  backend:
+    build:
+      context: .
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      OLLAMA_BASE_URL: http://ollama:11434
+      SQLITE_DB_PATH: /app/data/db.sqlite3
+    command: >
+      sh -c "python manage.py migrate --noinput &&
+      gunicorn --bind 0.0.0.0:8000 --workers 2 --timeout 150 config.wsgi:application"
+    ports:
+      - "127.0.0.1:8000:8000"
+    volumes:
+      - backend-data:/app/data
+      - backend-media:/app/media
+    depends_on:
+      ollama:
+        condition: service_healthy
+    networks:
+      - app-network
+      - llm-network
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"from urllib.request import urlopen; urlopen('http://127.0.0.1:8000/api/health/', timeout=5)\""]
+      interval: 15s
+      timeout: 8s
+      retries: 6
+      start_period: 45s
+    cpus: "2.0"
+    mem_limit: 1g
+
+networks:
+  app-network:
+  llm-network:
+    internal: true
+
+volumes:
+  ollama-data:
+  backend-data:
+  backend-media:

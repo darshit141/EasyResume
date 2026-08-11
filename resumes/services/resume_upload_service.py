@@ -52,9 +52,7 @@ class ResumeUploadService:
             )
 
             # Step 2: Convert extracted text into structured JSON
-            parsed_data = ResumeParser.parse(
-                extracted_text
-            )
+            parsed_data = ResumeParser.parse(extracted_text)
 
             # Step 3: Calculate ATS score using structured JSON
             ats_score = ATSScorer.calculate_score(

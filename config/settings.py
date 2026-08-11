@@ -96,7 +96,9 @@ WSGI_APPLICATION = 'config.wsgi.application'
 DATABASES = {
     'default': {
         'ENGINE': 'django.db.backends.sqlite3',
-        'NAME': BASE_DIR / 'db.sqlite3',
+        # Docker Compose sets this to a mounted volume; local development
+        # keeps the existing repository-local SQLite database.
+        'NAME': os.getenv("SQLITE_DB_PATH", str(BASE_DIR / 'db.sqlite3')),
     }
 }
 
@@ -174,5 +176,15 @@ SPECTACULAR_SETTINGS = {
 
 MEDIA_URL = "/media/"
 MEDIA_ROOT = BASE_DIR / "media"
+
+# Local LLM configuration.  These are deliberately kept separate from the
+# request layer so the public REST API does not depend on an LLM provider.
+LLM_PROVIDER = os.getenv("LLM_PROVIDER", "ollama")
+OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
+OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "")
+LLM_TIMEOUT = int(os.getenv("LLM_TIMEOUT", "120"))
+LLM_MAX_RETRIES = int(os.getenv("LLM_MAX_RETRIES", "2"))
+LLM_TEMPERATURE = float(os.getenv("LLM_TEMPERATURE", "0"))
+
 # Email Settings for Testing
 EMAIL_BACKEND = "django.core.mail.backends.console.EmailBackend"

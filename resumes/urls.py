@@ -7,6 +7,18 @@ from resumes.views.resume_version_view import ResumeVersionAPIView
 from resumes.views.resume_version_detail_view import (
     ResumeVersionDetailAPIView,
 )
+from resumes.views.job_curation_view import (
+    JobCurationCreateAPIView,
+    JobCurationDetailAPIView,
+    JobCurationListAPIView,
+    JobGapAnalysisAPIView,
+)
+from resumes.views.resume_curation_view import JobResumeCurationGenerateAPIView
+from resumes.views.missing_information_view import MissingInformationReviewAPIView
+from resumes.views.tailored_resume_version_view import (
+    TailoredResumeVersionDetailAPIView,
+    TailoredResumeVersionListAPIView,
+)
 
 urlpatterns = [
     path(
@@ -32,5 +44,45 @@ urlpatterns = [
         "versions/<int:version_id>/",
         ResumeVersionDetailAPIView.as_view(),
         name="resume-version-detail",
+    ),
+    path(
+        "job-curations/",
+        JobCurationListAPIView.as_view(),
+        name="job-curation-list",
+    ),
+    path(
+        "job-curations/analyze/",
+        JobCurationCreateAPIView.as_view(),
+        name="job-curation-analyze",
+    ),
+    path(
+        "job-curations/<int:curation_id>/",
+        JobCurationDetailAPIView.as_view(),
+        name="job-curation-detail",
+    ),
+    path(
+        "job-curations/<int:curation_id>/gap-analysis/",
+        JobGapAnalysisAPIView.as_view(),
+        name="job-curation-gap-analysis",
+    ),
+    path(
+        "job-curations/<int:curation_id>/tailored-resume/",
+        JobResumeCurationGenerateAPIView.as_view(),
+        name="job-curation-tailored-resume",
+    ),
+    path(
+        "job-curations/<int:curation_id>/missing-information/",
+        MissingInformationReviewAPIView.as_view(),
+        name="job-curation-missing-information",
+    ),
+    path(
+        "job-curations/<int:curation_id>/tailored-resume/versions/",
+        TailoredResumeVersionListAPIView.as_view(),
+        name="job-curation-tailored-resume-versions",
+    ),
+    path(
+        "job-curations/<int:curation_id>/tailored-resume/versions/<int:version_id>/",
+        TailoredResumeVersionDetailAPIView.as_view(),
+        name="job-curation-tailored-resume-version-detail",
     ),
 ]
