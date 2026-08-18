@@ -12,10 +12,19 @@ https://docs.djangoproject.com/en/6.0/ref/settings/
 
 from pathlib import Path
 import os
+import sys
 from dotenv import load_dotenv
 from datetime import timedelta
 
 load_dotenv()
+
+# Rate-limit windows are wall-clock and share process-wide cache state, which
+# makes them actively hostile to an automated test run (many rapid calls to
+# the same throttled scope across unrelated tests). Disable throttling only
+# under `manage.py test`; individual tests that need to verify throttling
+# behavior re-enable it explicitly and locally (see
+# authentication/tests_profile_and_session.py).
+RUNNING_TESTS = len(sys.argv) > 1 and sys.argv[1] == "test"
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -26,16 +35,42 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 
 # SECURITY WARNING: keep the secret key used in production secret!
 SECRET_KEY = os.getenv("SECRET_KEY")
-# SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = True
-#DEBUG = os.getenv("DEBUG") == "False"
-CORS_ALLOWED_ORIGINS = [
-    "http://localhost:5173",
-]
-CORS_ALLOW_ALL_ORIGINS = True
+# SECURITY WARNING: don't run with debug turned on in production! Real
+# deployments must set DEBUG=False explicitly via environment — this
+# defaults to True only for local-dev convenience.
+DEBUG = os.getenv("DEBUG", "True") == "True"
 
-# ALLOWED_HOSTS = []
-ALLOWED_HOSTS = os.getenv("ALLOWED_HOSTS", "").split(",")
+ALLOWED_HOSTS = [
+    host.strip() for host in os.getenv("ALLOWED_HOSTS", "").split(",") if host.strip()
+]
+
+# CORS: wide-open only in DEBUG (local dev, any Vite port). In production,
+# CORS_ALLOWED_ORIGINS must be set explicitly via env — an allow-all origin
+# policy on an API that issues bearer tokens is a real cross-origin risk.
+CORS_ALLOW_ALL_ORIGINS = DEBUG
+CORS_ALLOWED_ORIGINS = [
+    origin.strip() for origin in os.getenv("CORS_ALLOWED_ORIGINS", "").split(",") if origin.strip()
+]
+
+CSRF_TRUSTED_ORIGINS = [
+    origin.strip() for origin in os.getenv("CSRF_TRUSTED_ORIGINS", "").split(",") if origin.strip()
+]
+
+# Production-only hardening (all inert under DEBUG=True so local dev over
+# plain http:// keeps working unchanged).
+if not DEBUG:
+    SECURE_SSL_REDIRECT = os.getenv("SECURE_SSL_REDIRECT", "True") == "True"
+    SESSION_COOKIE_SECURE = True
+    CSRF_COOKIE_SECURE = True
+    SECURE_CONTENT_TYPE_NOSNIFF = True
+    SECURE_BROWSER_XSS_FILTER = True
+    X_FRAME_OPTIONS = "DENY"
+    SECURE_REFERRER_POLICY = "same-origin"
+    # 1 year, ramp up from a shorter value after confirming HTTPS works
+    # end-to-end on the real deployment before enabling preload/subdomains.
+    SECURE_HSTS_SECONDS = int(os.getenv("SECURE_HSTS_SECONDS", "31536000"))
+    SECURE_HSTS_INCLUDE_SUBDOMAINS = os.getenv("SECURE_HSTS_INCLUDE_SUBDOMAINS", "False") == "True"
+    SECURE_HSTS_PRELOAD = os.getenv("SECURE_HSTS_PRELOAD", "False") == "True"
 
 # Application definition
 
@@ -50,6 +85,8 @@ INSTALLED_APPS = [
 
     # Third Party Apps
     "rest_framework",
+    "rest_framework_simplejwt",
+    "rest_framework_simplejwt.token_blacklist",
     "corsheaders",
     "drf_spectacular",
 
@@ -57,6 +94,8 @@ INSTALLED_APPS = [
     "api",
     "authentication",
      "resumes",
+    "billing",
+    "blog",
 ]
 
 MIDDLEWARE = [
@@ -92,15 +131,40 @@ WSGI_APPLICATION = 'config.wsgi.application'
 
 # Database
 # https://docs.djangoproject.com/en/6.0/ref/settings/#databases
+#
+# SQLite (the default) is fine for local dev and even a single-replica
+# small-scale deployment (see docker-compose.yml's mounted volume). For a
+# real multi-instance production deployment, set DATABASE_URL to a Postgres
+# URL (postgres://user:pass@host:port/dbname) — most hosts (Render, Railway,
+# Heroku, etc.) inject this automatically when you attach a Postgres addon.
+# Requires `psycopg[binary]` (already in requirements.txt) to actually be
+# installed on the host; no code changes needed to switch.
+_DATABASE_URL = os.getenv("DATABASE_URL", "")
 
-DATABASES = {
-    'default': {
-        'ENGINE': 'django.db.backends.sqlite3',
-        # Docker Compose sets this to a mounted volume; local development
-        # keeps the existing repository-local SQLite database.
-        'NAME': os.getenv("SQLITE_DB_PATH", str(BASE_DIR / 'db.sqlite3')),
+if _DATABASE_URL:
+    from urllib.parse import urlparse
+
+    _db_url = urlparse(_DATABASE_URL)
+    DATABASES = {
+        "default": {
+            "ENGINE": "django.db.backends.postgresql",
+            "NAME": _db_url.path.lstrip("/"),
+            "USER": _db_url.username,
+            "PASSWORD": _db_url.password,
+            "HOST": _db_url.hostname,
+            "PORT": _db_url.port or 5432,
+            "CONN_MAX_AGE": int(os.getenv("DATABASE_CONN_MAX_AGE", "60")),
+        }
     }
-}
+else:
+    DATABASES = {
+        'default': {
+            'ENGINE': 'django.db.backends.sqlite3',
+            # Docker Compose sets this to a mounted volume; local development
+            # keeps the existing repository-local SQLite database.
+            'NAME': os.getenv("SQLITE_DB_PATH", str(BASE_DIR / 'db.sqlite3')),
+        }
+    }
 
 
 # Password validation
@@ -139,15 +203,20 @@ USE_TZ = True
 
 STATIC_URL = 'static/'
 
-CORS_ALLOWED_ORIGINS = [
-    "http://localhost:5173",
-]
-
 REST_FRAMEWORK = {
     "DEFAULT_AUTHENTICATION_CLASSES": (
         "rest_framework_simplejwt.authentication.JWTAuthentication",
     ),
     "DEFAULT_SCHEMA_CLASS": "drf_spectacular.openapi.AutoSchema",
+    "DEFAULT_THROTTLE_CLASSES": [] if RUNNING_TESTS else [
+        "rest_framework.throttling.ScopedRateThrottle",
+    ],
+    "DEFAULT_THROTTLE_RATES": {
+        # Brute-forceable auth endpoints (login, register, OTP, password reset).
+        "auth_sensitive": os.getenv("THROTTLE_AUTH_SENSITIVE", "10/min"),
+        # AI-heavy job-curation endpoints (job analysis, tailored resume generation).
+        "ai_resume": os.getenv("THROTTLE_AI_RESUME", "20/min"),
+    },
 }
 
 SIMPLE_JWT = {
@@ -177,14 +246,97 @@ SPECTACULAR_SETTINGS = {
 MEDIA_URL = "/media/"
 MEDIA_ROOT = BASE_DIR / "media"
 
-# Local LLM configuration.  These are deliberately kept separate from the
-# request layer so the public REST API does not depend on an LLM provider.
+# LLM configuration.  These are deliberately kept separate from the request
+# layer so the public REST API does not depend on a specific AI provider.
+# LLM_PROVIDER is the server-wide default; individual requests may override
+# it (see resumes.services.llm_service.get_llm_service) with any value in
+# resumes.services.llm_service.SUPPORTED_PROVIDERS.
 LLM_PROVIDER = os.getenv("LLM_PROVIDER", "ollama")
-OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
-OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "")
-LLM_TIMEOUT = int(os.getenv("LLM_TIMEOUT", "120"))
+# Sized for the slowest supported provider, not the fastest. A local
+# CPU-only Ollama run has to load the model (~60s cold) and then generate a
+# full structured resume document, which routinely exceeds two minutes;
+# hosted providers (Groq/Gemini) answer in seconds and never approach this.
+# Too low a value here surfaces as a spurious LLM_TIMEOUT on upload.
+LLM_TIMEOUT = int(os.getenv("LLM_TIMEOUT", "300"))
 LLM_MAX_RETRIES = int(os.getenv("LLM_MAX_RETRIES", "2"))
 LLM_TEMPERATURE = float(os.getenv("LLM_TEMPERATURE", "0"))
+# Hard cap on generated tokens per call. Without this, a schema-constrained
+# model that hits a field the source text doesn't clearly answer can fall
+# into a degenerate repetition loop and run for the full context window
+# instead of returning — this bounds that failure mode to a fixed, fast
+# error instead of an indefinite hang.
+LLM_MAX_OUTPUT_TOKENS = int(os.getenv("LLM_MAX_OUTPUT_TOKENS", "8192"))
 
-# Email Settings for Testing
-EMAIL_BACKEND = "django.core.mail.backends.console.EmailBackend"
+# How many resumes a single user may keep at once. Retune anytime without a
+# code change — enforced in resumes.services.resume_upload_service.
+MAX_RESUMES_PER_USER = int(os.getenv("MAX_RESUMES_PER_USER", "5"))
+
+# Which domains a "link to the original posting" (job_url) may point at —
+# our own curation of which sites are legitimate job postings, not the
+# user's choice. Ships with a sensible default list of major job boards and
+# ATS platforms so it's restricted out of the box; override via env to add
+# or remove sites without a code change. Set to an explicitly empty string
+# (not just omitted) to disable the restriction entirely and allow any URL.
+_DEFAULT_ALLOWED_JOB_URL_DOMAINS = (
+    "linkedin.com,indeed.com,glassdoor.com,ziprecruiter.com,monster.com,"
+    "naukri.com,wellfound.com,angel.co,dice.com,simplyhired.com,"
+    "greenhouse.io,lever.co,ashbyhq.com,workday.com,myworkdayjobs.com,"
+    "smartrecruiters.com,bamboohr.com,breezy.hr,jobvite.com,icims.com,taleo.net"
+)
+ALLOWED_JOB_URL_DOMAINS = [
+    domain.strip().lower()
+    for domain in os.getenv("ALLOWED_JOB_URL_DOMAINS", _DEFAULT_ALLOWED_JOB_URL_DOMAINS).split(",")
+    if domain.strip()
+]
+
+OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
+OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "")
+# How long Ollama keeps the model resident in memory after a request.
+# Ollama's own default is 5m, which means a normally-paced user reloads the
+# model from disk on nearly every request and pays that cost inside the
+# request timeout. Trades idle RAM for predictable latency.
+OLLAMA_KEEP_ALIVE = os.getenv("OLLAMA_KEEP_ALIVE", "30m")
+
+# Groq: free-tier, OpenAI-compatible API. Get a key at https://console.groq.com
+GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
+GROQ_MODEL = os.getenv("GROQ_MODEL", "")
+GROQ_BASE_URL = os.getenv("GROQ_BASE_URL", "https://api.groq.com/openai/v1")
+
+# Gemini: free-tier API. Get a key at https://aistudio.google.com/apikey
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "")
+GEMINI_BASE_URL = os.getenv(
+    "GEMINI_BASE_URL", "https://generativelanguage.googleapis.com/v1beta"
+)
+
+# Email. Defaults to Django's console backend (prints the full email to
+# the server log — zero setup, fine for local dev). Set EMAIL_HOST to
+# switch to real SMTP delivery with no code changes required; works with
+# any standard SMTP provider (Gmail app password, SendGrid, Mailgun, SES
+# SMTP, etc.) — set EMAIL_HOST/PORT/USER/PASSWORD accordingly.
+EMAIL_HOST = os.getenv("EMAIL_HOST", "")
+if EMAIL_HOST:
+    EMAIL_BACKEND = "django.core.mail.backends.smtp.EmailBackend"
+    EMAIL_PORT = int(os.getenv("EMAIL_PORT", "587"))
+    EMAIL_HOST_USER = os.getenv("EMAIL_HOST_USER", "")
+    EMAIL_HOST_PASSWORD = os.getenv("EMAIL_HOST_PASSWORD", "")
+    EMAIL_USE_TLS = os.getenv("EMAIL_USE_TLS", "True") == "True"
+    EMAIL_USE_SSL = os.getenv("EMAIL_USE_SSL", "False") == "True"
+    EMAIL_TIMEOUT = int(os.getenv("EMAIL_TIMEOUT", "10"))
+else:
+    EMAIL_BACKEND = "django.core.mail.backends.console.EmailBackend"
+
+DEFAULT_FROM_EMAIL = os.getenv("DEFAULT_FROM_EMAIL", "IntelliResume <no-reply@intelliresume.local>")
+
+# Stripe billing. Empty by default — billing endpoints return a clean,
+# explicit "not configured" error rather than crashing until real keys are
+# set. Use test-mode keys (sk_test_.../pk_test_...) during development;
+# STRIPE_WEBHOOK_SECRET comes from the webhook endpoint's settings in the
+# Stripe Dashboard (or `stripe listen` when testing locally).
+STRIPE_SECRET_KEY = os.getenv("STRIPE_SECRET_KEY", "")
+STRIPE_PUBLISHABLE_KEY = os.getenv("STRIPE_PUBLISHABLE_KEY", "")
+STRIPE_WEBHOOK_SECRET = os.getenv("STRIPE_WEBHOOK_SECRET", "")
+
+# Where Stripe Checkout redirects back to after a successful/canceled
+# payment, and where CORS/CSRF need to trust requests from.
+FRONTEND_URL = os.getenv("FRONTEND_URL", "http://localhost:5173")

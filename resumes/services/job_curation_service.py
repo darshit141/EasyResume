@@ -20,16 +20,18 @@ class JobCurationService:
     Coordinates persistence and AI analysis for job-specific resume curation.
     """
 
-    def __init__(self, ai_service=None):
-        self.ai_service = ai_service or JobCurationAIService()
+    def __init__(self, ai_service=None, provider=None):
+        self.ai_service = ai_service or JobCurationAIService(provider=provider)
 
-    def create_analysis(self, user, job_title, job_description):
+    def create_analysis(self, user, job_title, job_description, job_url="", resume_id=None):
         try:
             with transaction.atomic():
                 curation = JobResumeCuration.objects.create(
                     user=user,
+                    resume_id=resume_id,
                     job_title=job_title,
                     job_description=job_description,
+                    job_url=job_url,
                     curate_resume=True,
                     status="processing",
                 )

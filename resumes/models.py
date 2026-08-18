@@ -116,11 +116,29 @@ class JobResumeCuration(models.Model):
         related_name="job_resume_curations",
     )
 
+    resume = models.ForeignKey(
+        "Resume",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="job_resume_curations",
+    )
+
     job_title = models.CharField(
         max_length=200,
     )
 
     job_description = models.TextField()
+
+    job_url = models.URLField(
+        max_length=1000,
+        blank=True,
+        help_text=(
+            "Link to the original posting. Kept as a reference the candidate can "
+            "click back to, and used to import the posting when no description "
+            "was pasted (see JobUrlFetchService)."
+        ),
+    )
 
     curate_resume = models.BooleanField(
         default=True,
@@ -165,6 +183,50 @@ class JobResumeCuration(models.Model):
     tailored_resume_error_code = models.CharField(
         max_length=80,
         blank=True,
+    )
+
+    cover_letter_data = models.JSONField(
+        default=dict,
+        blank=True,
+    )
+
+    cover_letter_error_code = models.CharField(
+        max_length=80,
+        blank=True,
+    )
+
+    # --- Application tracking -------------------------------------------
+    # Lets a curation double as the user's record of that application, so
+    # "which jobs have I actually applied to?" is answerable without a
+    # separate model. Purely user-managed; no AI or automation touches it.
+    APPLICATION_STATUS_SAVED = "saved"
+    APPLICATION_STATUS_APPLIED = "applied"
+    APPLICATION_STATUS_INTERVIEWING = "interviewing"
+    APPLICATION_STATUS_OFFER = "offer"
+    APPLICATION_STATUS_REJECTED = "rejected"
+    APPLICATION_STATUS_CHOICES = [
+        (APPLICATION_STATUS_SAVED, "Saved"),
+        (APPLICATION_STATUS_APPLIED, "Applied"),
+        (APPLICATION_STATUS_INTERVIEWING, "Interviewing"),
+        (APPLICATION_STATUS_OFFER, "Offer"),
+        (APPLICATION_STATUS_REJECTED, "Rejected"),
+    ]
+
+    application_status = models.CharField(
+        max_length=20,
+        choices=APPLICATION_STATUS_CHOICES,
+        default=APPLICATION_STATUS_SAVED,
+    )
+
+    applied_at = models.DateField(
+        null=True,
+        blank=True,
+        help_text="The date the user actually submitted this application.",
+    )
+
+    application_notes = models.TextField(
+        blank=True,
+        help_text="The user's own private notes about this application.",
     )
 
     created_at = models.DateTimeField(

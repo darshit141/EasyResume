@@ -6,7 +6,7 @@ from drf_spectacular.utils import (
     extend_schema,
 )
 from django.db import DatabaseError
-from django.http import Http404
+from django.http import Http404, HttpResponse
 from rest_framework import status
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
@@ -22,10 +22,22 @@ from resumes.serializers.resume_regeneration_serializer import (
 )
 from resumes.services.job_curation_service import JobCurationDatabaseError
 from resumes.services.job_resume_curation_service import JobResumeCurationService
-from resumes.services.llm_service import LLMServiceError
+from resumes.services.llm_service import LLMServiceError, resolve_provider
 from resumes.services.missing_information_review_service import (
     MissingInformationReviewService,
 )
+from resumes.services.tailored_resume_export_service import (
+    TailoredResumeExportService,
+)
+from resumes.services.tailored_resume_version_comparison_service import (
+    TailoredResumeVersionComparisonService,
+)
+from billing.models import AIUsageLog
+from billing.services.entitlements_service import (
+    EntitlementsService,
+    PlanRestrictionError,
+)
+from billing.views.plan_limit_response import plan_restriction_response
 from resumes.views.error_responses import llm_error_response
 from resumes.views.job_curation_view import CURATION_ID_PARAMETER
 
@@ -109,6 +121,15 @@ TAILORED_RESUME_EXAMPLE = {
         },
         "suggested_profile_sections": ["skills"],
     },
+    "version_comparison": {
+        "previous_version": 1,
+        "previous_match_percentage": "60.00",
+        "current_match_percentage": "80.00",
+        "match_percentage_delta": 20.0,
+        "newly_matched_requirements": ["Docker"],
+        "no_longer_matched_requirements": [],
+        "newly_emphasized_skills": ["Docker"],
+    },
     "created_at": "2026-08-11T10:00:00Z",
     "updated_at": "2026-08-11T10:00:05Z",
 }
@@ -157,6 +178,11 @@ TAILORED_RESUME_EXAMPLE = {
         "the same comparison used to generate the resume, so a single call "
         "is enough to update both the resume and the on-screen match "
         "summary.\n\n"
+        "`version_comparison` is a factual, deterministically computed diff "
+        "against the immediately prior version (match-percentage delta, "
+        "newly matched requirements, newly emphasized skills) — never "
+        "AI-generated commentary. It is `null` when this is the first "
+        "version (nothing to compare against).\n\n"
         "Requires a valid JWT bearer token. Only the owning user's session "
         "is visible (404 otherwise) — a user may regenerate only their own "
         "job-specific resumes. **Synchronous:** on a cache miss or "
@@ -231,6 +257,7 @@ TAILORED_RESUME_EXAMPLE = {
 )
 class JobResumeCurationGenerateAPIView(APIView):
     permission_classes = [IsAuthenticated]
+    throttle_scope = "ai_resume"
 
     def post(self, request, curation_id):
         serializer = ResumeCurationGenerateRequestSerializer(data=request.data)
@@ -238,14 +265,34 @@ class JobResumeCurationGenerateAPIView(APIView):
             return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
         regenerate = serializer.validated_data["regenerate"]
+        provider = serializer.validated_data.get("ai_provider")
+
+        # Plan gates run before any AI call, so a user who is over quota gets
+        # an instant, clear answer instead of waiting out a generation we
+        # were never going to let them keep.
+        curation = JobResumeCuration.objects.filter(id=curation_id, user=request.user).first()
+        if curation is None:
+            raise Http404("Job curation analysis not found.")
+
+        # Returning an already-generated resume from cache creates no new
+        # version and costs nothing, so it must not consume quota.
+        creates_new_version = regenerate or not curation.tailored_resume_data
 
         try:
-            curation, version = JobResumeCurationService().generate(
+            EntitlementsService.check_ai_provider_allowed(request.user, provider)
+            if creates_new_version:
+                EntitlementsService.check_can_generate_tailored_resume(request.user)
+                EntitlementsService.check_can_use_ai(request.user)
+        except PlanRestrictionError as exc:
+            return plan_restriction_response(exc)
+
+        try:
+            curation, version = JobResumeCurationService(provider=provider).generate(
                 user=request.user,
                 curation_id=curation_id,
                 regenerate=regenerate,
             )
-            gap_review = MissingInformationReviewService().build_review(
+            gap_review = MissingInformationReviewService(provider=provider).build_review(
                 user=request.user,
                 curation_id=curation_id,
                 regenerate=False,
@@ -270,6 +317,15 @@ class JobResumeCurationGenerateAPIView(APIView):
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
 
+        if creates_new_version:
+            EntitlementsService.record_ai_usage(
+                request.user, AIUsageLog.ACTION_TAILORED_RESUME_GENERATION, resolve_provider(provider)
+            )
+
+        version_comparison = TailoredResumeVersionComparisonService.compare_with_previous(
+            curation, version
+        )
+
         response_data = {
             "id": curation.id,
             "job_title": curation.job_title,
@@ -278,9 +334,61 @@ class JobResumeCurationGenerateAPIView(APIView):
             "tailored_resume_data": curation.tailored_resume_data,
             "tailored_resume_error_code": curation.tailored_resume_error_code,
             "gap_review": gap_review,
+            "version_comparison": version_comparison,
             "created_at": curation.created_at,
             "updated_at": curation.updated_at,
         }
         return Response(
             JobResumeCurationRegenerationResponseSerializer(response_data).data
         )
+
+
+@extend_schema(
+    tags=["Job Resume Curation"],
+    summary="Export the current tailored resume as a .docx file",
+    description=(
+        "Downloads the most recently generated tailored resume for this "
+        "curation as a real Word (.docx) document — no AI call, purely "
+        "formats the already-validated, source-grounded "
+        "`tailored_resume_data`. Requires a valid JWT bearer token. Only "
+        "the owning user's curation is accessible (404 otherwise). "
+        "Returns 404 if no tailored resume has been generated yet for "
+        "this curation — generate one first via "
+        "`POST .../tailored-resume/`."
+    ),
+    parameters=[CURATION_ID_PARAMETER],
+    responses={
+        status.HTTP_200_OK: OpenApiResponse(
+            description="The .docx file, as a binary download (Content-Type: application/vnd.openxmlformats-officedocument.wordprocessingml.document)."
+        ),
+        status.HTTP_401_UNAUTHORIZED: OpenApiResponse(description="Authentication required."),
+        status.HTTP_404_NOT_FOUND: OpenApiResponse(
+            description="No curation with this ID exists for the authenticated user, or no tailored resume has been generated yet."
+        ),
+    },
+)
+class TailoredResumeDocxExportAPIView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, curation_id):
+        try:
+            EntitlementsService.check_feature(request.user, "docx_export")
+        except PlanRestrictionError as exc:
+            return plan_restriction_response(exc)
+
+        curation = JobResumeCuration.objects.filter(
+            id=curation_id,
+            user=request.user,
+        ).first()
+        if curation is None or not curation.tailored_resume_data:
+            raise Http404("No tailored resume has been generated for this curation.")
+
+        buffer = TailoredResumeExportService.build_docx(curation.tailored_resume_data)
+        filename = TailoredResumeExportService.build_filename(curation.job_title)
+
+        response = HttpResponse(
+            buffer.getvalue(),
+            content_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        )
+        response["Content-Disposition"] = f'attachment; filename="{filename}"'
+        return response

@@ -1,7 +1,7 @@
 from unittest.mock import patch
 
 from django.core.files.uploadedfile import SimpleUploadedFile
-from django.test import TestCase
+from django.test import TestCase, override_settings
 from rest_framework.test import APIClient
 
 from authentication.models import User
@@ -269,6 +269,110 @@ class JobCurationAPITests(TestCase):
         response = self.client.get(f"/api/resumes/job-curations/{curation.id}/")
 
         self.assertEqual(response.status_code, 404)
+
+    def test_job_url_is_saved_and_returned(self):
+        self.authenticate()
+        payload = {**VALID_REQUEST, "job_url": "https://www.linkedin.com/jobs/view/backend-engineer"}
+        with patch(
+            "resumes.services.job_curation_ai_service.get_llm_service",
+            return_value=FakeJobAnalysisLLMService(VALID_JOB_ANALYSIS),
+        ):
+            response = self.client.post(self.url, payload, format="json")
+
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(response.data["job_url"], "https://www.linkedin.com/jobs/view/backend-engineer")
+        self.assertEqual(
+            JobResumeCuration.objects.get().job_url, "https://www.linkedin.com/jobs/view/backend-engineer"
+        )
+
+    def test_job_url_is_optional(self):
+        self.authenticate()
+        with patch(
+            "resumes.services.job_curation_ai_service.get_llm_service",
+            return_value=FakeJobAnalysisLLMService(VALID_JOB_ANALYSIS),
+        ):
+            response = self.client.post(self.url, VALID_REQUEST, format="json")
+
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(response.data["job_url"], "")
+
+    def test_malformed_job_url_is_rejected(self):
+        self.authenticate()
+        payload = {**VALID_REQUEST, "job_url": "not a url"}
+
+        response = self.client.post(self.url, payload, format="json")
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("job_url", response.data)
+
+    def test_job_url_is_never_fetched_by_the_server(self):
+        # The whole point of storing it as a plain reference: no outbound
+        # request is ever made to the URL itself.
+        self.authenticate()
+        payload = {**VALID_REQUEST, "job_url": "https://www.linkedin.com/jobs/view/backend-engineer"}
+        with patch(
+            "resumes.services.job_curation_ai_service.get_llm_service",
+            return_value=FakeJobAnalysisLLMService(VALID_JOB_ANALYSIS),
+        ), patch("urllib.request.urlopen") as mock_urlopen:
+            response = self.client.post(self.url, payload, format="json")
+
+        self.assertEqual(response.status_code, 201)
+        mock_urlopen.assert_not_called()
+
+    def test_url_on_an_unsupported_domain_is_rejected(self):
+        self.authenticate()
+        payload = {**VALID_REQUEST, "job_url": "https://random-scam-site.example/jobs/1"}
+
+        response = self.client.post(self.url, payload, format="json")
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("job_url", response.data)
+        self.assertEqual(JobResumeCuration.objects.count(), 0)
+
+    def test_url_on_a_subdomain_of_an_allowed_domain_is_accepted(self):
+        self.authenticate()
+        payload = {**VALID_REQUEST, "job_url": "https://boards.greenhouse.io/acme/jobs/42"}
+        with patch(
+            "resumes.services.job_curation_ai_service.get_llm_service",
+            return_value=FakeJobAnalysisLLMService(VALID_JOB_ANALYSIS),
+        ):
+            response = self.client.post(self.url, payload, format="json")
+
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(response.data["job_url"], "https://boards.greenhouse.io/acme/jobs/42")
+
+    def test_domain_match_is_case_insensitive(self):
+        self.authenticate()
+        payload = {**VALID_REQUEST, "job_url": "https://WWW.LINKEDIN.COM/jobs/view/1"}
+        with patch(
+            "resumes.services.job_curation_ai_service.get_llm_service",
+            return_value=FakeJobAnalysisLLMService(VALID_JOB_ANALYSIS),
+        ):
+            response = self.client.post(self.url, payload, format="json")
+
+        self.assertEqual(response.status_code, 201)
+
+    def test_a_lookalike_domain_is_not_accepted_as_a_suffix_match(self):
+        # "notlinkedin.com" must not pass just because it ends in a
+        # substring that looks like an allowed domain.
+        self.authenticate()
+        payload = {**VALID_REQUEST, "job_url": "https://notlinkedin.com/jobs/1"}
+
+        response = self.client.post(self.url, payload, format="json")
+
+        self.assertEqual(response.status_code, 400)
+
+    @override_settings(ALLOWED_JOB_URL_DOMAINS=[])
+    def test_empty_configured_list_disables_the_restriction(self):
+        self.authenticate()
+        payload = {**VALID_REQUEST, "job_url": "https://random-scam-site.example/jobs/1"}
+        with patch(
+            "resumes.services.job_curation_ai_service.get_llm_service",
+            return_value=FakeJobAnalysisLLMService(VALID_JOB_ANALYSIS),
+        ):
+            response = self.client.post(self.url, payload, format="json")
+
+        self.assertEqual(response.status_code, 201)
 
 
 class JobGapAnalysisAPITests(TestCase):

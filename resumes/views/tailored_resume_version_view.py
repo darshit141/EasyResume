@@ -16,6 +16,11 @@ from resumes.serializers.resume_regeneration_serializer import (
 from resumes.services.tailored_resume_version_service import (
     TailoredResumeVersionService,
 )
+from billing.services.entitlements_service import (
+    EntitlementsService,
+    PlanRestrictionError,
+)
+from billing.views.plan_limit_response import plan_restriction_response
 from resumes.views.job_curation_view import CURATION_ID_PARAMETER
 
 
@@ -78,6 +83,11 @@ class TailoredResumeVersionListAPIView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request, curation_id):
+        try:
+            EntitlementsService.check_feature(request.user, "tailored_resume_version_history")
+        except PlanRestrictionError as exc:
+            return plan_restriction_response(exc)
+
         versions = TailoredResumeVersionService.get_versions(
             request.user,
             curation_id,
@@ -111,6 +121,11 @@ class TailoredResumeVersionDetailAPIView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request, curation_id, version_id):
+        try:
+            EntitlementsService.check_feature(request.user, "tailored_resume_version_history")
+        except PlanRestrictionError as exc:
+            return plan_restriction_response(exc)
+
         version = TailoredResumeVersionService.get_version(
             request.user,
             curation_id,

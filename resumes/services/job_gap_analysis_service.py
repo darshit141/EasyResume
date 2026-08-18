@@ -70,8 +70,8 @@ class JobGapAnalysisService:
     Builds verified candidate data and compares it to analyzed job requirements.
     """
 
-    def __init__(self, llm_service=None):
-        self.llm_service = llm_service or get_llm_service()
+    def __init__(self, llm_service=None, provider=None):
+        self.llm_service = llm_service or get_llm_service(provider)
 
     def get_or_create_gap_analysis(self, user, curation_id, regenerate=False):
         curation = JobResumeCuration.objects.get(id=curation_id, user=user)
@@ -81,7 +81,7 @@ class JobGapAnalysisService:
         if curation.status != "completed" or not curation.analysis_data:
             raise JobRequirementsUnavailableError()
 
-        candidate_data = self.build_candidate_data(user)
+        candidate_data = self.build_candidate_data(user, resume_id=curation.resume_id)
         job_requirements = self.build_job_requirements(curation.analysis_data)
         prompt = build_gap_analysis_prompt(
             json.dumps(candidate_data, sort_keys=True),
@@ -137,11 +137,14 @@ class JobGapAnalysisService:
             raise
 
     @staticmethod
-    def build_candidate_data(user):
-        resume = Resume.objects.filter(
-            user=user,
-            status="completed",
-        ).order_by("-updated_at", "-id").first()
+    def build_candidate_data(user, resume_id=None):
+        if resume_id:
+            resume = Resume.objects.filter(id=resume_id, user=user, status="completed").first()
+        else:
+            resume = Resume.objects.filter(
+                user=user,
+                status="completed",
+            ).order_by("-updated_at", "-id").first()
         if not resume or not resume.parsed_data:
             raise CandidateDataUnavailableError()
 

@@ -20,6 +20,12 @@ urlpatterns = [
     # Resume APIs
     path("api/resumes/", include("resumes.urls")),
 
+    # Billing APIs
+    path("api/billing/", include("billing.urls")),
+
+    # Blog / marketing APIs
+    path("api/blog/", include("blog.urls")),
+
     # OpenAPI Schema
     path(
         "api/schema/",

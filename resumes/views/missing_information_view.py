@@ -16,12 +16,18 @@ from resumes.serializers.missing_information_serializer import (
     MissingInformationQuerySerializer,
     MissingInformationReviewSerializer,
 )
-from resumes.services.llm_service import LLMServiceError
+from resumes.services.llm_service import LLMServiceError, resolve_provider
+from billing.models import AIUsageLog
+from billing.services.entitlements_service import (
+    EntitlementsService,
+    PlanRestrictionError,
+)
+from billing.views.plan_limit_response import plan_restriction_response
 from resumes.services.missing_information_review_service import (
     MissingInformationReviewService,
 )
 from resumes.views.error_responses import llm_error_response
-from resumes.views.job_curation_view import CURATION_ID_PARAMETER
+from resumes.views.job_curation_view import AI_PROVIDER_PARAMETER, CURATION_ID_PARAMETER
 
 
 MISSING_INFORMATION_EXAMPLE = {
@@ -129,6 +135,7 @@ MISSING_INFORMATION_EXAMPLE = {
                 "profile."
             ),
         ),
+        AI_PROVIDER_PARAMETER,
     ],
     responses={
         status.HTTP_200_OK: MissingInformationReviewSerializer,
@@ -179,15 +186,38 @@ class MissingInformationReviewAPIView(APIView):
         if not query.is_valid():
             return Response(query.errors, status=status.HTTP_400_BAD_REQUEST)
 
+        provider = query.validated_data.get("ai_provider")
+        regenerate = query.validated_data["regenerate"]
+        # This view delegates to the same gap-analysis service the dedicated
+        # gap-analysis endpoint uses, so it makes an AI call under the exact
+        # same condition: regenerating, or no gap analysis cached yet.
+        already_has_gap_analysis = JobResumeCuration.objects.filter(
+            id=curation_id, user=request.user
+        ).exclude(gap_analysis_data={}).exists()
+        will_call_ai = regenerate or not already_has_gap_analysis
+
         try:
-            review = MissingInformationReviewService().build_review(
+            EntitlementsService.check_ai_provider_allowed(request.user, provider)
+            if will_call_ai:
+                EntitlementsService.check_can_use_ai(request.user)
+        except PlanRestrictionError as exc:
+            return plan_restriction_response(exc)
+
+        try:
+            review = MissingInformationReviewService(
+                provider=provider,
+            ).build_review(
                 user=request.user,
                 curation_id=curation_id,
-                regenerate=query.validated_data["regenerate"],
+                regenerate=regenerate,
             )
         except JobResumeCuration.DoesNotExist as exc:
             raise Http404("Job curation analysis not found.") from exc
         except LLMServiceError as exc:
             return llm_error_response(exc)
 
+        if will_call_ai:
+            EntitlementsService.record_ai_usage(
+                request.user, AIUsageLog.ACTION_MISSING_INFORMATION_REVIEW, resolve_provider(provider)
+            )
         return Response(MissingInformationReviewSerializer(review).data)

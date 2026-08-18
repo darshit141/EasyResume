@@ -32,8 +32,8 @@ class JobCurationAIService:
     Uses the configured LLM provider to extract strict job requirement data.
     """
 
-    def __init__(self, llm_service=None):
-        self.llm_service = llm_service or get_llm_service()
+    def __init__(self, llm_service=None, provider=None):
+        self.llm_service = llm_service or get_llm_service(provider)
 
     def analyze_job_description(self, job_description):
         prompt = build_job_description_extraction_prompt(job_description)

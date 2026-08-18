@@ -19,6 +19,8 @@ class ForgotPasswordAPIView(APIView):
     API for forgot password.
     """
 
+    throttle_scope = "auth_sensitive"
+
     def post(self, request):
         serializer = ForgotPasswordSerializer(data=request.data)
 

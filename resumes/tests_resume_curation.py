@@ -170,6 +170,55 @@ class JobResumeCurationGenerateAPITests(TestCase):
         self.assertTrue(curation.tailored_resume_data)
         self.assertEqual(curation.tailored_resume_error_code, "")
 
+    def test_first_version_has_no_comparison(self):
+        self.create_resume()
+        curation = self.create_curation()
+        fake_llm = QueuedLLMService(results=[valid_tailored_result()])
+
+        response = self.generate(curation, llm_service=fake_llm)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIsNone(response.data["version_comparison"])
+
+    def test_regeneration_produces_a_factual_non_ai_comparison(self):
+        self.create_resume()
+        curation = self.create_curation(gap_items=[
+            gap_item("Docker", "tool", "MISSING", []),
+        ])
+        first_llm = QueuedLLMService(results=[valid_tailored_result(
+            skills=["Java", "Spring Boot"],
+        )])
+        first_response = self.generate(curation, llm_service=first_llm)
+        self.assertEqual(first_response.status_code, 200)
+
+        regenerated_result = valid_tailored_result(
+            skills=["Java", "Spring Boot", "Docker"],
+        )
+        regenerate_llm = QueuedLLMService(results=[regenerated_result])
+        fresh_gap_llm = QueuedLLMService(results=[
+            gap_analysis([
+                gap_item("Docker", "tool", "MATCHED", ["Docker"]),
+            ])
+        ])
+        self.authenticate()
+        with patch(
+            "resumes.services.resume_curation_ai_service.get_llm_service",
+            return_value=regenerate_llm,
+        ), patch(
+            "resumes.services.job_gap_analysis_service.get_llm_service",
+            return_value=fresh_gap_llm,
+        ):
+            response = self.client.post(
+                self.url(curation), {"regenerate": True}, format="json"
+            )
+
+        self.assertEqual(response.status_code, 200)
+        comparison = response.data["version_comparison"]
+        self.assertIsNotNone(comparison)
+        self.assertEqual(comparison["previous_version"], 1)
+        self.assertIn("Docker", comparison["newly_matched_requirements"])
+        self.assertIn("Docker", comparison["newly_emphasized_skills"])
+
     def test_strong_match_candidate_emphasizes_matched_skills(self):
         self.create_resume()
         curation = self.create_curation(gap_items=[
@@ -412,3 +461,75 @@ class JobResumeCurationGenerateAPITests(TestCase):
             regenerate_response.data["tailored_resume_data"]["skills"],
             ["Java", "Kafka"],
         )
+
+
+class TailoredResumeDocxExportAPITests(TestCase):
+    def setUp(self):
+        self.helper = JobResumeCurationGenerateAPITests()
+        self.helper.setUp()
+        self.user = self.helper.user
+        self.other_user = self.helper.other_user
+        self.client = self.helper.client
+        from billing.models import Subscription
+        Subscription.objects.create(user=self.user, plan_id="pro", status="active")
+        Subscription.objects.create(user=self.other_user, plan_id="pro", status="active")
+
+    def authenticate(self, user=None):
+        self.helper.authenticate(user)
+
+    def create_resume(self, **kwargs):
+        return self.helper.create_resume(**kwargs)
+
+    def create_curation(self, **kwargs):
+        return self.helper.create_curation(**kwargs)
+
+    def generate(self, curation, **kwargs):
+        return self.helper.generate(curation, **kwargs)
+
+    def export_url(self, curation):
+        return f"/api/resumes/job-curations/{curation.id}/tailored-resume/export/docx/"
+
+    def test_export_returns_a_real_docx_before_any_content_is_checked(self):
+        self.create_resume()
+        curation = self.create_curation()
+        fake_llm = QueuedLLMService(results=[valid_tailored_result()])
+        generate_response = self.generate(curation, llm_service=fake_llm)
+        self.assertEqual(generate_response.status_code, 200)
+
+        response = self.client.get(self.export_url(curation))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            response["Content-Type"],
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        )
+        self.assertIn("attachment", response["Content-Disposition"])
+
+        import io
+
+        from docx import Document
+
+        document = Document(io.BytesIO(response.content))
+        full_text = "\n".join(p.text for p in document.paragraphs)
+        self.assertIn("Jane Doe", full_text)
+        self.assertIn("Spring Boot", full_text)
+
+    def test_export_404s_when_no_tailored_resume_exists_yet(self):
+        self.create_resume()
+        curation = self.create_curation()
+        self.authenticate()
+
+        response = self.client.get(self.export_url(curation))
+
+        self.assertEqual(response.status_code, 404)
+
+    def test_export_404s_for_another_users_curation(self):
+        self.create_resume()
+        curation = self.create_curation()
+        fake_llm = QueuedLLMService(results=[valid_tailored_result()])
+        self.generate(curation, llm_service=fake_llm)
+
+        self.authenticate(self.other_user)
+        response = self.client.get(self.export_url(curation))
+
+        self.assertEqual(response.status_code, 404)

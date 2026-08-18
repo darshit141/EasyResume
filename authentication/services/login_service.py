@@ -1,3 +1,4 @@
+from django.conf import settings
 from django.contrib.auth import authenticate
 from django.utils import timezone
 from datetime import timedelta
@@ -6,6 +7,7 @@ from random import randint
 from rest_framework import status
 
 from authentication.models import LoginOTP
+from authentication.utils.otp_mailer import send_otp_email
 
 
 class LoginService:
@@ -24,8 +26,10 @@ class LoginService:
         # Delete any previous unused OTPs
         LoginOTP.objects.filter(user=user).delete()
 
-        # Generate new 6-digit OTP
-        otp = str(randint(100000, 999999))
+        # Generate new 6-digit OTP. In local development (DEBUG=True) this is
+        # pinned to a fixed value so testers don't need console/log access to
+        # complete login; production always uses a random OTP.
+        otp = "123456" if settings.DEBUG else str(randint(100000, 999999))
 
         # Create new OTP
         LoginOTP.objects.create(
@@ -34,10 +38,7 @@ class LoginService:
             expires_at=timezone.now() + timedelta(minutes=5),
         )
 
-        # For development/testing only
-        print("=" * 60)
-        print(f"Login OTP for {user.email}: {otp}")
-        print("=" * 60)
+        send_otp_email(user.email, otp, purpose="login")
 
         return {
             "success": True,

@@ -1,7 +1,11 @@
+from urllib.parse import urlparse
+
+from django.conf import settings
 from rest_framework import serializers
 
 from resumes.models import JobResumeCuration
 from resumes.services.job_curation_ai_service import JOB_ANALYSIS_ARRAY_FIELDS
+from resumes.services.llm_service import SUPPORTED_PROVIDERS
 
 
 MAX_JOB_DESCRIPTION_LENGTH = 20000
@@ -9,34 +13,142 @@ MIN_JOB_DESCRIPTION_LENGTH = 30
 
 
 class JobCurationRequestSerializer(serializers.Serializer):
+    """Accepts *either* a job URL to import from, *or* a pasted title and
+    description. See `validate` for the exact rule."""
+
     job_title = serializers.CharField(
+        required=False,
+        allow_blank=True,
         max_length=200,
         trim_whitespace=True,
-        help_text="Job title the resume should be tailored toward.",
+        help_text="Job title the resume should be tailored toward. Optional when job_url is supplied.",
     )
     job_description = serializers.CharField(
+        required=False,
+        allow_blank=True,
         max_length=MAX_JOB_DESCRIPTION_LENGTH,
         trim_whitespace=True,
-        help_text="Full job description text to analyze.",
+        help_text="Full job description text to analyze. Optional when job_url is supplied.",
     )
     curate_resume = serializers.BooleanField(
         help_text="When true, create a job curation analysis session.",
     )
+    job_url = serializers.URLField(
+        required=False,
+        allow_blank=True,
+        max_length=1000,
+        help_text=(
+            "Link to the original job posting. When job_description is not "
+            "supplied, the server fetches this page and extracts the posting "
+            "from it. Must be on a supported job site "
+            "(settings.ALLOWED_JOB_URL_DOMAINS); other domains are rejected. "
+            "Many large boards block automated access, in which case the "
+            "request fails with JOB_URL_UNREADABLE and the description must "
+            "be pasted instead."
+        ),
+    )
+    ai_provider = serializers.ChoiceField(
+        choices=SUPPORTED_PROVIDERS,
+        required=False,
+        allow_null=True,
+        help_text=(
+            "Which AI provider to use for this analysis (ollama | groq | "
+            "gemini). Defaults to the server's configured provider."
+        ),
+    )
+    resume_id = serializers.IntegerField(
+        required=False,
+        allow_null=True,
+        help_text="The ID of the specific resume to curate against. Optional; defaults to the user's latest completed resume.",
+    )
+
+    def validate_resume_id(self, value):
+        if value:
+            from resumes.models import Resume
+            request = self.context.get("request")
+            if not request or not request.user:
+                raise serializers.ValidationError("Authentication required.")
+            if not Resume.objects.filter(id=value, user=request.user, status="completed").exists():
+                raise serializers.ValidationError("Resume not found or not completed.")
+        return value
 
     def validate_job_title(self, value):
-        if len(value.strip()) < 2:
+        # Blank is allowed here; `validate` decides whether it was required,
+        # since that depends on whether a URL was supplied.
+        value = value.strip()
+        if value and len(value) < 2:
             raise serializers.ValidationError(
                 "Job title must be at least 2 characters long."
             )
-        return value.strip()
+        return value
 
     def validate_job_description(self, value):
         value = value.strip()
-        if len(value) < MIN_JOB_DESCRIPTION_LENGTH:
+        if value and len(value) < MIN_JOB_DESCRIPTION_LENGTH:
             raise serializers.ValidationError(
                 "Job description must be at least 30 characters long."
             )
         return value
+
+    def validate(self, attrs):
+        """Either a URL to import from, or a pasted title + description.
+
+        Reported against `job_description` rather than as a non-field error
+        so the message lands on the field the user is most likely looking at.
+        """
+        has_url = bool(attrs.get("job_url", "").strip())
+        has_description = bool(attrs.get("job_description", "").strip())
+        has_title = bool(attrs.get("job_title", "").strip())
+
+        if not has_url and not has_description:
+            raise serializers.ValidationError({
+                "job_description": [
+                    "Paste the job description, or provide a link to the posting."
+                ]
+            })
+
+        # Without a URL to import from, the title can't be recovered later.
+        if not has_url and not has_title:
+            raise serializers.ValidationError({
+                "job_title": ["Enter the job title, or provide a link to the posting."]
+            })
+
+        return attrs
+
+    def validate_job_url(self, value):
+        value = value.strip()
+        if not value:
+            return value
+
+        allowed_domains = settings.ALLOWED_JOB_URL_DOMAINS
+        # An explicitly empty list means the restriction was intentionally
+        # disabled (see settings.ALLOWED_JOB_URL_DOMAINS) — any URL passes.
+        if not allowed_domains:
+            return value
+
+        hostname = (urlparse(value).hostname or "").lower()
+        is_allowed = any(
+            hostname == domain or hostname.endswith(f".{domain}") for domain in allowed_domains
+        )
+        if not is_allowed:
+            raise serializers.ValidationError(
+                "That link isn't from a supported job site. Supported: "
+                + ", ".join(sorted(allowed_domains))
+                + "."
+            )
+        return value
+
+
+class JobUrlPreviewRequestSerializer(serializers.Serializer):
+    job_url = serializers.URLField(max_length=1000)
+
+    def validate_job_url(self, value):
+        return JobCurationRequestSerializer().validate_job_url(value)
+
+
+class JobUrlPreviewResponseSerializer(serializers.Serializer):
+    job_title = serializers.CharField(allow_blank=True)
+    job_description = serializers.CharField()
 
 
 class JobAnalysisSerializer(serializers.Serializer):
@@ -66,21 +178,49 @@ class JobAnalysisSerializer(serializers.Serializer):
 
 
 class JobResumeCurationSerializer(serializers.ModelSerializer):
-    analysis_data = JobAnalysisSerializer(read_only=True)
+    analysis_data = serializers.SerializerMethodField()
+    # Booleans, not the payloads themselves: the client needs to know which
+    # AI work is already done (so it can show it without re-running anything,
+    # and can ask before spending a credit on work that isn't), but shipping
+    # the full gap/resume/letter blobs in every list row would be wasteful.
+    has_gap_analysis = serializers.SerializerMethodField()
+    has_tailored_resume = serializers.SerializerMethodField()
+    has_cover_letter = serializers.SerializerMethodField()
+
+    def get_analysis_data(self, curation):
+        if curation.status == "completed" and curation.analysis_data:
+            return JobAnalysisSerializer(curation.analysis_data).data
+        return {}
 
     class Meta:
         model = JobResumeCuration
         fields = [
             "id",
+            "resume",
             "job_title",
+            "job_url",
             "curate_resume",
             "status",
             "analysis_data",
             "error_code",
+            "application_status",
+            "applied_at",
+            "has_gap_analysis",
+            "has_tailored_resume",
+            "has_cover_letter",
             "created_at",
             "updated_at",
         ]
         read_only_fields = fields
+
+    def get_has_gap_analysis(self, curation):
+        return bool(curation.gap_analysis_data)
+
+    def get_has_tailored_resume(self, curation):
+        return bool(curation.tailored_resume_data)
+
+    def get_has_cover_letter(self, curation):
+        return bool(curation.cover_letter_data)
 
 
 class JobCurationSkippedSerializer(serializers.Serializer):
@@ -164,6 +304,15 @@ class ResumeCurationGenerateRequestSerializer(serializers.Serializer):
             "When true, forces a fresh AI generation and replaces any previously "
             "generated tailored resume. When false, a cached tailored resume is "
             "returned if one already exists."
+        ),
+    )
+    ai_provider = serializers.ChoiceField(
+        choices=SUPPORTED_PROVIDERS,
+        required=False,
+        allow_null=True,
+        help_text=(
+            "Which AI provider to use for this generation (ollama | groq | "
+            "gemini). Defaults to the server's configured provider."
         ),
     )
 

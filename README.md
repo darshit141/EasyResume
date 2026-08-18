@@ -72,30 +72,69 @@ GET /api/health/
 }
 ```
 
-## Local Ollama setup
+## AI provider setup
 
-Resume parsing uses a locally running Ollama model. Install Ollama from
-https://ollama.com/download, start the local server (the desktop application
-starts it automatically, or run `ollama serve`), then download a compact model:
+Resume parsing and job matching can run against any of three AI providers,
+selected by `LLM_PROVIDER` (server-wide default) and overridable per request
+via each endpoint's `ai_provider` field/query param: `ollama` | `groq` | `gemini`.
+
+Resume upload specifically has a fourth choice, `standard`: a deterministic,
+non-AI parser (regex + section-header heuristics, see
+`resumes/services/standard_resume_parser_service.py`). It calls no external
+API, needs no key, and the resume text never leaves the server — at the cost
+of materially lower extraction accuracy than any AI provider. Not available
+for job analysis, gap analysis, or tailored resume generation: those require
+semantic comparison/rewriting that a regex engine cannot credibly do.
+
+### Ollama (local, free, no API key)
+
+Install Ollama from https://ollama.com/download, start the local server (the
+desktop application starts it automatically, or run `ollama serve`), then
+download a compact model:
 
 ```bash
 ollama pull llama3.2:latest
 ```
 
-Set these values in `.env` before running Django:
-
 ```env
 LLM_PROVIDER=ollama
 OLLAMA_BASE_URL=http://localhost:11434
 OLLAMA_MODEL=llama3.2:latest
+```
+
+### Groq (cloud, free tier, much faster than local Ollama)
+
+Get a key at https://console.groq.com/keys.
+
+```env
+LLM_PROVIDER=groq
+GROQ_API_KEY=your-key-here
+GROQ_MODEL=llama-3.3-70b-versatile
+```
+
+### Google Gemini (cloud, free tier)
+
+Get a key at https://aistudio.google.com/apikey.
+
+```env
+LLM_PROVIDER=gemini
+GEMINI_API_KEY=your-key-here
+GEMINI_MODEL=gemini-2.0-flash
+```
+
+### Shared settings
+
+```env
 LLM_TIMEOUT=120
 LLM_MAX_RETRIES=2
 LLM_TEMPERATURE=0
 ```
 
-The model is never called by views directly. Failed local LLM processing keeps
+The model is never called by views directly. Failed AI processing keeps
 the existing upload API response unchanged and marks the uploaded resume as
-`failed`; diagnostic details are written only to server logs.
+`failed`; diagnostic details are written only to server logs. Cloud providers
+(Groq, Gemini) send resume/job text to a third-party API — keep that in mind
+if candidate data has residency or privacy constraints.
 
 ## Production deployment with Docker Compose
 

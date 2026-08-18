@@ -4,3 +4,6 @@ from .forgot_password_view import ForgotPasswordAPIView
 from .verify_otp_view import VerifyOTPAPIView
 from .reset_password_view import ResetPasswordAPIView
 from .verify_login_otp_view import VerifyLoginOTPAPIView
+from .profile_view import ProfileAPIView
+from .change_password_view import ChangePasswordAPIView
+from .logout_view import LogoutAPIView

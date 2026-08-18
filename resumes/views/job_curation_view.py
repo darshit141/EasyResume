@@ -18,13 +18,22 @@ from resumes.serializers.job_curation_serializer import (
     JobCurationSkippedSerializer,
     JobGapAnalysisResponseSerializer,
     JobResumeCurationSerializer,
+    JobUrlPreviewRequestSerializer,
+    JobUrlPreviewResponseSerializer,
 )
 from resumes.services.job_gap_analysis_service import JobGapAnalysisService
 from resumes.services.job_curation_service import (
     JobCurationDatabaseError,
     JobCurationService,
 )
-from resumes.services.llm_service import LLMServiceError
+from resumes.services.job_url_fetch_service import JobUrlFetchError, fetch_job_posting
+from resumes.services.llm_service import SUPPORTED_PROVIDERS, LLMServiceError, resolve_provider
+from billing.models import AIUsageLog
+from billing.services.entitlements_service import (
+    EntitlementsService,
+    PlanRestrictionError,
+)
+from billing.views.plan_limit_response import plan_restriction_response
 from resumes.views.error_responses import llm_error_response
 
 
@@ -61,6 +70,18 @@ CURATION_ID_PARAMETER = OpenApiParameter(
     ),
 )
 
+AI_PROVIDER_PARAMETER = OpenApiParameter(
+    name="ai_provider",
+    type=str,
+    location=OpenApiParameter.QUERY,
+    required=False,
+    enum=list(SUPPORTED_PROVIDERS),
+    description=(
+        "Which AI provider to use for this comparison. Defaults to the "
+        "server's configured provider."
+    ),
+)
+
 LLM_ERROR_EXAMPLE = OpenApiExample(
     "AI service unavailable",
     value={
@@ -93,7 +114,8 @@ LLM_INVALID_RESPONSE_EXAMPLE = OpenApiExample(
         "Behavior depends on `curate_resume`:\n"
         "- `curate_resume: true` — validates the job title/description, "
         "creates a user-owned `JobResumeCuration` row, calls the "
-        "configured Ollama LLM to extract structured job requirements, "
+        "configured AI provider (`ai_provider`, defaulting to the "
+        "server's `LLM_PROVIDER`) to extract structured job requirements, "
         "validates the AI response against a strict schema, and persists "
         "it. Returns **201 Created** with the session `id`. **The frontend "
         "must store this `id`** — it is required for every later call "
@@ -182,8 +204,69 @@ LLM_INVALID_RESPONSE_EXAMPLE = OpenApiExample(
         LLM_ERROR_EXAMPLE,
     ],
 )
+class JobUrlPreviewAPIView(APIView):
+    """Fetches a posting and returns what it found, without committing to
+    anything.
+
+    Deliberately separate from the analyze endpoint: importing is not
+    curating. This makes no AI call, consumes no quota, and writes nothing to
+    the database — so the user can see exactly what was extracted, correct it
+    if the extraction was imperfect, and only then decide to spend a credit.
+    """
+
+    permission_classes = [IsAuthenticated]
+    # Rate-limited because it makes an outbound request to a user-supplied
+    # URL, which must not be abusable as a general-purpose fetch proxy.
+    throttle_scope = "ai_resume"
+
+    @extend_schema(
+        tags=["Job Resume Curation"],
+        summary="Import a job posting from a link (no AI, no quota)",
+        description=(
+            "Fetches the linked job posting and returns the title and "
+            "description it could extract, for the user to review and edit "
+            "before deciding to run any analysis. Creates nothing and spends "
+            "no AI credit.\n\n"
+            "Fails with a specific code when the posting can't be read: "
+            "`JOB_URL_BLOCKED` (the site refuses automated access), "
+            "`JOB_URL_NOT_FOUND` (dead link), or `JOB_URL_UNREADABLE` (the "
+            "page renders its content with JavaScript). In every case the "
+            "user can still paste the description manually."
+        ),
+        request=JobUrlPreviewRequestSerializer,
+        responses={
+            status.HTTP_200_OK: JobUrlPreviewResponseSerializer,
+            status.HTTP_400_BAD_REQUEST: OpenApiResponse(description="Invalid or unsupported URL."),
+            status.HTTP_422_UNPROCESSABLE_ENTITY: OpenApiResponse(
+                response=APIErrorSerializer,
+                description="code: JOB_URL_BLOCKED | JOB_URL_NOT_FOUND | JOB_URL_UNREADABLE | JOB_URL_FETCH_FAILED.",
+            ),
+        },
+    )
+    def post(self, request):
+        serializer = JobUrlPreviewRequestSerializer(data=request.data)
+        if not serializer.is_valid():
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            imported = fetch_job_posting(serializer.validated_data["job_url"])
+        except JobUrlFetchError as exc:
+            return Response(
+                {"detail": exc.message, "code": exc.code},
+                status=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            )
+
+        return Response(
+            JobUrlPreviewResponseSerializer({
+                "job_title": imported["title"],
+                "job_description": imported["description"],
+            }).data
+        )
+
+
 class JobCurationCreateAPIView(APIView):
     permission_classes = [IsAuthenticated]
+    throttle_scope = "ai_resume"
 
     def post(self, request):
         serializer = JobCurationRequestSerializer(data=request.data)
@@ -201,10 +284,47 @@ class JobCurationCreateAPIView(APIView):
             )
 
         try:
-            curation = JobCurationService().create_analysis(
+            EntitlementsService.check_ai_provider_allowed(request.user, data.get("ai_provider"))
+            EntitlementsService.check_can_use_ai(request.user)
+        except PlanRestrictionError as exc:
+            return plan_restriction_response(exc)
+
+        job_title = data.get("job_title", "")
+        job_description = data.get("job_description", "")
+        job_url = data.get("job_url", "")
+
+        # Import from the link only when the description wasn't pasted.
+        # Anything the user typed always wins over the imported values —
+        # they've seen the posting and we haven't.
+        if job_url and not job_description:
+            try:
+                imported = fetch_job_posting(job_url)
+            except JobUrlFetchError as exc:
+                return Response(
+                    {"detail": exc.message, "code": exc.code},
+                    status=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                )
+            job_description = imported["description"]
+            job_title = job_title or imported["title"]
+
+        if not job_title:
+            return Response(
+                {
+                    "job_title": [
+                        "We couldn't determine the job title from that link. "
+                        "Please enter it manually."
+                    ]
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        try:
+            curation = JobCurationService(provider=data.get("ai_provider")).create_analysis(
                 user=request.user,
-                job_title=data["job_title"],
-                job_description=data["job_description"],
+                job_title=job_title,
+                job_description=job_description,
+                job_url=job_url,
+                resume_id=data.get("resume_id"),
             )
         except LLMServiceError as exc:
             return llm_error_response(exc)
@@ -214,6 +334,9 @@ class JobCurationCreateAPIView(APIView):
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
 
+        EntitlementsService.record_ai_usage(
+            request.user, AIUsageLog.ACTION_JOB_ANALYSIS, resolve_provider(data.get("ai_provider"))
+        )
         return Response(
             JobResumeCurationSerializer(curation).data,
             status=status.HTTP_201_CREATED,
@@ -298,7 +421,7 @@ class JobCurationDetailAPIView(RetrieveAPIView):
         "**Synchronous call:** on a cache miss this blocks on the LLM "
         "(same timeout/retry behavior as job analysis)."
     ),
-    parameters=[CURATION_ID_PARAMETER],
+    parameters=[CURATION_ID_PARAMETER, AI_PROVIDER_PARAMETER],
     responses={
         status.HTTP_200_OK: JobGapAnalysisResponseSerializer,
         status.HTTP_401_UNAUTHORIZED: OpenApiResponse(description="Authentication required."),
@@ -374,8 +497,31 @@ class JobGapAnalysisAPIView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request, curation_id):
+        provider = request.query_params.get("ai_provider") or None
+        if provider is not None and provider not in SUPPORTED_PROVIDERS:
+            return Response(
+                {"ai_provider": [f"Must be one of {', '.join(SUPPORTED_PROVIDERS)}."]},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        # This view never passes regenerate=True, so the service either
+        # returns cached gap_analysis_data untouched (no AI call at all) or
+        # computes it for the first time (one AI call). Checked up front so
+        # the quota gate — and later, usage recording — only ever applies to
+        # the branch that actually spends an AI call.
+        already_has_gap_analysis = JobResumeCuration.objects.filter(
+            id=curation_id, user=request.user
+        ).exclude(gap_analysis_data={}).exists()
+
         try:
-            curation = JobGapAnalysisService().get_or_create_gap_analysis(
+            EntitlementsService.check_ai_provider_allowed(request.user, provider)
+            if not already_has_gap_analysis:
+                EntitlementsService.check_can_use_ai(request.user)
+        except PlanRestrictionError as exc:
+            return plan_restriction_response(exc)
+
+        try:
+            curation = JobGapAnalysisService(provider=provider).get_or_create_gap_analysis(
                 request.user,
                 curation_id,
             )
@@ -384,4 +530,8 @@ class JobGapAnalysisAPIView(APIView):
         except LLMServiceError as exc:
             return llm_error_response(exc)
 
+        if not already_has_gap_analysis:
+            EntitlementsService.record_ai_usage(
+                request.user, AIUsageLog.ACTION_GAP_ANALYSIS, resolve_provider(provider)
+            )
         return Response(JobGapAnalysisResponseSerializer(curation).data)

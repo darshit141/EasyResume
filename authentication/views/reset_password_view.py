@@ -18,6 +18,8 @@ class ResetPasswordAPIView(APIView):
     API for resetting user password.
     """
 
+    throttle_scope = "auth_sensitive"
+
     def post(self, request):
         serializer = ResetPasswordSerializer(data=request.data)
 

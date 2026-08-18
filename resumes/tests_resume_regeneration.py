@@ -39,6 +39,9 @@ class JobResumeCurationRegenerationAPITests(TestCase):
             password="safe-password",
         )
         self.client = APIClient()
+        from billing.models import Subscription
+        Subscription.objects.create(user=self.user, plan_id="pro", status="active")
+        Subscription.objects.create(user=self.other_user, plan_id="pro", status="active")
 
     def authenticate(self, user=None):
         self.client.force_authenticate(user=user or self.user)

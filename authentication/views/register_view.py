@@ -15,6 +15,8 @@ class RegisterAPIView(APIView):
     API for user registration.
     """
 
+    throttle_scope = "auth_sensitive"
+
     def post(self, request):
         serializer = RegisterSerializer(data=request.data)
 

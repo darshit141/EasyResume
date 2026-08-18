@@ -33,6 +33,8 @@ class VerifyLoginOTPAPIView(APIView):
     API for verifying login OTP.
     """
 
+    throttle_scope = "auth_sensitive"
+
     def post(self, request):
         serializer = VerifyLoginOTPSerializer(data=request.data)
 

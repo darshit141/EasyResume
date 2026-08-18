@@ -18,13 +18,13 @@ RESUME_JSON_SCHEMA = {
         "email": {"type": ["string", "null"]},
         "phone": {"type": ["string", "null"]},
         "summary": {"type": ["string", "null"]},
-        "skills": {"type": "array", "items": {"type": "string"}},
-        "experience": {"type": "array", "items": {"type": "string"}},
-        "education": {"type": "array", "items": {"type": "string"}},
-        "projects": {"type": "array", "items": {"type": "string"}},
-        "certifications": {"type": "array", "items": {"type": "string"}},
-        "achievements": {"type": "array", "items": {"type": "string"}},
-        "languages": {"type": "array", "items": {"type": "string"}},
+        "skills": {"type": "array", "items": {"type": "string"}, "maxItems": 40},
+        "experience": {"type": "array", "items": {"type": "string"}, "maxItems": 20},
+        "education": {"type": "array", "items": {"type": "string"}, "maxItems": 10},
+        "projects": {"type": "array", "items": {"type": "string"}, "maxItems": 15},
+        "certifications": {"type": "array", "items": {"type": "string"}, "maxItems": 15},
+        "achievements": {"type": "array", "items": {"type": "string"}, "maxItems": 15},
+        "languages": {"type": "array", "items": {"type": "string"}, "maxItems": 15},
     },
     "required": [
         "personal_information", "name", "email", "phone", "summary", "skills", "experience",
@@ -37,22 +37,22 @@ RESUME_JSON_SCHEMA = {
 JOB_DESCRIPTION_ANALYSIS_SCHEMA = {
     "type": "object",
     "properties": {
-        "required_skills": {"type": "array", "items": {"type": "string"}},
-        "preferred_skills": {"type": "array", "items": {"type": "string"}},
-        "technologies": {"type": "array", "items": {"type": "string"}},
-        "frameworks": {"type": "array", "items": {"type": "string"}},
-        "databases": {"type": "array", "items": {"type": "string"}},
-        "cloud_technologies": {"type": "array", "items": {"type": "string"}},
-        "tools": {"type": "array", "items": {"type": "string"}},
-        "soft_skills": {"type": "array", "items": {"type": "string"}},
-        "responsibilities": {"type": "array", "items": {"type": "string"}},
-        "experience_requirements": {"type": "array", "items": {"type": "string"}},
-        "education_requirements": {"type": "array", "items": {"type": "string"}},
-        "certification_requirements": {"type": "array", "items": {"type": "string"}},
-        "important_keywords": {"type": "array", "items": {"type": "string"}},
-        "ats_relevant_terms": {"type": "array", "items": {"type": "string"}},
+        "required_skills": {"type": "array", "items": {"type": "string"}, "maxItems": 30},
+        "preferred_skills": {"type": "array", "items": {"type": "string"}, "maxItems": 30},
+        "technologies": {"type": "array", "items": {"type": "string"}, "maxItems": 30},
+        "frameworks": {"type": "array", "items": {"type": "string"}, "maxItems": 20},
+        "databases": {"type": "array", "items": {"type": "string"}, "maxItems": 15},
+        "cloud_technologies": {"type": "array", "items": {"type": "string"}, "maxItems": 15},
+        "tools": {"type": "array", "items": {"type": "string"}, "maxItems": 20},
+        "soft_skills": {"type": "array", "items": {"type": "string"}, "maxItems": 15},
+        "responsibilities": {"type": "array", "items": {"type": "string"}, "maxItems": 20},
+        "experience_requirements": {"type": "array", "items": {"type": "string"}, "maxItems": 10},
+        "education_requirements": {"type": "array", "items": {"type": "string"}, "maxItems": 10},
+        "certification_requirements": {"type": "array", "items": {"type": "string"}, "maxItems": 10},
+        "important_keywords": {"type": "array", "items": {"type": "string"}, "maxItems": 30},
+        "ats_relevant_terms": {"type": "array", "items": {"type": "string"}, "maxItems": 30},
         "seniority_level": {"type": "string"},
-        "other_explicit_requirements": {"type": "array", "items": {"type": "string"}},
+        "other_explicit_requirements": {"type": "array", "items": {"type": "string"}, "maxItems": 20},
     },
     "required": [
         "required_skills", "preferred_skills", "technologies", "frameworks",
@@ -74,7 +74,7 @@ GAP_ANALYSIS_REQUIREMENT_SCHEMA = {
             "type": "string",
             "enum": ["MATCHED", "PARTIALLY_MATCHED", "MISSING", "NOT_VERIFIABLE"],
         },
-        "candidate_evidence": {"type": "array", "items": {"type": "string"}},
+        "candidate_evidence": {"type": "array", "items": {"type": "string"}, "maxItems": 10},
         "confidence": {"type": "number", "minimum": 0, "maximum": 1},
         "reasoning": {"type": "string"},
         "recommendation": {"type": "string"},
@@ -94,22 +94,26 @@ GAP_ANALYSIS_SCHEMA = {
         "matched_requirements": {
             "type": "array",
             "items": GAP_ANALYSIS_REQUIREMENT_SCHEMA,
+            "maxItems": 80,
         },
         "partially_matched_requirements": {
             "type": "array",
             "items": GAP_ANALYSIS_REQUIREMENT_SCHEMA,
+            "maxItems": 80,
         },
         "missing_requirements": {
             "type": "array",
             "items": GAP_ANALYSIS_REQUIREMENT_SCHEMA,
+            "maxItems": 80,
         },
         "not_verifiable_requirements": {
             "type": "array",
             "items": GAP_ANALYSIS_REQUIREMENT_SCHEMA,
+            "maxItems": 80,
         },
-        "strengths": {"type": "array", "items": {"type": "string"}},
-        "weaknesses_gaps": {"type": "array", "items": {"type": "string"}},
-        "important_missing_information": {"type": "array", "items": {"type": "string"}},
+        "strengths": {"type": "array", "items": {"type": "string"}, "maxItems": 15},
+        "weaknesses_gaps": {"type": "array", "items": {"type": "string"}, "maxItems": 15},
+        "important_missing_information": {"type": "array", "items": {"type": "string"}, "maxItems": 15},
         "recommendations_for_profile_improvement": {
             "type": "array",
             "items": {
@@ -124,12 +128,13 @@ GAP_ANALYSIS_SCHEMA = {
                 "required": ["recommendation", "recommendation_type"],
                 "additionalProperties": False,
             },
+            "maxItems": 20,
         },
         "ats_keyword_coverage": {
             "type": "object",
             "properties": {
-                "covered_keywords": {"type": "array", "items": {"type": "string"}},
-                "missing_keywords": {"type": "array", "items": {"type": "string"}},
+                "covered_keywords": {"type": "array", "items": {"type": "string"}, "maxItems": 40},
+                "missing_keywords": {"type": "array", "items": {"type": "string"}, "maxItems": 40},
                 "coverage_percentage": {"type": "number", "minimum": 0, "maximum": 100},
             },
             "required": [
@@ -137,7 +142,7 @@ GAP_ANALYSIS_SCHEMA = {
             ],
             "additionalProperties": False,
         },
-        "interview_readiness_observations": {"type": "array", "items": {"type": "string"}},
+        "interview_readiness_observations": {"type": "array", "items": {"type": "string"}, "maxItems": 15},
     },
     "required": [
         "overall_match_percentage", "matched_requirements",
@@ -165,14 +170,31 @@ TAILORED_RESUME_SCHEMA = {
     "type": "object",
     "properties": {
         "summary": {"type": "string"},
-        "skills": {"type": "array", "items": {"type": "string"}},
-        "experience": {"type": "array", "items": TAILORED_RESUME_ITEM_SCHEMA},
-        "projects": {"type": "array", "items": TAILORED_RESUME_ITEM_SCHEMA},
-        "education": {"type": "array", "items": TAILORED_RESUME_ITEM_SCHEMA},
-        "certifications": {"type": "array", "items": TAILORED_RESUME_ITEM_SCHEMA},
+        "skills": {"type": "array", "items": {"type": "string"}, "maxItems": 40},
+        "experience": {"type": "array", "items": TAILORED_RESUME_ITEM_SCHEMA, "maxItems": 20},
+        "projects": {"type": "array", "items": TAILORED_RESUME_ITEM_SCHEMA, "maxItems": 15},
+        "education": {"type": "array", "items": TAILORED_RESUME_ITEM_SCHEMA, "maxItems": 10},
+        "certifications": {"type": "array", "items": TAILORED_RESUME_ITEM_SCHEMA, "maxItems": 15},
     },
     "required": [
         "summary", "skills", "experience", "projects", "education", "certifications",
+    ],
+    "additionalProperties": False,
+}
+
+
+# The candidate's own name/contact block is never AI-generated — it is filled
+# in from verified personal_information — so it is deliberately absent here.
+COVER_LETTER_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "greeting": {"type": "string"},
+        "opening_paragraph": {"type": "string"},
+        "body_paragraphs": {"type": "array", "items": {"type": "string"}, "maxItems": 4},
+        "closing_paragraph": {"type": "string"},
+    },
+    "required": [
+        "greeting", "opening_paragraph", "body_paragraphs", "closing_paragraph",
     ],
     "additionalProperties": False,
 }
@@ -266,6 +288,72 @@ STRICT RULES:
 - Never change a date, year, duration, or numeric metric from the source entry.
 - The summary must be specific to JOB_TITLE but built only from CANDIDATE_SOURCE_DATA
   facts, referencing CANDIDATE_MATCH_SUMMARY only to decide emphasis, never to add facts.
+%s
+Return only JSON that conforms exactly to the supplied schema. Do not include any
+commentary outside the JSON.
+
+JOB_TITLE:
+%s
+
+JOB_DESCRIPTION:
+%s
+
+JOB_REQUIREMENTS:
+%s
+
+CANDIDATE_MATCH_SUMMARY:
+%s
+
+CANDIDATE_SOURCE_DATA:
+%s""" % (
+        feedback_block,
+        job_title,
+        job_description,
+        job_requirements,
+        candidate_match_summary,
+        candidate_source_data,
+    )
+
+
+def build_cover_letter_prompt(
+    candidate_source_data,
+    job_title,
+    job_description,
+    job_requirements,
+    candidate_match_summary,
+    retry_feedback=None,
+):
+    feedback_block = ""
+    if retry_feedback:
+        feedback_block = (
+            "\nThe previous attempt violated the rules below and was rejected. "
+            "Correct every one of these in this attempt:\n- "
+            + "\n- ".join(retry_feedback)
+            + "\n"
+        )
+
+    return """You are writing a cover letter for one specific job using ONLY
+CANDIDATE_SOURCE_DATA for candidate facts. Never invent or infer candidate facts.
+
+STRICT RULES:
+- Every claim about the candidate must already be present in CANDIDATE_SOURCE_DATA.
+  Never add skills, employers, job titles, responsibilities, projects,
+  certifications, education, metrics, technologies, dates, or years of experience
+  that are not already there.
+- You may refer to the role and the employer's own stated needs using wording from
+  JOB_TITLE, JOB_DESCRIPTION, and JOB_REQUIREMENTS — quoting the posting back is not
+  inventing a candidate fact.
+- Never state or imply that the candidate has a requirement the
+  CANDIDATE_MATCH_SUMMARY reports as missing. Focus on genuine strengths instead.
+  Never apologise for, or draw attention to, gaps.
+- Never invent the hiring manager's name, the team's name, salary expectations,
+  availability dates, or any detail about the company beyond what the job text says.
+- If no hiring manager name appears in the job text, the greeting must be a neutral
+  form such as "Dear Hiring Manager".
+- Do not write a signature, the candidate's name, or contact details — those are
+  added separately from verified data.
+- Write 2 to 3 body paragraphs. Be specific and concrete rather than generic; avoid
+  filler such as "I am a hard worker" or "I am passionate about excellence".
 %s
 Return only JSON that conforms exactly to the supplied schema. Do not include any
 commentary outside the JSON.

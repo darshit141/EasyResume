@@ -18,6 +18,8 @@ class VerifyOTPAPIView(APIView):
     API for OTP verification.
     """
 
+    throttle_scope = "auth_sensitive"
+
     def post(self, request):
         serializer = VerifyOTPSerializer(data=request.data)
 

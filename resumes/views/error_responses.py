@@ -13,6 +13,7 @@ from resumes.services.llm_service import (
     LLMSchemaValidationError,
     LLMTimeoutError,
 )
+from resumes.services.cover_letter_ai_service import CoverLetterGroundingError
 from resumes.services.resume_curation_ai_service import ResumeCurationGroundingError
 
 
@@ -20,7 +21,14 @@ def llm_error_response(exc):
     response_status = status.HTTP_503_SERVICE_UNAVAILABLE
     if isinstance(
         exc,
-        (LLMInvalidResponseError, LLMSchemaValidationError, ResumeCurationGroundingError),
+        (
+            LLMInvalidResponseError,
+            LLMSchemaValidationError,
+            ResumeCurationGroundingError,
+            # A grounding failure means the model returned unusable content,
+            # not that the provider is down — 502, like the resume grounder.
+            CoverLetterGroundingError,
+        ),
     ):
         response_status = status.HTTP_502_BAD_GATEWAY
     elif isinstance(exc, (LLMModelUnavailableError, LLMTimeoutError)):

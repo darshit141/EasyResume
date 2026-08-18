@@ -5,14 +5,18 @@ from resumes.models import Resume
 
 class ResumeVersionService:
     """
-    Service to retrieve all versions of the logged-in user's resume.
+    Service to retrieve version history for one of the logged-in user's
+    resumes.
     """
 
     @staticmethod
-    def get_versions(user):
-        resume = Resume.objects.filter(
-            user=user
-        ).order_by("-id").first()
+    def get_versions(user, resume_id=None):
+        if resume_id is None:
+            # No id given: most recently uploaded resume, kept for callers
+            # that pre-date multi-resume support.
+            resume = Resume.objects.filter(user=user).order_by("-id").first()
+        else:
+            resume = Resume.objects.filter(user=user, id=resume_id).first()
 
         if not resume:
             raise Http404(

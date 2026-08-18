@@ -1,0 +1,105 @@
+{
+  "overall_match_percentage": 48.0,
+  "matched_requirements": [
+    {
+      "requirement": "Full-stack development",
+      "category": "required_skill",
+      "match_status": "MATCHED",
+      "candidate_evidence": [
+        "Summary: \"Python Developer with 1+ year of professional experience building production applications using Python, Django, FastAPI, DRF, PostgreSQL, and React.js.\"",
+        "Projects: HomeFixer, Affiliate Marketing Platform, Yaad CRM, Inventory Management Website"
+      ],
+      "confidence": 0.95,
+      "reasoning": "Candidate explicitly states full‑stack experience and has multiple full‑stack projects.",
+      "recommendation": "No action needed."
+    },
+    {
+      "requirement": "Next.js",
+      "category": "required_skill",
+      "match_status": "MATCHED",
+      "candidate_evidence": [
+        "Project: Food CRM Platform (QR-Based Restaurant Ordering System) – uses Next.js."
+      ],
+      "confidence": 0.9,
+      "reasoning": "Next.js is listed as a technology used in a project.",
+      "recommendation": "No action needed."
+    },
+    {
+      "requirement": "React",
+      "category": "required_skill",
+      "match_status": "MATCHED",
+      "candidate_evidence": [
+        "Skill: React.js",
+        "Projects: Affiliate Marketing Platform, Yaad CRM"
+      ],
+      "confidence": 0.96,
+      "reasoning": "React.js appears in both skills and multiple projects.",
+      "recommendation": "No action needed."
+    },
+    {
+      "requirement": "Python",
+      "category": "required_skill",
+      "match_status": "MATCHED",
+      "candidate_evidence": [
+        "Skill: Python",
+        "Projects: All listed projects are Python‑based."
+      ],
+      "confidence": 0.99,
+      "reasoning": "Python is the primary language throughout the resume.",
+      "recommendation": "No action needed."
+    },
+    {
+      "requirement": "FastAPI",
+      "category": "required_skill",
+      "match_status": "MATCHED",
+      "candidate_evidence": [
+        "Skill: FastAPI",
+        "Project: PV Integrated Signal Drafting Platform (PVAI) – uses FastAPI (Async)."
+      ],
+      "confidence": 0.94,
+      "reasoning": "FastAPI is explicitly listed as a skill and used in a project.",
+      "recommendation": "No action needed."
+    },
+    {
+      "requirement": "PostgreSQL",
+      "category": "required_skill",
+      "match_status": "MATCHED",
+      "candidate_evidence": [
+        "Skill: PostgreSQL",
+        "Projects: HomeFixer, Affiliate Marketing Platform, Yaad CRM, etc."
+      ],
+      "confidence": 0.97,
+      "reasoning": "PostgreSQL is both a listed skill and a database used in multiple projects.",
+      "recommendation": "No action needed."
+    },
+    {
+      "requirement": "REST API design",
+      "category": "required_skill",
+      "match_status": "MATCHED",
+      "candidate_evidence": [
+        "Skill: RESTful API Design",
+        "Projects: Developed 49+ RESTful APIs for Yaad CRM."
+      ],
+      "confidence": 0.96,
+      "reasoning": "Explicit skill and concrete project evidence.",
+      "recommendation": "No action needed."
+    },
+    {
+      "requirement": "Git",
+      "category": "required_skill",
+      "match_status": "MATCHED",
+      "candidate_evidence": [
+        "Skill: Git/GitHub"
+      ],
+      "confidence": 0.95,
+      "reasoning": "Git is listed as a skill.",
+      "recommendation": "No action needed."
+    },
+    {
+      "requirement": "LLM API integration",
+      "category": "preferred_skill",
+      "match_status": "MATCHED",
+      "candidate_evidence": [
+        "Skill: OpenAI API",
+        "Skill: Gemini API",
+        "Project: ATS Resume Checker – uses OpenAI/Ollama

@@ -4,6 +4,7 @@ from datetime import timedelta
 from django.utils import timezone
 
 from authentication.models import PasswordResetOTP, User
+from authentication.utils.otp_mailer import send_otp_email
 
 
 class ForgotPasswordService:
@@ -40,8 +41,6 @@ class ForgotPasswordService:
             expires_at=timezone.now() + timedelta(minutes=5),
         )
 
-        print("\n" + "=" * 50)
-        print(f"Password Reset OTP for {user.email}: {otp}")
-        print("=" * 50 + "\n")
+        send_otp_email(user.email, otp, purpose="password reset")
 
         return otp

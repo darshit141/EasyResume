@@ -4,6 +4,7 @@ from resumes.serializers.job_curation_serializer import (
     ATSKeywordCoverageSerializer,
     ProfileRecommendationSerializer,
 )
+from resumes.services.llm_service import SUPPORTED_PROVIDERS
 
 
 class MissingInformationQuerySerializer(serializers.Serializer):
@@ -14,6 +15,15 @@ class MissingInformationQuerySerializer(serializers.Serializer):
             "When true, forces a fresh candidate-to-job comparison instead of "
             "reusing a cached one. Pass this after updating your profile so "
             "the review reflects the new information."
+        ),
+    )
+    ai_provider = serializers.ChoiceField(
+        choices=SUPPORTED_PROVIDERS,
+        required=False,
+        allow_null=True,
+        help_text=(
+            "Which AI provider to use for this comparison (ollama | groq | "
+            "gemini). Defaults to the server's configured provider."
         ),
     )
 

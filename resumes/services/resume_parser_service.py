@@ -14,8 +14,8 @@ class ResumeParserService:
         "achievements", "languages",
     )
 
-    def __init__(self, llm_service=None):
-        self.llm_service = llm_service or get_llm_service()
+    def __init__(self, llm_service=None, provider=None):
+        self.llm_service = llm_service or get_llm_service(provider)
 
     def parse(self, text):
         result = self.llm_service.generate_structured(

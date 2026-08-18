@@ -13,7 +13,7 @@ logger = logging.getLogger(__name__)
 
 @api_view(["GET"])
 def readiness_check(request):
-    """Report whether the configured local model can currently serve AI work."""
+    """Report whether the server's default-configured AI provider can currently serve AI work."""
     try:
         get_llm_service().check_model_available()
     except LLMServiceError as exc:

@@ -3,6 +3,8 @@ from django.urls import path
 from resumes.views.resume_upload_view import ResumeUploadAPIView
 from resumes.views.resume_view import ResumeViewAPIView
 from resumes.views.resume_edit_view import ResumeEditAPIView
+from resumes.views.resume_list_view import ResumeListAPIView
+from resumes.views.resume_detail_view import ResumeDetailAPIView
 from resumes.views.resume_version_view import ResumeVersionAPIView
 from resumes.views.resume_version_detail_view import (
     ResumeVersionDetailAPIView,
@@ -12,8 +14,16 @@ from resumes.views.job_curation_view import (
     JobCurationDetailAPIView,
     JobCurationListAPIView,
     JobGapAnalysisAPIView,
+    JobUrlPreviewAPIView,
 )
-from resumes.views.resume_curation_view import JobResumeCurationGenerateAPIView
+from resumes.views.resume_curation_view import (
+    JobResumeCurationGenerateAPIView,
+    TailoredResumeDocxExportAPIView,
+)
+from resumes.views.cover_letter_view import (
+    ApplicationStatusAPIView,
+    CoverLetterGenerateAPIView,
+)
 from resumes.views.missing_information_view import MissingInformationReviewAPIView
 from resumes.views.tailored_resume_version_view import (
     TailoredResumeVersionDetailAPIView,
@@ -36,6 +46,16 @@ urlpatterns = [
             name="resume-edit"
     ),
     path(
+        "list/",
+        ResumeListAPIView.as_view(),
+        name="resume-list",
+    ),
+    path(
+        "<int:resume_id>/",
+        ResumeDetailAPIView.as_view(),
+        name="resume-detail",
+    ),
+    path(
         "versions/",
         ResumeVersionAPIView.as_view(),
         name="resume-version-history",
@@ -56,6 +76,11 @@ urlpatterns = [
         name="job-curation-analyze",
     ),
     path(
+        "job-curations/import-url/",
+        JobUrlPreviewAPIView.as_view(),
+        name="job-curation-import-url",
+    ),
+    path(
         "job-curations/<int:curation_id>/",
         JobCurationDetailAPIView.as_view(),
         name="job-curation-detail",
@@ -71,9 +96,24 @@ urlpatterns = [
         name="job-curation-tailored-resume",
     ),
     path(
+        "job-curations/<int:curation_id>/tailored-resume/export/docx/",
+        TailoredResumeDocxExportAPIView.as_view(),
+        name="job-curation-tailored-resume-export-docx",
+    ),
+    path(
         "job-curations/<int:curation_id>/missing-information/",
         MissingInformationReviewAPIView.as_view(),
         name="job-curation-missing-information",
+    ),
+    path(
+        "job-curations/<int:curation_id>/cover-letter/",
+        CoverLetterGenerateAPIView.as_view(),
+        name="job-curation-cover-letter",
+    ),
+    path(
+        "job-curations/<int:curation_id>/application/",
+        ApplicationStatusAPIView.as_view(),
+        name="job-curation-application-status",
     ),
     path(
         "job-curations/<int:curation_id>/tailored-resume/versions/",

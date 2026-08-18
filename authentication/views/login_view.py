@@ -15,6 +15,8 @@ class LoginAPIView(APIView):
     API for user login.
     """
 
+    throttle_scope = "auth_sensitive"
+
     def post(self, request):
         serializer = LoginSerializer(data=request.data)
 

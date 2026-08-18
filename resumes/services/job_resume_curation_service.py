@@ -23,9 +23,9 @@ class JobResumeCurationService:
     job-tailored resume for a curation session.
     """
 
-    def __init__(self, ai_service=None, gap_analysis_service=None):
-        self.ai_service = ai_service or ResumeCurationAIService()
-        self.gap_analysis_service = gap_analysis_service or JobGapAnalysisService()
+    def __init__(self, ai_service=None, gap_analysis_service=None, provider=None):
+        self.ai_service = ai_service or ResumeCurationAIService(provider=provider)
+        self.gap_analysis_service = gap_analysis_service or JobGapAnalysisService(provider=provider)
 
     def generate(self, user, curation_id, regenerate=False):
         """Returns (curation, version). ``version`` is the JobResumeCurationVersion
@@ -45,7 +45,7 @@ class JobResumeCurationService:
             curation_id,
             regenerate=regenerate,
         )
-        candidate_source_data = self.build_candidate_source_data(user)
+        candidate_source_data = self.build_candidate_source_data(user, resume_id=curation.resume_id)
         job_requirements = JobGapAnalysisService.build_job_requirements(
             curation.analysis_data
         )
@@ -123,11 +123,14 @@ class JobResumeCurationService:
         return 1 if latest is None else latest.version + 1
 
     @staticmethod
-    def build_candidate_source_data(user):
-        resume = Resume.objects.filter(
-            user=user,
-            status="completed",
-        ).order_by("-updated_at", "-id").first()
+    def build_candidate_source_data(user, resume_id=None):
+        if resume_id:
+            resume = Resume.objects.filter(id=resume_id, user=user, status="completed").first()
+        else:
+            resume = Resume.objects.filter(
+                user=user,
+                status="completed",
+            ).order_by("-updated_at", "-id").first()
         if not resume or not resume.parsed_data:
             raise CandidateDataUnavailableError()
 

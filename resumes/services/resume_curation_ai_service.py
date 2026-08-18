@@ -36,8 +36,8 @@ class ResumeCurationAIService:
     MAX_ATTEMPTS = 2
     _TOKEN_RE = re.compile(r"[A-Za-z][A-Za-z0-9+#.]*|\d+(?:\.\d+)?%?")
 
-    def __init__(self, llm_service=None):
-        self.llm_service = llm_service or get_llm_service()
+    def __init__(self, llm_service=None, provider=None):
+        self.llm_service = llm_service or get_llm_service(provider)
 
     def generate_tailored_resume(
         self,
