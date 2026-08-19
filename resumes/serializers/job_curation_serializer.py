@@ -2,6 +2,7 @@ from urllib.parse import urlparse
 
 from django.conf import settings
 from rest_framework import serializers
+from api.utils.config import get_config_value
 
 from resumes.models import JobResumeCuration
 from resumes.services.job_curation_ai_service import JOB_ANALYSIS_ARRAY_FIELDS
@@ -120,7 +121,7 @@ class JobCurationRequestSerializer(serializers.Serializer):
         if not value:
             return value
 
-        allowed_domains = settings.ALLOWED_JOB_URL_DOMAINS
+        allowed_domains = get_config_value("ALLOWED_JOB_URL_DOMAINS", settings.ALLOWED_JOB_URL_DOMAINS)
         # An explicitly empty list means the restriction was intentionally
         # disabled (see settings.ALLOWED_JOB_URL_DOMAINS) — any URL passes.
         if not allowed_domains:

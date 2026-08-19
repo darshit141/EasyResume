@@ -32,6 +32,7 @@ from urllib.parse import urlparse
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 from django.conf import settings
+from api.utils.config import get_config_value
 
 logger = logging.getLogger(__name__)
 
@@ -153,7 +154,7 @@ def _validate_url(url):
     if not hostname:
         raise JobUrlNotAllowedError()
 
-    allowed = settings.ALLOWED_JOB_URL_DOMAINS
+    allowed = get_config_value("ALLOWED_JOB_URL_DOMAINS", settings.ALLOWED_JOB_URL_DOMAINS)
     if allowed:
         permitted = any(
             hostname == domain or hostname.endswith(f".{domain}") for domain in allowed

@@ -2,6 +2,8 @@ import logging
 
 from django.conf import settings
 from django.db import transaction
+from api.utils.config import get_config_value
+
 
 from resumes.models import Resume, ResumeVersion
 from resumes.services.llm_service import LLMServiceError
@@ -68,7 +70,7 @@ class ResumeUploadService:
         """Pure quota check, run before any text extraction or AI call —
         matching the same "check first, never do doomed work" rule already
         used for every other quota in this codebase."""
-        limit = settings.MAX_RESUMES_PER_USER
+        limit = get_config_value("MAX_RESUMES_PER_USER", settings.MAX_RESUMES_PER_USER)
         if Resume.objects.filter(user=user).count() >= limit:
             raise ResumeLimitReachedError(limit)
 

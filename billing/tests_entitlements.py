@@ -22,6 +22,16 @@ def _make_user(email):
     )
 
 
+# ResumeUploadService rejects anything shorter than its _MIN_EXTRACTED_CHARS
+# (50) guard with a 422 before the entitlement path is ever reached, so a
+# stubbed extraction has to clear that bar or the test measures the guard
+# instead of the thing it means to measure.
+_EXTRACTED_RESUME_TEXT = (
+    "Jane Doe. Backend engineer with eight years of Python, Django and "
+    "PostgreSQL experience across payments and infrastructure teams."
+)
+
+
 # Shaped to satisfy TailoredResumeDataSerializer, so tests that render a
 # real response exercise the gate rather than dying in serialization.
 _TAILORED_DATA = {
@@ -213,17 +223,26 @@ class EnforcementEndpointTests(TestCase):
         self.assertEqual(response.status_code, 402)
         self.assertEqual(response.data["code"], "UPGRADE_REQUIRED")
 
-    def test_paid_provider_on_upload_returns_402_before_any_ai_call(self):
+    def test_free_user_may_upload_with_a_hosted_ai_provider(self):
+        # Provider choice is NOT a paid feature. FREE_ENTITLEMENTS lists all
+        # four providers deliberately — free-tier AI cost is capped by
+        # `ai_calls_per_month`, not by withholding Groq/Gemini. This asserts
+        # that intent so the gate can't be silently re-tightened.
         from django.core.files.uploadedfile import SimpleUploadedFile
 
         upload = SimpleUploadedFile("resume.pdf", b"placeholder content")
-        with patch("resumes.services.resume_upload_service.ResumeParser.parse") as mock_parse:
+        with patch(
+            "resumes.services.resume_upload_service.TextExtractor.extract_text",
+            return_value=_EXTRACTED_RESUME_TEXT,
+        ), patch(
+            "resumes.services.resume_upload_service.ResumeParser.parse", return_value={}
+        ) as mock_parse:
             response = self.client.post(
                 "/api/resumes/upload/", {"file": upload, "ai_provider": "groq"}, format="multipart"
             )
 
-        self.assertEqual(response.status_code, 402)
-        mock_parse.assert_not_called()
+        self.assertEqual(response.status_code, 201)
+        mock_parse.assert_called_once()
 
     def test_over_quota_generation_returns_402_before_any_ai_call(self):
         curation = _generate_versions(self.user, 2)
@@ -297,16 +316,17 @@ class EnforcementEndpointTests(TestCase):
         self.assertEqual(response.data["code"], "UPGRADE_REQUIRED")
         mock_service.assert_not_called()
 
-    def test_paid_provider_on_missing_information_returns_402_before_any_ai_call(self):
+    def test_free_user_may_use_a_hosted_ai_provider_for_missing_information(self):
+        # Same intent as the upload gate above: choosing Gemini is not itself
+        # a paid action, so the provider check must let this through.
         curation = _generate_versions(self.user, 0)
         with patch("resumes.views.missing_information_view.MissingInformationReviewService") as mock_service:
             response = self.client.get(
                 f"/api/resumes/job-curations/{curation.id}/missing-information/?ai_provider=gemini"
             )
 
-        self.assertEqual(response.status_code, 402)
-        self.assertEqual(response.data["code"], "UPGRADE_REQUIRED")
-        mock_service.assert_not_called()
+        self.assertNotEqual(response.status_code, 402)
+        mock_service.assert_called()
 
     def test_free_user_may_use_local_provider_at_every_ai_provider_gate(self):
         # "ollama" (a free-tier provider) must never itself be blocked — only
@@ -335,6 +355,55 @@ class EnforcementEndpointTests(TestCase):
         self.assertIsNone(entitlements.data["tailored_resumes_limit"])
         self.assertTrue(entitlements.data["docx_export"])
         self.assertFalse(entitlements.data["shows_ads"])
+
+
+class RuntimeConfigQuotaTests(TestCase):
+    """The free-tier quotas are the controls that cap real AI spend, so an
+    operator changing them in the admin panel must take effect immediately —
+    not only after a redeploy."""
+
+    def setUp(self):
+        self.user = _make_user("runtimeconfig@example.com")
+
+    def _set(self, key, value):
+        from api.models import SystemConfiguration
+
+        SystemConfiguration.objects.update_or_create(
+            key=key,
+            defaults={"value": str(value), "value_type": "integer", "category": "billing"},
+        )
+
+    def test_admin_configured_ai_quota_is_used(self):
+        self._set("FREE_AI_CALLS_PER_MONTH", 3)
+        self.assertEqual(EntitlementsService.for_user(self.user)["ai_calls_per_month"], 3)
+
+    def test_admin_configured_ai_quota_is_actually_enforced(self):
+        self._set("FREE_AI_CALLS_PER_MONTH", 2)
+        for _ in range(2):
+            EntitlementsService.record_ai_usage(self.user, AIUsageLog.ACTION_JOB_ANALYSIS, "gemini")
+
+        with self.assertRaises(PlanLimitReachedError):
+            EntitlementsService.check_can_use_ai(self.user)
+
+    def test_admin_configured_tailored_resume_quota_is_used(self):
+        self._set("FREE_TAILORED_RESUMES_PER_MONTH", 7)
+        self.assertEqual(
+            EntitlementsService.for_user(self.user)["tailored_resumes_per_month"], 7
+        )
+
+    def test_pro_stays_unlimited_regardless_of_free_tier_config(self):
+        self._set("FREE_AI_CALLS_PER_MONTH", 1)
+        Subscription.objects.create(user=self.user, plan_id="pro", status="active")
+
+        self.assertIsNone(EntitlementsService.for_user(self.user)["ai_calls_per_month"])
+
+    def test_falls_back_to_the_built_in_default_when_unconfigured(self):
+        from billing.entitlements import FREE_ENTITLEMENTS
+
+        self.assertEqual(
+            EntitlementsService.for_user(self.user)["ai_calls_per_month"],
+            FREE_ENTITLEMENTS["ai_calls_per_month"],
+        )
 
 
 class AIUsageQuotaTests(TestCase):
@@ -407,7 +476,8 @@ class AIUsageEndpointGatingTests(TestCase):
         with patch.dict(FREE_ENTITLEMENTS, {"ai_calls_per_month": 0}):
             upload = SimpleUploadedFile("resume.pdf", b"placeholder content")
             with patch(
-                "resumes.services.resume_upload_service.TextExtractor.extract_text", return_value="resume"
+                "resumes.services.resume_upload_service.TextExtractor.extract_text",
+                return_value=_EXTRACTED_RESUME_TEXT,
             ), patch("resumes.services.resume_upload_service.ResumeParser.parse", return_value={}):
                 response = self.client.post(
                     "/api/resumes/upload/",

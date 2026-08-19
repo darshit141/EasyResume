@@ -185,6 +185,14 @@ AUTH_PASSWORD_VALIDATORS = [
     },
 ]
 
+# PBKDF2 is deliberately slow — that is exactly what makes it the right
+# choice for real passwords and the wrong one for a suite that creates
+# hundreds of users. Hashing dominated the runtime (measured: 355 tests in
+# ~915s), which is far too slow to gate every pull request. This applies
+# ONLY under `manage.py test`; production hashing is untouched.
+if RUNNING_TESTS:
+    PASSWORD_HASHERS = ["django.contrib.auth.hashers.MD5PasswordHasher"]
+
 
 # Internationalization
 # https://docs.djangoproject.com/en/6.0/topics/i18n/

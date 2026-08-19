@@ -1,4 +1,5 @@
 from django.conf import settings
+from api.utils.config import get_config_value
 from drf_spectacular.utils import extend_schema
 from rest_framework import status
 from rest_framework.permissions import IsAuthenticated
@@ -28,7 +29,7 @@ class ResumeListAPIView(APIView):
         return Response(
             {
                 "resumes": ResumeListItemSerializer(resumes, many=True).data,
-                "limit": settings.MAX_RESUMES_PER_USER,
+                "limit": get_config_value("MAX_RESUMES_PER_USER", settings.MAX_RESUMES_PER_USER),
             },
             status=status.HTTP_200_OK,
         )

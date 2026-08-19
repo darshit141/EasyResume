@@ -7,6 +7,7 @@ from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 from django.conf import settings
+from api.utils.config import get_config_value
 
 
 class LLMServiceError(Exception):
@@ -420,7 +421,8 @@ def resolve_provider(provider=None):
     """The same fallback ``get_llm_service`` applies, exposed standalone so a
     view can know *which* provider will actually be used — e.g. to record
     accurate usage/cost tracking — without needing to construct a client."""
-    return (provider or settings.LLM_PROVIDER or "ollama").lower()
+    provider_default = get_config_value("LLM_PROVIDER", settings.LLM_PROVIDER)
+    return (provider or provider_default or "ollama").lower()
 
 
 def get_llm_service(provider=None):
@@ -434,34 +436,39 @@ def get_llm_service(provider=None):
     if provider not in SUPPORTED_PROVIDERS:
         raise LLMServiceError("Unsupported AI provider.")
 
+    timeout = get_config_value("LLM_TIMEOUT", settings.LLM_TIMEOUT)
+    max_retries = get_config_value("LLM_MAX_RETRIES", settings.LLM_MAX_RETRIES)
+    temperature = get_config_value("LLM_TEMPERATURE", settings.LLM_TEMPERATURE)
+    max_output_tokens = get_config_value("LLM_MAX_OUTPUT_TOKENS", settings.LLM_MAX_OUTPUT_TOKENS)
+
     if provider == "groq":
         return GroqLLMService(
-            api_key=settings.GROQ_API_KEY,
-            model=settings.GROQ_MODEL,
-            timeout=settings.LLM_TIMEOUT,
-            max_retries=settings.LLM_MAX_RETRIES,
-            temperature=settings.LLM_TEMPERATURE,
-            base_url=settings.GROQ_BASE_URL,
-            max_output_tokens=settings.LLM_MAX_OUTPUT_TOKENS,
+            api_key=get_config_value("GROQ_API_KEY", settings.GROQ_API_KEY),
+            model=get_config_value("GROQ_MODEL", settings.GROQ_MODEL),
+            timeout=timeout,
+            max_retries=max_retries,
+            temperature=temperature,
+            base_url=get_config_value("GROQ_BASE_URL", settings.GROQ_BASE_URL),
+            max_output_tokens=max_output_tokens,
         )
 
     if provider == "gemini":
         return GeminiLLMService(
-            api_key=settings.GEMINI_API_KEY,
-            model=settings.GEMINI_MODEL,
-            timeout=settings.LLM_TIMEOUT,
-            max_retries=settings.LLM_MAX_RETRIES,
-            temperature=settings.LLM_TEMPERATURE,
-            base_url=settings.GEMINI_BASE_URL,
-            max_output_tokens=settings.LLM_MAX_OUTPUT_TOKENS,
+            api_key=get_config_value("GEMINI_API_KEY", settings.GEMINI_API_KEY),
+            model=get_config_value("GEMINI_MODEL", settings.GEMINI_MODEL),
+            timeout=timeout,
+            max_retries=max_retries,
+            temperature=temperature,
+            base_url=get_config_value("GEMINI_BASE_URL", settings.GEMINI_BASE_URL),
+            max_output_tokens=max_output_tokens,
         )
 
     return OllamaLLMService(
-        base_url=settings.OLLAMA_BASE_URL,
-        model=settings.OLLAMA_MODEL,
-        timeout=settings.LLM_TIMEOUT,
-        max_retries=settings.LLM_MAX_RETRIES,
-        temperature=settings.LLM_TEMPERATURE,
-        max_output_tokens=settings.LLM_MAX_OUTPUT_TOKENS,
-        keep_alive=settings.OLLAMA_KEEP_ALIVE,
+        base_url=get_config_value("OLLAMA_BASE_URL", settings.OLLAMA_BASE_URL),
+        model=get_config_value("OLLAMA_MODEL", settings.OLLAMA_MODEL),
+        timeout=timeout,
+        max_retries=max_retries,
+        temperature=temperature,
+        max_output_tokens=max_output_tokens,
+        keep_alive=get_config_value("OLLAMA_KEEP_ALIVE", settings.OLLAMA_KEEP_ALIVE),
     )

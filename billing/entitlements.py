@@ -64,7 +64,26 @@ def entitlements_for(plan_id, is_active):
     Anything other than a confirmed-active paid plan resolves to free. That
     default is deliberate: an unknown plan id, a lapsed subscription, or a
     half-written row must never accidentally grant paid access.
+
+    The two free-tier quotas are resolved *per call* through the runtime
+    config, not baked in at import. They are the controls that cap real AI
+    spend, so an operator changing them in the admin panel has to take effect
+    immediately — the module-level dict below is only the fallback default.
     """
+    # Imported lazily: this module is imported by plans.py at app-load time,
+    # and api.utils.config reaches into the ORM.
+    from api.utils.config import get_config_value
+
     if is_active and plan_id == "pro":
         return PRO_ENTITLEMENTS
-    return FREE_ENTITLEMENTS
+
+    return {
+        **FREE_ENTITLEMENTS,
+        "tailored_resumes_per_month": get_config_value(
+            "FREE_TAILORED_RESUMES_PER_MONTH",
+            FREE_ENTITLEMENTS["tailored_resumes_per_month"],
+        ),
+        "ai_calls_per_month": get_config_value(
+            "FREE_AI_CALLS_PER_MONTH", FREE_ENTITLEMENTS["ai_calls_per_month"]
+        ),
+    }
