@@ -19,8 +19,10 @@ class User(AbstractBaseUser, PermissionsMixin):
     )
 
     phone = models.CharField(
-        max_length=10,
+        max_length=30,
         unique=True,
+        null=True,
+        blank=True,
     )
 
     is_active = models.BooleanField(
@@ -39,7 +41,7 @@ class User(AbstractBaseUser, PermissionsMixin):
 
     USERNAME_FIELD = "email"
 
-    REQUIRED_FIELDS = ["name", "phone"]
+    REQUIRED_FIELDS = ["name"]
 
     def __str__(self):
         return self.email

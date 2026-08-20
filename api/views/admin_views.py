@@ -118,6 +118,10 @@ def serialize_setting_value(value, value_type):
     return str(value) if value is not None else ""
 
 
+def is_sensitive_key(key):
+    return key.endswith("_API_KEY") or "SECRET" in key
+
+
 class SystemConfigurationListUpdateAPIView(APIView):
     permission_classes = [permissions.IsAdminUser]
 
@@ -128,9 +132,12 @@ class SystemConfigurationListUpdateAPIView(APIView):
             key = default["key"]
             if key in configs:
                 config = configs[key]
+                val = config.value
+                if is_sensitive_key(key) and val:
+                    val = "********"
                 data.append({
                     "key": key,
-                    "value": config.value,
+                    "value": val,
                     "description": config.description or default["description"],
                     "category": config.category or default["category"],
                     "value_type": config.value_type or default["value_type"],
@@ -140,6 +147,8 @@ class SystemConfigurationListUpdateAPIView(APIView):
             else:
                 setting_val = getattr(settings, key, None)
                 serialized_val = serialize_setting_value(setting_val, default["value_type"])
+                if is_sensitive_key(key) and serialized_val:
+                    serialized_val = "********"
                 data.append({
                     "key": key,
                     "value": serialized_val,
@@ -164,6 +173,10 @@ class SystemConfigurationListUpdateAPIView(APIView):
             meta = next((d for d in DEFAULT_CONFIGS if d["key"] == key), None)
             if not meta:
                 errors.append({"key": key, "detail": f"Unknown configuration key: {key}"})
+                continue
+                
+            # If sensitive and value is masked, skip validation
+            if is_sensitive_key(key) and value == "********":
                 continue
                 
             value_str = str(value) if value is not None else ""
@@ -193,8 +206,12 @@ class SystemConfigurationListUpdateAPIView(APIView):
         for item in request.data:
             key = item.get("key")
             value = item.get("value")
-            meta = next(d for d in DEFAULT_CONFIGS if d["key"] == key)
             
+            # If sensitive and value is masked, do not modify/overwrite the configuration
+            if is_sensitive_key(key) and value == "********":
+                continue
+                
+            meta = next(d for d in DEFAULT_CONFIGS if d["key"] == key)
             value_str = str(value) if value is not None else ""
             SystemConfiguration.objects.update_or_create(
                 key=key,
