@@ -132,6 +132,10 @@ class ProfileAPITests(TestCase):
         self.assertEqual(response.data["email"], "jane@example.com")
         self.assertEqual(response.data["name"], "Jane Doe")
         self.assertEqual(response.data["phone"], "1234567890")
+        # is_staff must be present — is_staff-gated UI (e.g. the frontend's
+        # Admin Panel nav link) depends on it actually reaching the client.
+        self.assertIn("is_staff", response.data)
+        self.assertFalse(response.data["is_staff"])
 
     def test_get_profile_requires_authentication(self):
         response = self.client.get("/api/auth/me/")
