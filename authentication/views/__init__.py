@@ -11,3 +11,4 @@ from .account_deletion_view import AccountDeletionAPIView
 from .account_export_view import AccountExportAPIView
 from .policy_acceptance_view import PolicyAcceptanceAPIView
 from .cookie_consent_view import CookieConsentAPIView
+from .token_refresh_view import SafeTokenRefreshView
