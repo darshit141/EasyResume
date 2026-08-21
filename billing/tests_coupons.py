@@ -34,6 +34,62 @@ class CouponModelTests(TestCase):
         self.assertEqual(coupon.redemptions_remaining, 2)
 
 
+class AdminCouponAPITests(TestCase):
+    def setUp(self):
+        self.client = APIClient()
+        self.admin = User.objects.create_superuser(
+            email="coupon-admin@example.com", name="Admin", phone="1111111111", password="adminpassword"
+        )
+        self.regular_user = _make_user("not-admin@example.com")
+
+    def test_non_admin_cannot_list_or_create(self):
+        self.client.force_authenticate(user=self.regular_user)
+
+        self.assertEqual(self.client.get("/api/billing/admin/coupons/").status_code, 403)
+        self.assertEqual(
+            self.client.post("/api/billing/admin/coupons/", {"code": "X"}, format="json").status_code, 403
+        )
+
+    def test_admin_can_create_and_list_coupons(self):
+        self.client.force_authenticate(user=self.admin)
+
+        response = self.client.post(
+            "/api/billing/admin/coupons/",
+            {"code": "beta2026", "description": "Beta cohort", "max_redemptions": 10, "duration_days": 30},
+            format="json",
+        )
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(response.data["code"], "BETA2026")
+        self.assertEqual(response.data["redemptions_used"], 0)
+        self.assertEqual(response.data["redemptions_remaining"], 10)
+
+        response = self.client.get("/api/billing/admin/coupons/")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(len(response.data), 1)
+
+    def test_duplicate_code_is_rejected(self):
+        Coupon.objects.create(code="DUPE")
+        self.client.force_authenticate(user=self.admin)
+
+        response = self.client.post("/api/billing/admin/coupons/", {"code": "dupe"}, format="json")
+        self.assertEqual(response.status_code, 400)
+
+    def test_admin_can_toggle_active(self):
+        coupon = Coupon.objects.create(code="TOGGLE", is_active=True)
+        self.client.force_authenticate(user=self.admin)
+
+        response = self.client.post(f"/api/billing/admin/coupons/{coupon.id}/toggle-active/")
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(response.data["is_active"])
+        coupon.refresh_from_db()
+        self.assertFalse(coupon.is_active)
+
+    def test_toggle_unknown_coupon_404s(self):
+        self.client.force_authenticate(user=self.admin)
+        response = self.client.post("/api/billing/admin/coupons/999999/toggle-active/")
+        self.assertEqual(response.status_code, 404)
+
+
 class CouponServiceTests(TestCase):
     def setUp(self):
         self.user = _make_user("redeemer@example.com")

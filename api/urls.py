@@ -11,7 +11,11 @@ from .views.admin_views import (
 )
 from .views.business_metrics_view import AdminBusinessMetricsAPIView
 from .views.analytics_views import TrackEventAPIView
-from .views.b2b_lead_views import B2BLeadCreateAPIView
+from .views.b2b_lead_views import (
+    AdminB2BLeadListAPIView,
+    AdminB2BLeadToggleContactedAPIView,
+    B2BLeadCreateAPIView,
+)
 
 urlpatterns = [
     path("health/", health_check, name="health-check"),
@@ -22,6 +26,12 @@ urlpatterns = [
 
     # Leads
     path("leads/b2b/", B2BLeadCreateAPIView.as_view(), name="b2b-lead-create"),
+    path("admin/leads/b2b/", AdminB2BLeadListAPIView.as_view(), name="admin-b2b-leads"),
+    path(
+        "admin/leads/b2b/<int:lead_id>/toggle-contacted/",
+        AdminB2BLeadToggleContactedAPIView.as_view(),
+        name="admin-b2b-lead-toggle-contacted",
+    ),
 
     # Admin endpoints
     path("admin/config/", SystemConfigurationListUpdateAPIView.as_view(), name="admin-config"),

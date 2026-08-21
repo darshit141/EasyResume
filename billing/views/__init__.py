@@ -7,6 +7,10 @@ from billing.views.billing_view import (
     StripeWebhookAPIView,
     SubscriptionStatusAPIView,
 )
+from billing.views.coupon_admin_view import (
+    AdminCouponListCreateAPIView,
+    AdminCouponToggleActiveAPIView,
+)
 
 __all__ = [
     "CouponRedeemAPIView",
@@ -16,4 +20,6 @@ __all__ = [
     "PlanListAPIView",
     "StripeWebhookAPIView",
     "SubscriptionStatusAPIView",
+    "AdminCouponListCreateAPIView",
+    "AdminCouponToggleActiveAPIView",
 ]

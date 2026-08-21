@@ -2,6 +2,45 @@ from django.test import TestCase
 from rest_framework.test import APIClient
 
 from api.models import B2BLead
+from authentication.models import User
+
+
+class AdminB2BLeadAPITests(TestCase):
+    def setUp(self):
+        self.client = APIClient()
+        self.admin = User.objects.create_superuser(
+            email="lead-admin@example.com", name="Admin", phone="2222222222", password="adminpassword"
+        )
+        self.regular_user = User.objects.create_user(
+            name="Regular", email="not-lead-admin@example.com", phone="3333333333", password="safe-password",
+        )
+        self.lead = B2BLead.objects.create(name="Jamie", email="jamie@example.com", company_name="Coaching Co")
+
+    def test_non_admin_cannot_list_leads(self):
+        self.client.force_authenticate(user=self.regular_user)
+        response = self.client.get("/api/admin/leads/b2b/")
+        self.assertEqual(response.status_code, 403)
+
+    def test_admin_can_list_leads(self):
+        self.client.force_authenticate(user=self.admin)
+        response = self.client.get("/api/admin/leads/b2b/")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(len(response.data), 1)
+        self.assertEqual(response.data[0]["email"], "jamie@example.com")
+        self.assertFalse(response.data[0]["contacted"])
+
+    def test_admin_can_toggle_contacted(self):
+        self.client.force_authenticate(user=self.admin)
+        response = self.client.post(f"/api/admin/leads/b2b/{self.lead.id}/toggle-contacted/")
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.data["contacted"])
+        self.lead.refresh_from_db()
+        self.assertTrue(self.lead.contacted)
+
+    def test_toggle_unknown_lead_404s(self):
+        self.client.force_authenticate(user=self.admin)
+        response = self.client.post("/api/admin/leads/b2b/999999/toggle-contacted/")
+        self.assertEqual(response.status_code, 404)
 
 
 class B2BLeadAPITests(TestCase):

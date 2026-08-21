@@ -1,10 +1,11 @@
 from drf_spectacular.utils import OpenApiResponse, extend_schema
-from rest_framework import status
+from rest_framework import permissions, status
 from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from api.serializers.b2b_lead_serializers import B2BLeadRequestSerializer
+from api.models import B2BLead
+from api.serializers.b2b_lead_serializers import B2BLeadAdminSerializer, B2BLeadRequestSerializer
 
 
 @extend_schema(
@@ -34,3 +35,25 @@ class B2BLeadCreateAPIView(APIView):
 
         serializer.save()
         return Response(status=status.HTTP_201_CREATED)
+
+
+class AdminB2BLeadListAPIView(APIView):
+    permission_classes = [permissions.IsAdminUser]
+
+    def get(self, request):
+        leads = B2BLead.objects.all().order_by("-created_at")
+        return Response(B2BLeadAdminSerializer(leads, many=True).data)
+
+
+class AdminB2BLeadToggleContactedAPIView(APIView):
+    permission_classes = [permissions.IsAdminUser]
+
+    def post(self, request, lead_id):
+        try:
+            lead = B2BLead.objects.get(id=lead_id)
+        except B2BLead.DoesNotExist:
+            return Response({"detail": "Lead not found."}, status=status.HTTP_404_NOT_FOUND)
+
+        lead.contacted = not lead.contacted
+        lead.save(update_fields=["contacted"])
+        return Response(B2BLeadAdminSerializer(lead).data)

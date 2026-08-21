@@ -1,6 +1,8 @@
 from django.urls import path
 
 from billing.views import (
+    AdminCouponListCreateAPIView,
+    AdminCouponToggleActiveAPIView,
     CouponRedeemAPIView,
     CreateCheckoutSessionAPIView,
     CreatePortalSessionAPIView,
@@ -18,4 +20,10 @@ urlpatterns = [
     path("portal/", CreatePortalSessionAPIView.as_view(), name="billing-portal"),
     path("webhook/", StripeWebhookAPIView.as_view(), name="billing-webhook"),
     path("coupons/redeem/", CouponRedeemAPIView.as_view(), name="billing-coupon-redeem"),
+    path("admin/coupons/", AdminCouponListCreateAPIView.as_view(), name="billing-admin-coupons"),
+    path(
+        "admin/coupons/<int:coupon_id>/toggle-active/",
+        AdminCouponToggleActiveAPIView.as_view(),
+        name="billing-admin-coupon-toggle-active",
+    ),
 ]
