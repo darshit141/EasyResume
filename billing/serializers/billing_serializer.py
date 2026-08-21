@@ -1,22 +1,32 @@
 from rest_framework import serializers
 
-from billing.plans import PLANS_BY_ID
+from billing.plans import BILLING_PERIODS, PLANS_BY_ID, SUPPORTED_CURRENCIES
+
+
+class PriceOptionSerializer(serializers.Serializer):
+    amount_cents = serializers.IntegerField()
+    display = serializers.CharField()
+    purchasable = serializers.BooleanField()
 
 
 class PlanSerializer(serializers.Serializer):
+    """Represents one plan already resolved to a single currency — see
+    PlanListAPIView, which resolves `?currency=` before building this. Free
+    has `monthly`/`annual` both null (nothing to check out); Pro has both,
+    each null only if that specific currency/period isn't configured yet."""
+
     id = serializers.CharField()
     name = serializers.CharField()
-    price_display = serializers.CharField()
-    price_cents = serializers.IntegerField()
     features = serializers.ListField(child=serializers.CharField())
-    purchasable = serializers.SerializerMethodField()
-
-    def get_purchasable(self, plan):
-        return bool(plan.get("stripe_price_id"))
+    currency = serializers.CharField()
+    monthly = PriceOptionSerializer(allow_null=True)
+    annual = PriceOptionSerializer(allow_null=True)
 
 
 class CheckoutRequestSerializer(serializers.Serializer):
     plan_id = serializers.ChoiceField(choices=list(PLANS_BY_ID.keys()))
+    currency = serializers.ChoiceField(choices=SUPPORTED_CURRENCIES, required=False)
+    billing_period = serializers.ChoiceField(choices=BILLING_PERIODS, required=False, default="monthly")
 
 
 class CheckoutResponseSerializer(serializers.Serializer):

@@ -27,6 +27,16 @@ class Subscription(models.Model):
 
     plan_id = models.CharField(max_length=50, blank=True)
 
+    # Which price the subscriber is actually paying — set from the Stripe
+    # Checkout session's metadata (see StripeService.create_checkout_session)
+    # when checkout.session.completed arrives. Without this, MRR cannot be
+    # computed at all: a "pro" plan_id alone doesn't say whether someone is
+    # on the EUR or GBP price, or monthly or annual (COMMERCIAL_READINESS_
+    # AUDIT.md §45). Blank for a coupon-granted comp subscription, which by
+    # definition isn't paying anything and shouldn't count toward MRR.
+    currency = models.CharField(max_length=3, blank=True)
+    billing_period = models.CharField(max_length=10, blank=True)
+
     status = models.CharField(
         max_length=20,
         choices=STATUS_CHOICES,
@@ -40,6 +50,21 @@ class Subscription(models.Model):
 
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        constraints = [
+            # A blank stripe_customer_id means "no Stripe customer yet" for
+            # every free-tier user, so uniqueness can't apply to blank
+            # values — only once a real Stripe customer id is set must it
+            # be unique, which is what `.filter(stripe_customer_id=...)
+            # .first()` in SubscriptionSyncService relies on actually
+            # returning at most one row.
+            models.UniqueConstraint(
+                fields=["stripe_customer_id"],
+                condition=~models.Q(stripe_customer_id=""),
+                name="unique_non_blank_stripe_customer_id",
+            )
+        ]
 
     def __str__(self):
         return f"{self.user.email} - {self.plan_id or 'no plan'} ({self.status})"
@@ -94,6 +119,26 @@ class AIUsageLog(models.Model):
     action = models.CharField(max_length=40, choices=ACTION_CHOICES)
     provider = models.CharField(max_length=20)
     created_at = models.DateTimeField(auto_now_add=True)
+
+    # --- Cost/observability fields (COMMERCIAL_READINESS_AUDIT.md P0-11) ---
+    # All nullable/blank: existing rows and any call site that hasn't been
+    # updated to pass them keep working unchanged. Populated by
+    # ai_jobs.tasks.run_ai_job for every AI operation that runs through the
+    # background job queue; older, still-synchronous call sites leave these
+    # blank until they're migrated onto the same queue.
+    job = models.ForeignKey(
+        "ai_jobs.AIJob",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="usage_logs",
+    )
+    model_name = models.CharField(max_length=100, blank=True)
+    latency_ms = models.PositiveIntegerField(null=True, blank=True)
+    input_tokens = models.PositiveIntegerField(null=True, blank=True)
+    output_tokens = models.PositiveIntegerField(null=True, blank=True)
+    cost_estimate_usd = models.DecimalField(max_digits=10, decimal_places=6, null=True, blank=True)
+    request_id = models.CharField(max_length=64, blank=True)
 
     class Meta:
         ordering = ["-created_at"]
@@ -163,3 +208,30 @@ class CouponRedemption(models.Model):
 
     def __str__(self):
         return f"{self.user.email} redeemed {self.coupon.code}"
+
+
+class StripeWebhookEvent(models.Model):
+    """One row per Stripe webhook delivery, keyed by Stripe's own event id.
+
+    This is what makes webhook processing idempotent: Stripe redelivers
+    events (on timeout, on manual replay, sometimes just because), and
+    without this, a redelivered `checkout.session.completed` or
+    `invoice.paid` would reprocess business logic that already ran —
+    harmless for some events, but a real correctness risk for others. It
+    also doubles as the webhook audit trail the audit calls for: what
+    Stripe sent, when, and whether it was applied successfully.
+    """
+
+    stripe_event_id = models.CharField(max_length=255, unique=True)
+    event_type = models.CharField(max_length=100)
+    payload = models.JSONField(default=dict, blank=True)
+    processed_at = models.DateTimeField(null=True, blank=True)
+    error = models.CharField(max_length=1000, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+        indexes = [models.Index(fields=["event_type", "created_at"])]
+
+    def __str__(self):
+        return f"{self.event_type} ({self.stripe_event_id})"

@@ -1,11 +1,8 @@
-import logging
-
 from drf_spectacular.utils import (
     OpenApiExample,
     OpenApiResponse,
     extend_schema,
 )
-from django.db import DatabaseError
 from django.http import Http404, HttpResponse
 from rest_framework import status
 from rest_framework.permissions import IsAuthenticated
@@ -20,9 +17,8 @@ from resumes.serializers.job_curation_serializer import (
 from resumes.serializers.resume_regeneration_serializer import (
     JobResumeCurationRegenerationResponseSerializer,
 )
-from resumes.services.job_curation_service import JobCurationDatabaseError
 from resumes.services.job_resume_curation_service import JobResumeCurationService
-from resumes.services.llm_service import LLMServiceError, resolve_provider
+from resumes.services.llm_service import resolve_provider
 from resumes.services.missing_information_review_service import (
     MissingInformationReviewService,
 )
@@ -32,17 +28,15 @@ from resumes.services.tailored_resume_export_service import (
 from resumes.services.tailored_resume_version_comparison_service import (
     TailoredResumeVersionComparisonService,
 )
-from billing.models import AIUsageLog
+from ai_jobs.models import AIJob
+from ai_jobs.serializers import AIJobSerializer
+from ai_jobs.services import enqueue_ai_job
 from billing.services.entitlements_service import (
     EntitlementsService,
     PlanRestrictionError,
 )
 from billing.views.plan_limit_response import plan_restriction_response
-from resumes.views.error_responses import llm_error_response
 from resumes.views.job_curation_view import CURATION_ID_PARAMETER
-
-
-logger = logging.getLogger(__name__)
 
 
 TAILORED_RESUME_EXAMPLE = {
@@ -185,17 +179,24 @@ TAILORED_RESUME_EXAMPLE = {
         "version (nothing to compare against).\n\n"
         "Requires a valid JWT bearer token. Only the owning user's session "
         "is visible (404 otherwise) — a user may regenerate only their own "
-        "job-specific resumes. **Synchronous:** on a cache miss or "
-        "regenerate=true this blocks on one or two LLM calls (gap analysis "
-        "then tailoring; up to one automatic retry on ungrounded content), "
-        "bounded by `LLM_TIMEOUT` per call. There is no background job or "
-        "polling; show a loading state and set the client timeout above "
-        "roughly 2x `LLM_TIMEOUT`."
+        "job-specific resumes.\n\n"
+        "**Cached path (regenerate=false, a version already exists):** "
+        "synchronous, no AI call, returns 200 with the full bundle "
+        "immediately.\n\n"
+        "**Generate/regenerate path:** runs on a background worker instead "
+        "of blocking the request — returns **202** with an AI job id "
+        "immediately. Poll `GET /api/ai-jobs/{id}/` until `status` is "
+        "`completed` or `failed`; on completion, `result` carries exactly "
+        "the same response bundle this endpoint used to return directly "
+        "(same shape as the 200 response documented below)."
     ),
     parameters=[CURATION_ID_PARAMETER],
     request=ResumeCurationGenerateRequestSerializer,
     responses={
         status.HTTP_200_OK: JobResumeCurationRegenerationResponseSerializer,
+        status.HTTP_202_ACCEPTED: OpenApiResponse(
+            description="Queued for background generation. Poll GET /api/ai-jobs/{id}/ for the result."
+        ),
         status.HTTP_400_BAD_REQUEST: OpenApiResponse(
             description="`regenerate` was supplied but was not a valid boolean."
         ),
@@ -286,61 +287,53 @@ class JobResumeCurationGenerateAPIView(APIView):
         except PlanRestrictionError as exc:
             return plan_restriction_response(exc)
 
-        try:
+        if not creates_new_version:
+            # Cached path: JobResumeCurationService.generate() short-circuits
+            # internally with no AI call, so this stays fully synchronous —
+            # same as before.
             curation, version = JobResumeCurationService(provider=provider).generate(
                 user=request.user,
                 curation_id=curation_id,
-                regenerate=regenerate,
+                regenerate=False,
             )
             gap_review = MissingInformationReviewService(provider=provider).build_review(
                 user=request.user,
                 curation_id=curation_id,
                 regenerate=False,
             )
-        except JobResumeCuration.DoesNotExist as exc:
-            raise Http404("Job curation analysis not found.") from exc
-        except LLMServiceError as exc:
-            logger.warning("Job-tailored resume generation failed: %s", exc.code)
-            return llm_error_response(exc)
-        except JobCurationDatabaseError as exc:
+            version_comparison = TailoredResumeVersionComparisonService.compare_with_previous(
+                curation, version
+            )
+            response_data = {
+                "id": curation.id,
+                "job_title": curation.job_title,
+                "status": curation.status,
+                "tailored_resume_version": version,
+                "tailored_resume_data": curation.tailored_resume_data,
+                "tailored_resume_error_code": curation.tailored_resume_error_code,
+                "gap_review": gap_review,
+                "version_comparison": version_comparison,
+                "created_at": curation.created_at,
+                "updated_at": curation.updated_at,
+            }
             return Response(
-                {"detail": exc.message, "code": exc.code},
-                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            )
-        except DatabaseError:
-            logger.exception("Unexpected database error during resume curation.")
-            return Response(
-                {
-                    "detail": "Unable to save job-tailored resume data.",
-                    "code": "DATABASE_ERROR",
-                },
-                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                JobResumeCurationRegenerationResponseSerializer(response_data).data
             )
 
-        if creates_new_version:
-            EntitlementsService.record_ai_usage(
-                request.user, AIUsageLog.ACTION_TAILORED_RESUME_GENERATION, resolve_provider(provider)
-            )
-
-        version_comparison = TailoredResumeVersionComparisonService.compare_with_previous(
-            curation, version
+        # Generating (first time) or regenerating always makes one or two
+        # LLM calls (gap analysis then tailoring) — this now runs on a
+        # background worker instead of blocking the request. The frontend
+        # polls the returned job id; on completion, `result` carries the
+        # exact same response bundle this endpoint used to return directly
+        # (see ai_jobs.tasks._run_tailored_resume_generation).
+        job = enqueue_ai_job(
+            request.user,
+            AIJob.JOB_TYPE_TAILORED_RESUME_GENERATION,
+            provider=resolve_provider(provider),
+            curation=curation,
+            input_params={"regenerate": regenerate},
         )
-
-        response_data = {
-            "id": curation.id,
-            "job_title": curation.job_title,
-            "status": curation.status,
-            "tailored_resume_version": version,
-            "tailored_resume_data": curation.tailored_resume_data,
-            "tailored_resume_error_code": curation.tailored_resume_error_code,
-            "gap_review": gap_review,
-            "version_comparison": version_comparison,
-            "created_at": curation.created_at,
-            "updated_at": curation.updated_at,
-        }
-        return Response(
-            JobResumeCurationRegenerationResponseSerializer(response_data).data
-        )
+        return Response(AIJobSerializer(job).data, status=status.HTTP_202_ACCEPTED)
 
 
 @extend_schema(

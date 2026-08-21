@@ -1,6 +1,6 @@
 from django.contrib import admin
 
-from billing.models import AIUsageLog, Coupon, CouponRedemption, Subscription
+from billing.models import AIUsageLog, Coupon, CouponRedemption, StripeWebhookEvent, Subscription
 
 
 @admin.register(Subscription)
@@ -46,4 +46,15 @@ class CouponRedemptionAdmin(admin.ModelAdmin):
     def has_add_permission(self, request):
         # Redemptions only ever come from a real redeem call — never
         # hand-created, or the "used once" guarantee stops meaning anything.
+        return False
+
+
+@admin.register(StripeWebhookEvent)
+class StripeWebhookEventAdmin(admin.ModelAdmin):
+    list_display = ("event_type", "stripe_event_id", "processed_at", "error", "created_at")
+    list_filter = ("event_type",)
+    search_fields = ("stripe_event_id",)
+    readonly_fields = [field.name for field in StripeWebhookEvent._meta.fields]
+
+    def has_add_permission(self, request):
         return False

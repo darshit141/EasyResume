@@ -41,6 +41,36 @@ class TokenRefreshAPITests(TestCase):
 
         self.assertEqual(response.status_code, 401)
 
+    def test_refresh_rotates_and_returns_a_new_refresh_token(self):
+        # ROTATE_REFRESH_TOKENS: every refresh call must issue a fresh
+        # refresh token alongside the new access token, not just an access
+        # token — the frontend depends on this to keep refreshing at all
+        # (see intelliresume-react's api.js refreshAccessToken()).
+        refresh = RefreshToken.for_user(self.user)
+
+        response = self.client.post(
+            "/api/auth/refresh/", {"refresh": str(refresh)}, format="json"
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("refresh", response.data)
+        self.assertNotEqual(response.data["refresh"], str(refresh))
+
+    def test_a_rotated_out_refresh_token_cannot_be_reused(self):
+        # The actual security property rotation buys: a stolen refresh
+        # token is single-use, not valid for its full remaining lifetime.
+        refresh = RefreshToken.for_user(self.user)
+
+        first_use = self.client.post(
+            "/api/auth/refresh/", {"refresh": str(refresh)}, format="json"
+        )
+        self.assertEqual(first_use.status_code, 200)
+
+        second_use = self.client.post(
+            "/api/auth/refresh/", {"refresh": str(refresh)}, format="json"
+        )
+        self.assertEqual(second_use.status_code, 401)
+
 
 class LogoutAPITests(TestCase):
     def setUp(self):

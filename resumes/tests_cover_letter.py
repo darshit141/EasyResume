@@ -12,7 +12,13 @@ from resumes.services.cover_letter_ai_service import (
     CoverLetterGroundingError,
 )
 from resumes.services.llm_service import LLMModelUnavailableError, LLMSchemaValidationError
-from resumes.tests_job_curation import VALID_JOB_ANALYSIS, VALID_REQUEST, gap_analysis, gap_item
+from resumes.tests_job_curation import (
+    VALID_JOB_ANALYSIS,
+    VALID_REQUEST,
+    gap_analysis,
+    gap_item,
+    poll_job,
+)
 from resumes.tests_resume_curation import CANDIDATE_PARSED_DATA, QueuedLLMService
 
 
@@ -169,8 +175,10 @@ class CoverLetterAPITests(TestCase):
 
         response = self.generate(curation)
 
-        self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.data["cover_letter_data"]["greeting"], "Dear Hiring Manager")
+        self.assertEqual(response.status_code, 202)
+        job_status = poll_job(self.client, response)
+        self.assertEqual(job_status.data["status"], "completed")
+        self.assertEqual(job_status.data["result"]["cover_letter_data"]["greeting"], "Dear Hiring Manager")
         curation.refresh_from_db()
         self.assertTrue(curation.cover_letter_data)
 
@@ -191,9 +199,11 @@ class CoverLetterAPITests(TestCase):
         llm = QueuedLLMService([valid_cover_letter(greeting="Dear Talent Team")])
         response = self.generate(curation, payload={"regenerate": True}, llm=llm)
 
-        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.status_code, 202)
+        job_status = poll_job(self.client, response)
+        self.assertEqual(job_status.data["status"], "completed")
         self.assertEqual(llm.call_count, 1)
-        self.assertEqual(response.data["cover_letter_data"]["greeting"], "Dear Talent Team")
+        self.assertEqual(job_status.data["result"]["cover_letter_data"]["greeting"], "Dear Talent Team")
 
     def test_cached_read_does_not_consume_ai_quota(self):
         curation = self.create_curation()
@@ -227,7 +237,10 @@ class CoverLetterAPITests(TestCase):
             llm=QueuedLLMService(exc=LLMModelUnavailableError()),
         )
 
-        self.assertEqual(response.status_code, 503)
+        self.assertEqual(response.status_code, 202)
+        job_status = poll_job(self.client, response)
+        self.assertEqual(job_status.data["status"], "failed")
+        self.assertEqual(job_status.data["error_code"], "LLM_MODEL_UNAVAILABLE")
         curation.refresh_from_db()
         self.assertEqual(curation.cover_letter_data, original)
         self.assertEqual(curation.cover_letter_error_code, "LLM_MODEL_UNAVAILABLE")
@@ -238,8 +251,10 @@ class CoverLetterAPITests(TestCase):
 
         response = self.generate(curation, llm=QueuedLLMService([bad, bad]))
 
-        self.assertEqual(response.status_code, 502)
-        self.assertEqual(response.data["code"], "COVER_LETTER_GROUNDING_FAILED")
+        self.assertEqual(response.status_code, 202)
+        job_status = poll_job(self.client, response)
+        self.assertEqual(job_status.data["status"], "failed")
+        self.assertEqual(job_status.data["error_code"], "COVER_LETTER_GROUNDING_FAILED")
 
     def test_retry_succeeds_after_one_ungrounded_attempt(self):
         curation = self.create_curation()
@@ -248,7 +263,9 @@ class CoverLetterAPITests(TestCase):
 
         response = self.generate(curation, llm=llm)
 
-        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.status_code, 202)
+        job_status = poll_job(self.client, response)
+        self.assertEqual(job_status.data["status"], "completed")
         self.assertEqual(llm.call_count, 2)
 
     def test_another_users_curation_returns_404(self):

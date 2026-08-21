@@ -3,24 +3,28 @@ from unittest.mock import patch
 from urllib.error import HTTPError, URLError
 
 from django.core.files.uploadedfile import SimpleUploadedFile
-from django.test import SimpleTestCase, TestCase
+from django.test import SimpleTestCase, TestCase, override_settings
 from rest_framework.test import APIClient
 
 from authentication.models import User
 from resumes.services.llm_service import (
+    FallbackLLMService,
     GeminiLLMService,
     GroqLLMService,
     LLMEmptyResponseError,
     LLMInvalidResponseError,
     LLMModelUnavailableError,
     LLMService,
+    LLMServiceError,
     LLMSchemaValidationError,
     LLMTimeoutError,
     OllamaLLMService,
     _to_gemini_schema,
+    get_llm_service,
 )
 from resumes.services.resume_parser_service import ResumeParserService
 from resumes.services.standard_resume_parser_service import StandardResumeParserService
+from resumes.tests_job_curation import poll_job
 from resumes.utils.ats_scorer import ATSScorer
 
 
@@ -483,6 +487,109 @@ class GeminiSchemaConversionTests(SimpleTestCase):
         self.assertEqual(result["enum"], ["MATCHED", "MISSING"])
 
 
+class _StubLLMService(LLMService):
+    def __init__(self, result=None, exc=None):
+        self.result = result
+        self.exc = exc
+        self.calls = 0
+
+    def generate_structured(self, prompt, schema):
+        self.calls += 1
+        if self.exc:
+            raise self.exc
+        return self.result
+
+    def check_model_available(self):
+        self.calls += 1
+        if self.exc:
+            raise self.exc
+        return True
+
+
+class FallbackLLMServiceTests(SimpleTestCase):
+    def test_falls_back_on_primary_timeout(self):
+        primary = _StubLLMService(exc=LLMTimeoutError())
+        fallback = _StubLLMService(result={"ok": True})
+        service = FallbackLLMService(primary, fallback, "gemini")
+
+        result = service.generate_structured("prompt", {})
+
+        self.assertEqual(result, {"ok": True})
+        self.assertTrue(service.used_fallback)
+        self.assertEqual(primary.calls, 1)
+        self.assertEqual(fallback.calls, 1)
+
+    def test_falls_back_on_model_unavailable(self):
+        primary = _StubLLMService(exc=LLMModelUnavailableError())
+        fallback = _StubLLMService(result={"ok": True})
+        service = FallbackLLMService(primary, fallback, "gemini")
+
+        self.assertEqual(service.generate_structured("prompt", {}), {"ok": True})
+
+    def test_falls_back_on_generic_connection_failure(self):
+        primary = _StubLLMService(exc=LLMServiceError())
+        fallback = _StubLLMService(result={"ok": True})
+        service = FallbackLLMService(primary, fallback, "gemini")
+
+        self.assertEqual(service.generate_structured("prompt", {}), {"ok": True})
+
+    def test_does_not_fall_back_on_schema_validation_failure(self):
+        # The provider responded; the *content* was bad — that's the
+        # caller's own grounding/retry logic to handle, not this fallback.
+        primary = _StubLLMService(exc=LLMSchemaValidationError())
+        fallback = _StubLLMService(result={"ok": True})
+        service = FallbackLLMService(primary, fallback, "gemini")
+
+        with self.assertRaises(LLMSchemaValidationError):
+            service.generate_structured("prompt", {})
+        self.assertEqual(fallback.calls, 0)
+
+    def test_does_not_fall_back_when_primary_succeeds(self):
+        primary = _StubLLMService(result={"primary": True})
+        fallback = _StubLLMService(result={"fallback": True})
+        service = FallbackLLMService(primary, fallback, "gemini")
+
+        self.assertEqual(service.generate_structured("prompt", {}), {"primary": True})
+        self.assertFalse(service.used_fallback)
+        self.assertEqual(fallback.calls, 0)
+
+    def test_fallback_error_propagates_if_fallback_also_fails(self):
+        primary = _StubLLMService(exc=LLMTimeoutError())
+        fallback = _StubLLMService(exc=LLMModelUnavailableError())
+        service = FallbackLLMService(primary, fallback, "gemini")
+
+        with self.assertRaises(LLMModelUnavailableError):
+            service.generate_structured("prompt", {})
+
+
+class GetLLMServiceFallbackWiringTests(SimpleTestCase):
+    @override_settings(LLM_PROVIDER="groq", LLM_FALLBACK_PROVIDER="gemini")
+    def test_default_provider_is_wrapped_with_configured_fallback(self):
+        service = get_llm_service()
+        self.assertIsInstance(service, FallbackLLMService)
+        self.assertEqual(service.fallback_provider_name, "gemini")
+        self.assertIsInstance(service.primary, GroqLLMService)
+        self.assertIsInstance(service.fallback, GeminiLLMService)
+
+    @override_settings(LLM_PROVIDER="groq", LLM_FALLBACK_PROVIDER="")
+    def test_no_wrapping_when_fallback_not_configured(self):
+        service = get_llm_service()
+        self.assertIsInstance(service, GroqLLMService)
+
+    @override_settings(LLM_PROVIDER="groq", LLM_FALLBACK_PROVIDER="groq")
+    def test_no_wrapping_when_fallback_equals_the_primary(self):
+        service = get_llm_service()
+        self.assertIsInstance(service, GroqLLMService)
+
+    @override_settings(LLM_PROVIDER="groq", LLM_FALLBACK_PROVIDER="gemini")
+    def test_explicitly_requested_provider_is_never_wrapped(self):
+        # A user's saved provider preference must never be silently
+        # swapped out — that would bypass their plan's allowed-provider
+        # gate and surprise them with a different provider's output.
+        service = get_llm_service(provider="ollama")
+        self.assertIsInstance(service, OllamaLLMService)
+
+
 # Upload now rejects files that yield almost no extractable text (the
 # signature of a scanned/image PDF), so these stubs must return something of
 # realistic length — a six-character stub would be rejected before ever
@@ -518,10 +625,14 @@ class ResumeUploadAPICompatibilityTests(TestCase):
         ):
             response = client.post("/api/resumes/upload/", {"file": upload}, format="multipart")
 
-        self.assertEqual(response.status_code, 201)
+        self.assertEqual(response.status_code, 202)
+        job_status = poll_job(client, response)
+        self.assertEqual(job_status.data["status"], "completed")
+        resume_id = job_status.data["result"]["resume_id"]
+        detail_response = client.get(f"/api/resumes/{resume_id}/")
         self.assertEqual(
-            set(response.data),
-            {"id", "file", "original_filename", "status", "ats_score", "created_at"},
+            set(detail_response.data),
+            {"id", "original_filename", "status", "ats_score", "parsed_data", "created_at", "updated_at"},
         )
 
     def test_llm_timeout_returns_503_not_a_false_success(self):
@@ -534,8 +645,10 @@ class ResumeUploadAPICompatibilityTests(TestCase):
         ):
             response = client.post("/api/resumes/upload/", {"file": upload}, format="multipart")
 
-        self.assertEqual(response.status_code, 503)
-        self.assertEqual(response.data["code"], "LLM_TIMEOUT")
+        self.assertEqual(response.status_code, 202)
+        job_status = poll_job(client, response)
+        self.assertEqual(job_status.data["status"], "failed")
+        self.assertEqual(job_status.data["error_code"], "LLM_TIMEOUT")
 
     def test_failed_reupload_leaves_existing_resume_untouched(self):
         client, user = self._client()
@@ -547,7 +660,9 @@ class ResumeUploadAPICompatibilityTests(TestCase):
             "resumes.services.resume_upload_service.ResumeParser.parse", return_value=good_parsed
         ):
             first_response = client.post("/api/resumes/upload/", {"file": first_upload}, format="multipart")
-        self.assertEqual(first_response.status_code, 201)
+        self.assertEqual(first_response.status_code, 202)
+        first_job_status = poll_job(client, first_response)
+        self.assertEqual(first_job_status.data["status"], "completed")
 
         second_upload = SimpleUploadedFile(
             "resume2.pdf", b"placeholder2", content_type="application/pdf",
@@ -556,12 +671,22 @@ class ResumeUploadAPICompatibilityTests(TestCase):
             "resumes.services.resume_upload_service.ResumeParser.parse", side_effect=LLMTimeoutError()
         ):
             second_response = client.post("/api/resumes/upload/", {"file": second_upload}, format="multipart")
-        self.assertEqual(second_response.status_code, 503)
+        self.assertEqual(second_response.status_code, 202)
+        second_job_status = poll_job(client, second_response)
+        self.assertEqual(second_job_status.data["status"], "failed")
 
-        view_response = client.get("/api/resumes/view/")
-        self.assertEqual(view_response.status_code, 200)
-        self.assertEqual(view_response.data["status"], "completed")
-        self.assertEqual(view_response.data["parsed_data"], good_parsed)
+        # The failed second upload's own Resume row is marked "failed" (never
+        # left stuck "processing"), and — the actual point of this test — the
+        # first, successfully parsed resume is completely untouched by it.
+        second_resume_id = second_job_status.data["resume_id"]
+        second_detail_response = client.get(f"/api/resumes/{second_resume_id}/")
+        self.assertEqual(second_detail_response.data["status"], "failed")
+
+        first_resume_id = first_job_status.data["result"]["resume_id"]
+        first_detail_response = client.get(f"/api/resumes/{first_resume_id}/")
+        self.assertEqual(first_detail_response.status_code, 200)
+        self.assertEqual(first_detail_response.data["status"], "completed")
+        self.assertEqual(first_detail_response.data["parsed_data"], good_parsed)
 
 
 class ResumeUploadValidationMessageTests(TestCase):

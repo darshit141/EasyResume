@@ -13,6 +13,13 @@ from billing.services.entitlements_service import (
     PlanLimitReachedError,
 )
 from resumes.models import JobResumeCuration, JobResumeCurationVersion
+from resumes.services.llm_service import LLMService
+from resumes.tests_job_curation import VALID_JOB_ANALYSIS, poll_job
+
+
+class _FakeJobAnalysisLLM(LLMService):
+    def generate_structured(self, prompt, schema):
+        return VALID_JOB_ANALYSIS
 
 
 def _make_user(email):
@@ -241,7 +248,7 @@ class EnforcementEndpointTests(TestCase):
                 "/api/resumes/upload/", {"file": upload, "ai_provider": "groq"}, format="multipart"
             )
 
-        self.assertEqual(response.status_code, 201)
+        self.assertEqual(response.status_code, 202)
         mock_parse.assert_called_once()
 
     def test_over_quota_generation_returns_402_before_any_ai_call(self):
@@ -293,46 +300,60 @@ class EnforcementEndpointTests(TestCase):
         self.assertNotEqual(response.status_code, 402)
         mock_service.return_value.generate.assert_called_once()
 
-    def test_paid_provider_on_job_analysis_returns_402_before_any_ai_call(self):
-        with patch("resumes.views.job_curation_view.JobCurationService") as mock_service:
+    def test_free_user_may_use_a_hosted_provider_for_job_analysis(self):
+        # Same intent as the upload gate above: FREE_ENTITLEMENTS lists all
+        # four providers deliberately, so choosing Gemini must not itself be
+        # blocked — only the ai_calls_per_month ceiling gates free usage.
+        with patch(
+            "resumes.services.job_curation_ai_service.get_llm_service",
+            return_value=_FakeJobAnalysisLLM(),
+        ):
             response = self.client.post(
                 "/api/resumes/job-curations/analyze/",
                 {"job_title": "Engineer", "job_description": "We are hiring a backend engineer with strong Python experience.", "curate_resume": True, "ai_provider": "gemini"},
                 format="json",
             )
 
-        self.assertEqual(response.status_code, 402)
-        self.assertEqual(response.data["code"], "UPGRADE_REQUIRED")
-        mock_service.assert_not_called()
+        self.assertNotEqual(response.status_code, 402)
+        self.assertEqual(response.status_code, 202)
+        job_status = poll_job(self.client, response)
+        self.assertEqual(job_status.data["status"], "completed")
 
-    def test_paid_provider_on_gap_analysis_returns_402_before_any_ai_call(self):
+    def test_free_user_may_use_a_hosted_provider_for_gap_analysis(self):
         curation = _generate_versions(self.user, 0)
-        with patch("resumes.views.job_curation_view.JobGapAnalysisService") as mock_service:
-            response = self.client.get(
-                f"/api/resumes/job-curations/{curation.id}/gap-analysis/?ai_provider=groq"
-            )
+        curation.status = "completed"
+        curation.analysis_data = {"required_skills": ["Python"]}
+        curation.save(update_fields=["status", "analysis_data"])
 
-        self.assertEqual(response.status_code, 402)
-        self.assertEqual(response.data["code"], "UPGRADE_REQUIRED")
-        mock_service.assert_not_called()
+        response = self.client.get(
+            f"/api/resumes/job-curations/{curation.id}/gap-analysis/?ai_provider=groq"
+        )
+
+        self.assertNotEqual(response.status_code, 402)
+        self.assertEqual(response.status_code, 202)
 
     def test_free_user_may_use_a_hosted_ai_provider_for_missing_information(self):
         # Same intent as the upload gate above: choosing Gemini is not itself
         # a paid action, so the provider check must let this through.
         curation = _generate_versions(self.user, 0)
-        with patch("resumes.views.missing_information_view.MissingInformationReviewService") as mock_service:
-            response = self.client.get(
-                f"/api/resumes/job-curations/{curation.id}/missing-information/?ai_provider=gemini"
-            )
+        curation.status = "completed"
+        curation.analysis_data = {"required_skills": ["Python"]}
+        curation.save(update_fields=["status", "analysis_data"])
+
+        response = self.client.get(
+            f"/api/resumes/job-curations/{curation.id}/missing-information/?ai_provider=gemini"
+        )
 
         self.assertNotEqual(response.status_code, 402)
-        mock_service.assert_called()
+        self.assertEqual(response.status_code, 202)
 
     def test_free_user_may_use_local_provider_at_every_ai_provider_gate(self):
         # "ollama" (a free-tier provider) must never itself be blocked — only
         # the choice of a paid provider should trip these gates.
-        with patch("resumes.views.job_curation_view.JobCurationService") as mock_service:
-            mock_service.return_value.create_analysis.return_value = _generate_versions(self.user, 0)
+        with patch(
+            "resumes.services.job_curation_ai_service.get_llm_service",
+            return_value=_FakeJobAnalysisLLM(),
+        ):
             response = self.client.post(
                 "/api/resumes/job-curations/analyze/",
                 {"job_title": "Engineer", "job_description": "We are hiring a backend engineer with strong Python experience.", "curate_resume": True, "ai_provider": "ollama"},
@@ -340,7 +361,9 @@ class EnforcementEndpointTests(TestCase):
             )
 
         self.assertNotEqual(response.status_code, 402)
-        mock_service.return_value.create_analysis.assert_called_once()
+        self.assertEqual(response.status_code, 202)
+        job_status = poll_job(self.client, response)
+        self.assertEqual(job_status.data["status"], "completed")
 
     def test_pro_user_passes_every_gate(self):
         Subscription.objects.create(user=self.user, plan_id="pro", status="active")
@@ -502,16 +525,19 @@ class AIUsageEndpointGatingTests(TestCase):
         mock_service.assert_not_called()
 
     def test_job_analysis_records_usage_on_success(self):
-        curation = _generate_versions(self.user, 0)
-        with patch("resumes.views.job_curation_view.JobCurationService") as mock_service:
-            mock_service.return_value.create_analysis.return_value = curation
+        with patch(
+            "resumes.services.job_curation_ai_service.get_llm_service",
+            return_value=_FakeJobAnalysisLLM(),
+        ):
             response = self.client.post(
                 "/api/resumes/job-curations/analyze/",
                 {"job_title": "Engineer", "job_description": "We are hiring a backend engineer with strong Python experience.", "curate_resume": True},
                 format="json",
             )
 
-        self.assertEqual(response.status_code, 201)
+        self.assertEqual(response.status_code, 202)
+        job_status = poll_job(self.client, response)
+        self.assertEqual(job_status.data["status"], "completed")
         self.assertEqual(
             AIUsageLog.objects.filter(user=self.user, action=AIUsageLog.ACTION_JOB_ANALYSIS).count(), 1
         )

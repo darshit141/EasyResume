@@ -6,6 +6,7 @@ from rest_framework.test import APIClient
 
 from authentication.models import User
 from resumes.models import Resume, ResumeVersion
+from resumes.tests_job_curation import poll_job
 
 _PARSED_DATA = {
     "personal_information": {"name": "Jane Doe", "email": "jane@example.com", "phone": "1234567890"},
@@ -53,7 +54,18 @@ class MultiResumeTestCase(TestCase):
         ), patch(
             "resumes.services.resume_upload_service.ResumeParser.parse", return_value=_PARSED_DATA
         ):
-            return self.client.post("/api/resumes/upload/", {"file": upload}, format="multipart")
+            response = self.client.post("/api/resumes/upload/", {"file": upload}, format="multipart")
+        # Parsing now runs on a background worker (202 + job id) instead of
+        # blocking the request. This helper is only ever used for the
+        # success path, so it waits for the job then reports 201 — matching
+        # the old synchronous contract — so the rest of this file's
+        # assertions (about resume counts/isolation, not the transport)
+        # don't need to change.
+        self.assertEqual(response.status_code, 202, response.data)
+        job_status = poll_job(self.client, response)
+        self.assertEqual(job_status.data["status"], "completed", job_status.data)
+        response.status_code = 201
+        return response
 
 
 class UploadCreatesIndependentResumesTests(MultiResumeTestCase):

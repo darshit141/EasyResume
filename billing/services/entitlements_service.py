@@ -76,11 +76,24 @@ class EntitlementsService:
         return AIUsageLog.objects.filter(user=user, created_at__gte=period_start).count()
 
     @staticmethod
-    def record_ai_usage(user, action, provider):
+    def record_ai_usage(user, action, provider, job=None, latency_ms=None, model_name=""):
         """Call once, after an AI-backed action actually succeeds. Never
         call this for the `standard` (non-AI) resume parser — it makes no
-        AI call and must never count against the quota."""
-        AIUsageLog.objects.create(user=user, action=action, provider=provider or "")
+        AI call and must never count against the quota.
+
+        `job`/`latency_ms`/`model_name` are optional cost/observability
+        fields (see AIUsageLog) — populated automatically for anything
+        dispatched through ai_jobs.tasks.run_ai_job, left blank for any
+        AI-calling endpoint not yet migrated onto that queue.
+        """
+        AIUsageLog.objects.create(
+            user=user,
+            action=action,
+            provider=provider or "",
+            job=job,
+            latency_ms=latency_ms,
+            model_name=model_name or "",
+        )
 
     @staticmethod
     def check_can_use_ai(user):

@@ -1,7 +1,46 @@
 services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-intelliresume}
+      POSTGRES_USER: ${POSTGRES_USER:-intelliresume}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    networks:
+      - app-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-intelliresume}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 15s
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    volumes:
+      - redis-data:/data
+    networks:
+      - app-network
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli ping | grep -q PONG"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
+  # Self-hosted/local AI provider. Not started by default — production's
+  # default LLM_PROVIDER is a hosted provider (groq), since CPU-only Ollama
+  # inference cannot serve concurrent paying traffic (COMMERCIAL_READINESS_
+  # AUDIT.md P0-2). Enable explicitly for self-hosted or privacy-sensitive
+  # deployments with: `docker compose --profile self-hosted-ai up`.
   ollama:
     image: ollama/ollama:latest
     restart: unless-stopped
+    profiles:
+      - self-hosted-ai
     volumes:
       - ollama-data:/root/.ollama
     networks:
@@ -23,18 +62,28 @@ services:
     env_file:
       - .env
     environment:
+      DATABASE_URL: postgres://${POSTGRES_USER:-intelliresume}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-intelliresume}
+      REDIS_URL: redis://redis:6379/0
       OLLAMA_BASE_URL: http://ollama:11434
-      SQLITE_DB_PATH: /app/data/db.sqlite3
+    # Gunicorn's timeout no longer has to accommodate LLM latency: every
+    # AI-backed endpoint now enqueues a Celery job and returns immediately
+    # (COMMERCIAL_READINESS_AUDIT.md P0-1/P0-3) instead of blocking the web
+    # worker for up to LLM_TIMEOUT seconds. A short timeout here + more
+    # workers is what actually lets this instance serve concurrent traffic.
+    # NOTE: no collectstatic step — there is no STATIC_ROOT/WhiteNoise
+    # configuration yet (COMMERCIAL_READINESS_AUDIT.md D7, still open).
+    # Django admin will render unstyled until that's added.
     command: >
       sh -c "python manage.py migrate --noinput &&
-      gunicorn --bind 0.0.0.0:8000 --workers 2 --timeout 150 config.wsgi:application"
+      gunicorn --bind 0.0.0.0:8000 --workers 4 --timeout 60 config.wsgi:application"
     ports:
       - "127.0.0.1:8000:8000"
     volumes:
-      - backend-data:/app/data
       - backend-media:/app/media
     depends_on:
-      ollama:
+      postgres:
+        condition: service_healthy
+      redis:
         condition: service_healthy
     networks:
       - app-network
@@ -48,12 +97,97 @@ services:
     cpus: "2.0"
     mem_limit: 1g
 
+  # Runs every AI-backed operation (job analysis, gap analysis, tailored
+  # resume generation, cover letter generation, resume parsing) queued by
+  # the backend. Same image as `backend`, different process — scale this
+  # independently of web capacity with `docker compose up --scale worker=N`.
+  worker:
+    build:
+      context: .
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: postgres://${POSTGRES_USER:-intelliresume}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-intelliresume}
+      REDIS_URL: redis://redis:6379/0
+      OLLAMA_BASE_URL: http://ollama:11434
+    command: celery -A config worker --loglevel=info --concurrency=4
+    volumes:
+      - backend-media:/app/media
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - app-network
+      - llm-network
+    cpus: "2.0"
+    mem_limit: 1g
+
+  # Fires the periodic jobs in config/settings.py CELERY_BEAT_SCHEDULE (e.g.
+  # daily expired-OTP cleanup) onto the same queue the `worker` service
+  # consumes. Schedules the work; doesn't execute it — lightweight, no LLM
+  # network access needed.
+  celery-beat:
+    build:
+      context: .
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: postgres://${POSTGRES_USER:-intelliresume}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-intelliresume}
+      REDIS_URL: redis://redis:6379/0
+    command: celery -A config beat --loglevel=info
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - app-network
+    cpus: "0.25"
+    mem_limit: 256m
+
+  # Daily Postgres backup — see DISASTER_RECOVERY.md, which documents the
+  # RPO/RTO this gives you and a real restore test performed against
+  # scripts/restore_db.sh (this service's companion script). Backups land
+  # in the `backups-data` volume; copy them off-host regularly (rsync/S3/
+  # whatever you already have) — a backup that only ever lives on the same
+  # disk as the database it backs up is not a disaster recovery plan.
+  backup:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_DB: ${POSTGRES_DB:-intelliresume}
+      POSTGRES_USER: ${POSTGRES_USER:-intelliresume}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      BACKUP_RETENTION_DAYS: ${BACKUP_RETENTION_DAYS:-14}
+    entrypoint: >
+      sh -c "chmod +x /scripts/backup_db.sh &&
+      while true; do
+        /scripts/backup_db.sh;
+        sleep 86400;
+      done"
+    volumes:
+      - ./scripts:/scripts:ro
+      - backups-data:/backups
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - app-network
+
 networks:
   app-network:
   llm-network:
     internal: true
 
 volumes:
+  postgres-data:
+  redis-data:
   ollama-data:
-  backend-data:
   backend-media:
+  backups-data:

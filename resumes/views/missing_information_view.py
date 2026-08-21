@@ -10,14 +10,17 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from ai_jobs.models import AIJob
+from ai_jobs.serializers import AIJobSerializer
+from ai_jobs.services import enqueue_ai_job
 from resumes.models import JobResumeCuration
 from resumes.serializers.job_curation_serializer import APIErrorSerializer
 from resumes.serializers.missing_information_serializer import (
     MissingInformationQuerySerializer,
     MissingInformationReviewSerializer,
 )
-from resumes.services.llm_service import LLMServiceError, resolve_provider
-from billing.models import AIUsageLog
+from resumes.services.job_gap_analysis_service import JobRequirementsUnavailableError
+from resumes.services.llm_service import resolve_provider
 from billing.services.entitlements_service import (
     EntitlementsService,
     PlanRestrictionError,
@@ -203,21 +206,34 @@ class MissingInformationReviewAPIView(APIView):
         except PlanRestrictionError as exc:
             return plan_restriction_response(exc)
 
-        try:
-            review = MissingInformationReviewService(
-                provider=provider,
-            ).build_review(
-                user=request.user,
-                curation_id=curation_id,
-                regenerate=regenerate,
-            )
-        except JobResumeCuration.DoesNotExist as exc:
-            raise Http404("Job curation analysis not found.") from exc
-        except LLMServiceError as exc:
-            return llm_error_response(exc)
+        if not will_call_ai:
+            # Cached path: no AI call, stays fully synchronous.
+            try:
+                review = MissingInformationReviewService(provider=provider).build_review(
+                    user=request.user,
+                    curation_id=curation_id,
+                    regenerate=False,
+                )
+            except JobResumeCuration.DoesNotExist as exc:
+                raise Http404("Job curation analysis not found.") from exc
+            return Response(MissingInformationReviewSerializer(review).data)
 
-        if will_call_ai:
-            EntitlementsService.record_ai_usage(
-                request.user, AIUsageLog.ACTION_MISSING_INFORMATION_REVIEW, resolve_provider(provider)
-            )
-        return Response(MissingInformationReviewSerializer(review).data)
+        curation = JobResumeCuration.objects.filter(id=curation_id, user=request.user).first()
+        if curation is None:
+            raise Http404("Job curation analysis not found.")
+        if curation.status != "completed" or not curation.analysis_data:
+            return llm_error_response(JobRequirementsUnavailableError())
+
+        # Runs on a background worker instead of blocking the request. The
+        # review itself isn't stored anywhere on its own — it's derived from
+        # gap_analysis_data at read time — so the frontend just calls this
+        # same GET endpoint again once the job completes, which recomputes
+        # it from the now-cached data with no further AI call.
+        job = enqueue_ai_job(
+            request.user,
+            AIJob.JOB_TYPE_MISSING_INFORMATION_REVIEW,
+            provider=resolve_provider(provider),
+            curation=curation,
+            input_params={"regenerate": regenerate},
+        )
+        return Response(AIJobSerializer(job).data, status=status.HTTP_202_ACCEPTED)

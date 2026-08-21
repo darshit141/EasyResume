@@ -1,0 +1,95 @@
+name: CI
+
+# Runs on every PR/push so a broken migration, a failing test, or a
+# Dockerfile that no longer builds is caught before merge, not in
+# production (COMMERCIAL_READINESS_AUDIT.md P0-12).
+on:
+  pull_request:
+  push:
+    branches: [main, QA]
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Backend tests (Postgres)
+    runs-on: ubuntu-latest
+
+    # A real Postgres service, not SQLite — production only ever runs on
+    # Postgres (COMMERCIAL_READINESS_AUDIT.md P0-4), so that's what CI
+    # should validate against too. Redis is deliberately not started here:
+    # CELERY_TASK_ALWAYS_EAGER runs every AI job task synchronously and
+    # in-process under `manage.py test`, so the suite needs no live broker.
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: intelliresume_ci
+          POSTGRES_USER: intelliresume
+          POSTGRES_PASSWORD: ci-only-password
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U intelliresume"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      SECRET_KEY: ci-only-secret-key
+      DEBUG: "False"
+      ALLOWED_HOSTS: localhost,127.0.0.1
+      DATABASE_URL: postgres://intelliresume:ci-only-password@localhost:5432/intelliresume_ci
+      REDIS_URL: redis://localhost:6379/0
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Check for missing migrations
+        run: python manage.py makemigrations --check --dry-run
+
+      - name: Run migrations
+        run: python manage.py migrate --noinput
+
+      - name: Django system checks
+        run: python manage.py check
+
+      - name: Run test suite
+        run: python manage.py test --verbosity 2
+
+  dependency-audit:
+    name: Dependency vulnerability scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+      - name: pip-audit
+        # Informational, not a merge gate: a CVE in a transitive dependency
+        # unrelated to this PR's changes should not block it. Findings are
+        # still visible in the job log for someone to act on.
+        continue-on-error: true
+        run: |
+          pip install pip-audit
+          pip-audit -r requirements.txt
+
+  docker-build:
+    name: Docker image builds
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build image
+        run: docker build -t intelliresume-backend:ci .

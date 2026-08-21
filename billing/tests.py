@@ -24,7 +24,34 @@ class PlanListAPITests(TestCase):
 
         for plan in response.data:
             if plan["id"] == "pro":
-                self.assertFalse(plan["purchasable"])
+                self.assertFalse(plan["monthly"]["purchasable"])
+                self.assertFalse(plan["annual"]["purchasable"])
+
+    def test_free_plan_has_no_prices(self):
+        client = APIClient()
+        response = client.get("/api/billing/plans/")
+
+        free_plan = next(plan for plan in response.data if plan["id"] == "free")
+        self.assertIsNone(free_plan["monthly"])
+        self.assertIsNone(free_plan["annual"])
+
+    def test_currency_query_param_resolves_prices(self):
+        client = APIClient()
+        with patch.dict(
+            PLANS_BY_ID["pro"]["prices"]["GBP"]["monthly"], {"stripe_price_id": "price_gbp_monthly"}
+        ):
+            response = client.get("/api/billing/plans/?currency=GBP")
+
+        pro_plan = next(plan for plan in response.data if plan["id"] == "pro")
+        self.assertEqual(pro_plan["currency"], "GBP")
+        self.assertTrue(pro_plan["monthly"]["display"].startswith("£"))
+
+    def test_unsupported_currency_falls_back_to_eur(self):
+        client = APIClient()
+        response = client.get("/api/billing/plans/?currency=USD")
+
+        pro_plan = next(plan for plan in response.data if plan["id"] == "pro")
+        self.assertEqual(pro_plan["currency"], "EUR")
 
 
 class SubscriptionStatusAPITests(TestCase):
@@ -93,7 +120,7 @@ class CreateCheckoutSessionAPITests(TestCase):
 
     @override_settings(STRIPE_SECRET_KEY="sk_test_fake", FRONTEND_URL="http://localhost:5173")
     def test_creates_a_real_checkout_session_when_fully_configured(self):
-        with patch.dict(PLANS_BY_ID["pro"], {"stripe_price_id": "price_test_123"}):
+        with patch.dict(PLANS_BY_ID["pro"]["prices"]["EUR"]["monthly"], {"stripe_price_id": "price_test_123"}):
             with patch("billing.services.stripe_service.stripe.Customer.create") as mock_customer, \
                  patch("billing.services.stripe_service.stripe.checkout.Session.create") as mock_session:
                 mock_customer.return_value = MagicMock(id="cus_test_123")
@@ -107,6 +134,7 @@ class CreateCheckoutSessionAPITests(TestCase):
         call_kwargs = mock_session.call_args.kwargs
         self.assertEqual(call_kwargs["mode"], "subscription")
         self.assertEqual(call_kwargs["metadata"]["user_id"], str(self.user.id))
+        self.assertEqual(call_kwargs["line_items"], [{"price": "price_test_123", "quantity": 1}])
 
         subscription = Subscription.objects.get(user=self.user)
         self.assertEqual(subscription.stripe_customer_id, "cus_test_123")
@@ -115,7 +143,7 @@ class CreateCheckoutSessionAPITests(TestCase):
     def test_reuses_existing_stripe_customer_on_a_second_checkout(self):
         Subscription.objects.create(user=self.user, stripe_customer_id="cus_existing")
 
-        with patch.dict(PLANS_BY_ID["pro"], {"stripe_price_id": "price_test_123"}):
+        with patch.dict(PLANS_BY_ID["pro"]["prices"]["EUR"]["monthly"], {"stripe_price_id": "price_test_123"}):
             with patch("billing.services.stripe_service.stripe.Customer.create") as mock_customer, \
                  patch("billing.services.stripe_service.stripe.checkout.Session.create") as mock_session:
                 mock_session.return_value = MagicMock(url="https://checkout.stripe.com/test-session")
@@ -183,6 +211,70 @@ class StripeWebhookAPITests(TestCase):
         self.assertEqual(response.status_code, 200)
         mock_apply.assert_called_once_with(fake_event)
 
+    @override_settings(STRIPE_SECRET_KEY="sk_test_fake", STRIPE_WEBHOOK_SECRET="whsec_fake")
+    def test_event_with_an_id_is_logged_and_marked_processed(self):
+        from billing.models import StripeWebhookEvent
+
+        client = APIClient()
+        fake_event = {
+            "id": "evt_123", "type": "checkout.session.completed", "data": {"object": {}},
+        }
+        with patch("billing.services.stripe_service.stripe.Webhook.construct_event", return_value=fake_event), \
+             patch("billing.views.billing_view.SubscriptionSyncService.apply_event"):
+            response = client.post(
+                "/api/billing/webhook/", data=b"{}", content_type="application/json",
+                HTTP_STRIPE_SIGNATURE="valid-looking-signature",
+            )
+
+        self.assertEqual(response.status_code, 200)
+        webhook_event = StripeWebhookEvent.objects.get(stripe_event_id="evt_123")
+        self.assertEqual(webhook_event.event_type, "checkout.session.completed")
+        self.assertIsNotNone(webhook_event.processed_at)
+
+    @override_settings(STRIPE_SECRET_KEY="sk_test_fake", STRIPE_WEBHOOK_SECRET="whsec_fake")
+    def test_redelivered_event_is_not_reprocessed(self):
+        client = APIClient()
+        fake_event = {
+            "id": "evt_dup", "type": "checkout.session.completed", "data": {"object": {}},
+        }
+        with patch("billing.services.stripe_service.stripe.Webhook.construct_event", return_value=fake_event), \
+             patch("billing.views.billing_view.SubscriptionSyncService.apply_event") as mock_apply:
+            client.post(
+                "/api/billing/webhook/", data=b"{}", content_type="application/json",
+                HTTP_STRIPE_SIGNATURE="valid-looking-signature",
+            )
+            second_response = client.post(
+                "/api/billing/webhook/", data=b"{}", content_type="application/json",
+                HTTP_STRIPE_SIGNATURE="valid-looking-signature",
+            )
+
+        self.assertEqual(second_response.status_code, 200)
+        self.assertTrue(second_response.data["duplicate"])
+        mock_apply.assert_called_once()
+
+    @override_settings(STRIPE_SECRET_KEY="sk_test_fake", STRIPE_WEBHOOK_SECRET="whsec_fake")
+    def test_processing_failure_returns_500_and_records_the_error(self):
+        from billing.models import StripeWebhookEvent
+
+        client = APIClient()
+        fake_event = {
+            "id": "evt_fail", "type": "checkout.session.completed", "data": {"object": {}},
+        }
+        with patch("billing.services.stripe_service.stripe.Webhook.construct_event", return_value=fake_event), \
+             patch(
+                 "billing.views.billing_view.SubscriptionSyncService.apply_event",
+                 side_effect=RuntimeError("boom"),
+             ):
+            response = client.post(
+                "/api/billing/webhook/", data=b"{}", content_type="application/json",
+                HTTP_STRIPE_SIGNATURE="valid-looking-signature",
+            )
+
+        self.assertEqual(response.status_code, 500)
+        webhook_event = StripeWebhookEvent.objects.get(stripe_event_id="evt_fail")
+        self.assertIsNone(webhook_event.processed_at)
+        self.assertIn("boom", webhook_event.error)
+
 
 class SubscriptionSyncServiceTests(TestCase):
     def setUp(self):
@@ -233,6 +325,68 @@ class SubscriptionSyncServiceTests(TestCase):
         self.assertEqual(subscription.status, "past_due")
         self.assertIsNotNone(subscription.current_period_end)
 
+    def test_subscription_updated_resyncs_plan_and_billing_period_from_new_price(self):
+        # Simulates a monthly -> annual switch made through the Stripe
+        # Customer Portal (the only upgrade/downgrade path this app offers)
+        # rather than through our own checkout — nothing in our own code
+        # ever sets billing_period="annual" here, so this only passes if
+        # the webhook handler itself re-derives it from the new price.
+        Subscription.objects.create(
+            user=self.user,
+            stripe_customer_id="cus_123",
+            status="active",
+            plan_id="pro",
+            currency="EUR",
+            billing_period="monthly",
+        )
+
+        with patch.dict(PLANS_BY_ID["pro"]["prices"]["EUR"]["annual"], {"stripe_price_id": "price_eur_annual"}):
+            event = {
+                "type": "customer.subscription.updated",
+                "data": {"object": {
+                    "id": "sub_123",
+                    "customer": "cus_123",
+                    "status": "active",
+                    "items": {"data": [{"price": {"id": "price_eur_annual"}}]},
+                }},
+            }
+            SubscriptionSyncService.apply_event(event)
+
+        subscription = Subscription.objects.get(stripe_customer_id="cus_123")
+        self.assertEqual(subscription.plan_id, "pro")
+        self.assertEqual(subscription.currency, "EUR")
+        self.assertEqual(subscription.billing_period, "annual")
+
+    def test_subscription_updated_with_unrecognized_price_leaves_plan_fields_unchanged(self):
+        # A price that isn't in our catalog (stale, or created manually in
+        # the Stripe Dashboard outside this app) must not blank out fields
+        # we already trust — better to keep the last-known-good value than
+        # silently corrupt it.
+        Subscription.objects.create(
+            user=self.user,
+            stripe_customer_id="cus_123",
+            status="active",
+            plan_id="pro",
+            currency="EUR",
+            billing_period="monthly",
+        )
+
+        event = {
+            "type": "customer.subscription.updated",
+            "data": {"object": {
+                "id": "sub_123",
+                "customer": "cus_123",
+                "status": "active",
+                "items": {"data": [{"price": {"id": "price_not_in_our_catalog"}}]},
+            }},
+        }
+        SubscriptionSyncService.apply_event(event)
+
+        subscription = Subscription.objects.get(stripe_customer_id="cus_123")
+        self.assertEqual(subscription.plan_id, "pro")
+        self.assertEqual(subscription.currency, "EUR")
+        self.assertEqual(subscription.billing_period, "monthly")
+
     def test_trialing_status_is_treated_as_active(self):
         Subscription.objects.create(user=self.user, stripe_customer_id="cus_123", status="none")
 
@@ -256,5 +410,73 @@ class SubscriptionSyncServiceTests(TestCase):
         self.assertEqual(Subscription.objects.get(stripe_customer_id="cus_123").status, "canceled")
 
     def test_unhandled_event_type_is_ignored_without_error(self):
-        event = {"type": "invoice.paid", "data": {"object": {}}}
+        event = {"type": "some.future.event", "data": {"object": {}}}
         SubscriptionSyncService.apply_event(event)  # should not raise
+
+    def test_invoice_payment_failed_does_not_change_status(self):
+        # Stripe's own status transition (surfaced via
+        # customer.subscription.updated) remains the actual source of
+        # truth for access — a failed invoice alone must not revoke it.
+        Subscription.objects.create(user=self.user, stripe_customer_id="cus_123", status="active")
+
+        event = {
+            "type": "invoice.payment_failed",
+            "data": {"object": {"customer": "cus_123", "id": "in_123"}},
+        }
+        SubscriptionSyncService.apply_event(event)
+
+        self.assertEqual(Subscription.objects.get(stripe_customer_id="cus_123").status, "active")
+
+    def test_invoice_paid_recovers_a_past_due_subscription(self):
+        Subscription.objects.create(user=self.user, stripe_customer_id="cus_123", status="past_due")
+
+        event = {
+            "type": "invoice.paid",
+            "data": {"object": {"customer": "cus_123", "id": "in_123"}},
+        }
+        SubscriptionSyncService.apply_event(event)
+
+        self.assertEqual(Subscription.objects.get(stripe_customer_id="cus_123").status, "active")
+
+    def test_full_refund_cancels_the_subscription(self):
+        Subscription.objects.create(user=self.user, stripe_customer_id="cus_123", status="active")
+
+        event = {
+            "type": "charge.refunded",
+            "data": {"object": {"customer": "cus_123", "amount": 1499, "amount_refunded": 1499}},
+        }
+        SubscriptionSyncService.apply_event(event)
+
+        self.assertEqual(Subscription.objects.get(stripe_customer_id="cus_123").status, "canceled")
+
+    def test_partial_refund_does_not_cancel_the_subscription(self):
+        Subscription.objects.create(user=self.user, stripe_customer_id="cus_123", status="active")
+
+        event = {
+            "type": "charge.refunded",
+            "data": {"object": {"customer": "cus_123", "amount": 1499, "amount_refunded": 500}},
+        }
+        SubscriptionSyncService.apply_event(event)
+
+        self.assertEqual(Subscription.objects.get(stripe_customer_id="cus_123").status, "active")
+
+    def test_checkout_completed_fetches_period_end_from_stripe(self):
+        Subscription.objects.create(user=self.user, status="none")
+
+        event = {
+            "type": "checkout.session.completed",
+            "data": {"object": {
+                "customer": "cus_123",
+                "subscription": "sub_123",
+                "metadata": {"user_id": str(self.user.id), "plan_id": "pro"},
+            }},
+        }
+        fake_stripe_subscription = {"current_period_end": 4102444800}  # 2100-01-01
+        with patch(
+            "billing.services.stripe_service.StripeService.get_subscription",
+            return_value=fake_stripe_subscription,
+        ):
+            SubscriptionSyncService.apply_event(event)
+
+        subscription = Subscription.objects.get(user=self.user)
+        self.assertIsNotNone(subscription.current_period_end)

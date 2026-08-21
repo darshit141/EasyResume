@@ -13,7 +13,13 @@ from rest_framework.test import APIClient
 from authentication.models import User
 from resumes.models import JobResumeCuration, JobResumeCurationVersion, Resume
 from resumes.services.llm_service import LLMTimeoutError
-from resumes.tests_job_curation import VALID_REQUEST, gap_analysis, gap_item, job_analysis_for
+from resumes.tests_job_curation import (
+    VALID_REQUEST,
+    gap_analysis,
+    gap_item,
+    job_analysis_for,
+    poll_job,
+)
 from resumes.tests_resume_curation import QueuedLLMService, valid_tailored_result
 
 
@@ -117,8 +123,10 @@ class PromptInjectionTests(SecurityAuditTestCase):
         # The backend rejects it regardless of what the AI "decided" to do —
         # the rejection is based on grounding against candidate data, not on
         # trusting the AI to have refused the injected instruction.
-        self.assertEqual(response.status_code, 502)
-        self.assertEqual(response.data["code"], "RESUME_CURATION_GROUNDING_FAILED")
+        self.assertEqual(response.status_code, 202)
+        job_status = poll_job(self.client, response)
+        self.assertEqual(job_status.data["status"], "failed")
+        self.assertEqual(job_status.data["error_code"], "RESUME_CURATION_GROUNDING_FAILED")
         curation.refresh_from_db()
         self.assertEqual(curation.tailored_resume_data, {})
 
@@ -142,7 +150,11 @@ class PromptInjectionTests(SecurityAuditTestCase):
             "resumes.services.job_gap_analysis_service.get_llm_service",
             return_value=QueuedLLMService(results=[compromised_gap_result]),
         ):
-            response = self.client.get(self.gap_url(curation))
+            queued_response = self.client.get(self.gap_url(curation))
+        self.assertEqual(queued_response.status_code, 202)
+        job_status = poll_job(self.client, queued_response)
+        self.assertEqual(job_status.data["status"], "completed")
+        response = self.client.get(self.gap_url(curation))
 
         self.assertEqual(response.status_code, 200)
         # The backend downgrades the unsupported MATCHED claim to MISSING
@@ -177,11 +189,12 @@ class PromptInjectionTests(SecurityAuditTestCase):
                 "/api/resumes/job-curations/analyze/", payload, format="json"
             )
 
-        self.assertEqual(response.status_code, 201)
-        self.assertEqual(response.data["status"], "completed")
-        self.assertEqual(
-            JobResumeCuration.objects.get().job_description, INJECTION_JOB_DESCRIPTION
-        )
+        self.assertEqual(response.status_code, 202)
+        job_status = poll_job(self.client, response)
+        self.assertEqual(job_status.data["status"], "completed")
+        curation = JobResumeCuration.objects.get()
+        self.assertEqual(curation.status, "completed")
+        self.assertEqual(curation.job_description, INJECTION_JOB_DESCRIPTION)
 
 
 class DataIntegrityFabricationTests(SecurityAuditTestCase):
@@ -222,33 +235,35 @@ class DataIntegrityFabricationTests(SecurityAuditTestCase):
             "resumes.services.resume_curation_ai_service.get_llm_service",
             return_value=fake_llm,
         ):
-            return self.client.post(self.tailored_url(curation), {}, format="json")
+            response = self.client.post(self.tailored_url(curation), {}, format="json")
+        self.assertEqual(response.status_code, 202)
+        return poll_job(self.client, response)
 
     def test_ai_inventing_a_certification_is_rejected(self):
         curation = self.base_curation()
-        response = self.attempt(curation, certifications=[{
+        job_status = self.attempt(curation, certifications=[{
             "source_index": 0,
             "tailored_text": "Google Cloud Professional Architect, 2021.",
         }])
 
-        self.assertEqual(response.status_code, 502)
-        self.assertEqual(response.data["code"], "RESUME_CURATION_GROUNDING_FAILED")
+        self.assertEqual(job_status.data["status"], "failed")
+        self.assertEqual(job_status.data["error_code"], "RESUME_CURATION_GROUNDING_FAILED")
         curation.refresh_from_db()
         self.assertEqual(curation.tailored_resume_data, {})
 
     def test_ai_inventing_education_is_rejected(self):
         curation = self.base_curation()
-        response = self.attempt(curation, education=[{
+        job_status = self.attempt(curation, education=[{
             "source_index": 0,
             "tailored_text": "Ph.D. in Computer Science, MIT, 2019-2023.",
         }])
 
-        self.assertEqual(response.status_code, 502)
-        self.assertEqual(response.data["code"], "RESUME_CURATION_GROUNDING_FAILED")
+        self.assertEqual(job_status.data["status"], "failed")
+        self.assertEqual(job_status.data["error_code"], "RESUME_CURATION_GROUNDING_FAILED")
 
     def test_ai_fabricating_a_metric_is_rejected(self):
         curation = self.base_curation()
-        response = self.attempt(curation, experience=[{
+        job_status = self.attempt(curation, experience=[{
             "source_index": 0,
             "tailored_text": (
                 "Backend Engineer at Acme Corp - led a team that increased "
@@ -256,8 +271,8 @@ class DataIntegrityFabricationTests(SecurityAuditTestCase):
             ),
         }])
 
-        self.assertEqual(response.status_code, 502)
-        self.assertEqual(response.data["code"], "RESUME_CURATION_GROUNDING_FAILED")
+        self.assertEqual(job_status.data["status"], "failed")
+        self.assertEqual(job_status.data["error_code"], "RESUME_CURATION_GROUNDING_FAILED")
 
 
 class ReliabilityTests(SecurityAuditTestCase):
@@ -271,8 +286,10 @@ class ReliabilityTests(SecurityAuditTestCase):
                 "/api/resumes/job-curations/analyze/", VALID_REQUEST, format="json"
             )
 
-        self.assertEqual(response.status_code, 503)
-        self.assertEqual(response.data["code"], "LLM_TIMEOUT")
+        self.assertEqual(response.status_code, 202)
+        job_status = poll_job(self.client, response)
+        self.assertEqual(job_status.data["status"], "failed")
+        self.assertEqual(job_status.data["error_code"], "LLM_TIMEOUT")
         curation = JobResumeCuration.objects.get()
         self.assertEqual(curation.status, "failed")
         self.assertEqual(curation.analysis_data, {})
@@ -298,7 +315,8 @@ class ReliabilityTests(SecurityAuditTestCase):
             ),
         ):
             first_response = self.client.post(self.tailored_url(curation), {}, format="json")
-        self.assertEqual(first_response.status_code, 200)
+        self.assertEqual(first_response.status_code, 202)
+        poll_job(self.client, first_response)
 
         with patch(
             "resumes.services.resume_curation_ai_service.get_llm_service",
@@ -311,8 +329,10 @@ class ReliabilityTests(SecurityAuditTestCase):
                 self.tailored_url(curation), {"regenerate": True}, format="json"
             )
 
-        self.assertEqual(second_response.status_code, 503)
-        self.assertEqual(second_response.data["code"], "LLM_TIMEOUT")
+        self.assertEqual(second_response.status_code, 202)
+        second_job_status = poll_job(self.client, second_response)
+        self.assertEqual(second_job_status.data["status"], "failed")
+        self.assertEqual(second_job_status.data["error_code"], "LLM_TIMEOUT")
         curation.refresh_from_db()
         self.assertEqual(curation.tailored_resume_data["skills"], ["Java"])
         self.assertEqual(
@@ -358,8 +378,10 @@ class ReliabilityTests(SecurityAuditTestCase):
             ),
         ):
             first_response = self.client.post(self.tailored_url(curation), {}, format="json")
-        self.assertEqual(first_response.status_code, 200)
-        original_tailored_data = first_response.data["tailored_resume_data"]
+        self.assertEqual(first_response.status_code, 202)
+        first_job_status = poll_job(self.client, first_response)
+        self.assertEqual(first_job_status.data["status"], "completed")
+        original_tailored_data = first_job_status.data["result"]["tailored_resume_data"]
 
         with patch(
             "resumes.services.resume_curation_ai_service.get_llm_service",
@@ -387,8 +409,10 @@ class ReliabilityTests(SecurityAuditTestCase):
                 self.tailored_url(curation), {"regenerate": True}, format="json"
             )
 
-        self.assertEqual(second_response.status_code, 500)
-        self.assertEqual(second_response.data["code"], "DATABASE_ERROR")
+        self.assertEqual(second_response.status_code, 202)
+        second_job_status = poll_job(self.client, second_response)
+        self.assertEqual(second_job_status.data["status"], "failed")
+        self.assertEqual(second_job_status.data["error_code"], "DATABASE_ERROR")
 
         curation.refresh_from_db()
         self.assertEqual(curation.tailored_resume_data, original_tailored_data)
@@ -432,7 +456,11 @@ class ReliabilityTests(SecurityAuditTestCase):
                 "/api/resumes/job-curations/analyze/", VALID_REQUEST, format="json"
             )
 
-        self.assertEqual(first_response.status_code, 201)
-        self.assertEqual(second_response.status_code, 201)
-        self.assertNotEqual(first_response.data["id"], second_response.data["id"])
+        self.assertEqual(first_response.status_code, 202)
+        self.assertEqual(second_response.status_code, 202)
+        first_job_status = poll_job(self.client, first_response)
+        second_job_status = poll_job(self.client, second_response)
+        first_curation_id = first_job_status.data["result"]["curation_id"]
+        second_curation_id = second_job_status.data["result"]["curation_id"]
+        self.assertNotEqual(first_curation_id, second_curation_id)
         self.assertEqual(JobResumeCuration.objects.count(), 2)

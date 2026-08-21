@@ -1,7 +1,7 @@
 from django.contrib import admin
 from django.contrib.auth.admin import UserAdmin
 
-from .models import User, PasswordResetOTP
+from .models import CookieConsent, PasswordResetOTP, PolicyAcceptance, User
 
 
 @admin.register(User)
@@ -98,3 +98,21 @@ class PasswordResetOTPAdmin(admin.ModelAdmin):
     ordering = (
         "-created_at",
     )
+
+
+@admin.register(PolicyAcceptance)
+class PolicyAcceptanceAdmin(admin.ModelAdmin):
+    list_display = ("user", "policy_type", "version", "accepted_at")
+    list_filter = ("policy_type", "version")
+    search_fields = ("user__email",)
+    readonly_fields = [field.name for field in PolicyAcceptance._meta.fields]
+
+    def has_add_permission(self, request):
+        return False
+
+
+@admin.register(CookieConsent)
+class CookieConsentAdmin(admin.ModelAdmin):
+    list_display = ("user", "analytics", "marketing", "consent_version", "updated_at")
+    search_fields = ("user__email",)
+    readonly_fields = ("user", "created_at", "updated_at")

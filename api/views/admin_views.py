@@ -102,6 +102,18 @@ DEFAULT_CONFIGS = [
         "description": "Maximum number of resumes a user can upload",
     },
     {
+        "key": "FREE_AI_CALLS_PER_MONTH",
+        "category": "limits",
+        "value_type": "integer",
+        "description": "Blanket cap on AI-backed actions per month for a Free-plan user (resume parsing, job analysis, gap analysis, missing-information review, tailored resume generation combined). Pro is unlimited.",
+    },
+    {
+        "key": "FREE_TAILORED_RESUMES_PER_MONTH",
+        "category": "limits",
+        "value_type": "integer",
+        "description": "How many job-specific tailored resumes a Free-plan user can generate per month. Pro is unlimited.",
+    },
+    {
         "key": "ALLOWED_JOB_URL_DOMAINS",
         "category": "limits",
         "value_type": "list",

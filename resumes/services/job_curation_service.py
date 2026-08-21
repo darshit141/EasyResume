@@ -18,12 +18,20 @@ class JobCurationDatabaseError(Exception):
 class JobCurationService:
     """
     Coordinates persistence and AI analysis for job-specific resume curation.
+
+    Split into two steps so the AI call can run on a background worker
+    (see ai_jobs.tasks._run_job_analysis) instead of inside the HTTP
+    request: `create_pending` does the fast, synchronous part (create the
+    row); `run_analysis` does the slow part (call the LLM, validate,
+    persist) and is what the worker calls.
     """
 
     def __init__(self, ai_service=None, provider=None):
         self.ai_service = ai_service or JobCurationAIService(provider=provider)
 
-    def create_analysis(self, user, job_title, job_description, job_url="", resume_id=None):
+    def create_pending(self, user, job_title, job_description, job_url="", resume_id=None):
+        """Creates the curation session row with no AI call made yet.
+        Safe to call from the request/response cycle."""
         try:
             with transaction.atomic():
                 curation = JobResumeCuration.objects.create(
@@ -33,31 +41,40 @@ class JobCurationService:
                     job_description=job_description,
                     job_url=job_url,
                     curate_resume=True,
-                    status="processing",
+                    status="queued",
                 )
         except DatabaseError as exc:
             logger.exception("Failed to create job curation record.")
             raise JobCurationDatabaseError() from exc
 
         logger.info(
-            "Job analysis started user_id=%s curation_id=%s", user.id, curation.id
+            "Job analysis queued user_id=%s curation_id=%s", user.id, curation.id
         )
+        return curation
+
+    def run_analysis(self, curation):
+        """Runs the actual AI job-description analysis for an already
+        `create_pending`-created curation, and persists the result. Called
+        by the background worker — never call this directly from a view."""
+        curation.status = "processing"
+        curation.save(update_fields=["status", "updated_at"])
+
         try:
-            analysis = self.ai_service.analyze_job_description(job_description)
+            analysis = self.ai_service.analyze_job_description(curation.job_description)
             curation.analysis_data = analysis
             curation.status = "completed"
             curation.error_code = ""
             curation.save(update_fields=["analysis_data", "status", "error_code", "updated_at"])
             logger.info(
                 "Job analysis completed user_id=%s curation_id=%s",
-                user.id,
+                curation.user_id,
                 curation.id,
             )
             return curation
         except LLMServiceError as exc:
             logger.warning(
                 "Job analysis failed user_id=%s curation_id=%s code=%s",
-                user.id,
+                curation.user_id,
                 curation.id,
                 exc.code,
             )

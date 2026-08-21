@@ -110,6 +110,18 @@ def gap_analysis(items):
     }
 
 
+def poll_job(client, response):
+    """Every AI-backed endpoint in this file now queues a background job and
+    returns 202 instead of blocking. CELERY_TASK_ALWAYS_EAGER (set under
+    `manage.py test`) makes that task run synchronously as part of the
+    `client.post`/`client.get` call above, so by the time this function
+    runs the job is already in its terminal state — no real polling loop
+    needed in tests."""
+    assert response.status_code == 202, response.data
+    job_id = response.data["id"]
+    return client.get(f"/api/ai-jobs/{job_id}/")
+
+
 def job_analysis_for(**overrides):
     data = {
         "required_skills": [],
@@ -161,9 +173,14 @@ class JobCurationAPITests(TestCase):
         ):
             response = self.client.post(self.url, VALID_REQUEST, format="json")
 
-        self.assertEqual(response.status_code, 201)
-        self.assertEqual(response.data["status"], "completed")
-        self.assertEqual(response.data["analysis_data"], VALID_JOB_ANALYSIS)
+        self.assertEqual(response.status_code, 202)
+        job_status = poll_job(self.client, response)
+        self.assertEqual(job_status.data["status"], "completed")
+        curation_id = job_status.data["result"]["curation_id"]
+
+        curation_response = self.client.get(f"/api/resumes/job-curations/{curation_id}/")
+        self.assertEqual(curation_response.data["status"], "completed")
+        self.assertEqual(curation_response.data["analysis_data"], VALID_JOB_ANALYSIS)
         self.assertEqual(JobResumeCuration.objects.count(), 1)
         self.assertEqual(JobResumeCuration.objects.get().user, self.user)
 
@@ -210,8 +227,10 @@ class JobCurationAPITests(TestCase):
         ):
             response = self.client.post(self.url, VALID_REQUEST, format="json")
 
-        self.assertEqual(response.status_code, 503)
-        self.assertEqual(response.data["code"], "LLM_MODEL_UNAVAILABLE")
+        self.assertEqual(response.status_code, 202)
+        job_status = poll_job(self.client, response)
+        self.assertEqual(job_status.data["status"], "failed")
+        self.assertEqual(job_status.data["error_code"], "LLM_MODEL_UNAVAILABLE")
         self.assertEqual(JobResumeCuration.objects.get().status, "failed")
 
     def test_invalid_ai_response_is_rejected(self):
@@ -224,8 +243,10 @@ class JobCurationAPITests(TestCase):
         ):
             response = self.client.post(self.url, VALID_REQUEST, format="json")
 
-        self.assertEqual(response.status_code, 502)
-        self.assertEqual(response.data["code"], "LLM_SCHEMA_VALIDATION_FAILED")
+        self.assertEqual(response.status_code, 202)
+        job_status = poll_job(self.client, response)
+        self.assertEqual(job_status.data["status"], "failed")
+        self.assertEqual(job_status.data["error_code"], "LLM_SCHEMA_VALIDATION_FAILED")
         self.assertEqual(JobResumeCuration.objects.get().status, "failed")
 
     def test_authentication_is_required(self):
@@ -279,8 +300,8 @@ class JobCurationAPITests(TestCase):
         ):
             response = self.client.post(self.url, payload, format="json")
 
-        self.assertEqual(response.status_code, 201)
-        self.assertEqual(response.data["job_url"], "https://www.linkedin.com/jobs/view/backend-engineer")
+        self.assertEqual(response.status_code, 202)
+        poll_job(self.client, response)
         self.assertEqual(
             JobResumeCuration.objects.get().job_url, "https://www.linkedin.com/jobs/view/backend-engineer"
         )
@@ -293,8 +314,9 @@ class JobCurationAPITests(TestCase):
         ):
             response = self.client.post(self.url, VALID_REQUEST, format="json")
 
-        self.assertEqual(response.status_code, 201)
-        self.assertEqual(response.data["job_url"], "")
+        self.assertEqual(response.status_code, 202)
+        poll_job(self.client, response)
+        self.assertEqual(JobResumeCuration.objects.get().job_url, "")
 
     def test_malformed_job_url_is_rejected(self):
         self.authenticate()
@@ -316,7 +338,8 @@ class JobCurationAPITests(TestCase):
         ), patch("urllib.request.urlopen") as mock_urlopen:
             response = self.client.post(self.url, payload, format="json")
 
-        self.assertEqual(response.status_code, 201)
+        self.assertEqual(response.status_code, 202)
+        poll_job(self.client, response)
         mock_urlopen.assert_not_called()
 
     def test_url_on_an_unsupported_domain_is_rejected(self):
@@ -338,8 +361,11 @@ class JobCurationAPITests(TestCase):
         ):
             response = self.client.post(self.url, payload, format="json")
 
-        self.assertEqual(response.status_code, 201)
-        self.assertEqual(response.data["job_url"], "https://boards.greenhouse.io/acme/jobs/42")
+        self.assertEqual(response.status_code, 202)
+        poll_job(self.client, response)
+        self.assertEqual(
+            JobResumeCuration.objects.get().job_url, "https://boards.greenhouse.io/acme/jobs/42"
+        )
 
     def test_domain_match_is_case_insensitive(self):
         self.authenticate()
@@ -350,7 +376,8 @@ class JobCurationAPITests(TestCase):
         ):
             response = self.client.post(self.url, payload, format="json")
 
-        self.assertEqual(response.status_code, 201)
+        self.assertEqual(response.status_code, 202)
+        poll_job(self.client, response)
 
     def test_a_lookalike_domain_is_not_accepted_as_a_suffix_match(self):
         # "notlinkedin.com" must not pass just because it ends in a
@@ -372,7 +399,8 @@ class JobCurationAPITests(TestCase):
         ):
             response = self.client.post(self.url, payload, format="json")
 
-        self.assertEqual(response.status_code, 201)
+        self.assertEqual(response.status_code, 202)
+        poll_job(self.client, response)
 
 
 class JobGapAnalysisAPITests(TestCase):
@@ -416,6 +444,9 @@ class JobGapAnalysisAPITests(TestCase):
         return f"/api/resumes/job-curations/{curation.id}/gap-analysis/"
 
     def run_gap(self, curation, ai_result):
+        """Queues the (cold-path) gap analysis job and returns the raw 202/
+        error response, without following up — use this when the test wants
+        to inspect the queued/failed job itself."""
         self.authenticate()
         with patch(
             "resumes.services.job_gap_analysis_service.get_llm_service",
@@ -423,10 +454,19 @@ class JobGapAnalysisAPITests(TestCase):
         ):
             return self.client.get(self.gap_url(curation))
 
+    def run_gap_and_fetch(self, curation, ai_result):
+        """Queues the job, waits for it (eager mode makes this synchronous
+        under test), then re-fetches the same endpoint — which now finds
+        the result cached and returns it directly (200) — exactly what the
+        frontend does after polling to completion."""
+        queued = self.run_gap(curation, ai_result)
+        poll_job(self.client, queued)
+        return self.client.get(self.gap_url(curation))
+
     def test_exact_skill_match(self):
         self.create_resume({"skills": ["Python"]})
         curation = self.create_curation(job_analysis_for(required_skills=["Python"]))
-        response = self.run_gap(
+        response = self.run_gap_and_fetch(
             curation,
             gap_analysis([gap_item("Python", "required_skill", "MATCHED", ["Python"])]),
         )
@@ -440,7 +480,7 @@ class JobGapAnalysisAPITests(TestCase):
     def test_case_insensitive_skill_match(self):
         self.create_resume({"skills": ["python"]})
         curation = self.create_curation(job_analysis_for(required_skills=["Python"]))
-        response = self.run_gap(
+        response = self.run_gap_and_fetch(
             curation,
             gap_analysis([gap_item("Python", "required_skill", "MATCHED", ["python"])]),
         )
@@ -456,7 +496,7 @@ class JobGapAnalysisAPITests(TestCase):
         curation = self.create_curation(
             job_analysis_for(experience_requirements=["5 years backend experience"])
         )
-        response = self.run_gap(
+        response = self.run_gap_and_fetch(
             curation,
             gap_analysis([
                 gap_item(
@@ -477,7 +517,7 @@ class JobGapAnalysisAPITests(TestCase):
     def test_missing_skill_is_not_inferred_from_other_tools(self):
         self.create_resume({"skills": ["Java", "Spring Boot", "Kafka", "Docker"]})
         curation = self.create_curation(job_analysis_for(cloud_technologies=["AWS"]))
-        response = self.run_gap(
+        response = self.run_gap_and_fetch(
             curation,
             gap_analysis([gap_item("AWS", "cloud_technology", "MATCHED", ["Docker"])]),
         )
@@ -493,7 +533,7 @@ class JobGapAnalysisAPITests(TestCase):
         curation = self.create_curation(
             job_analysis_for(experience_requirements=["5 years backend experience"])
         )
-        response = self.run_gap(
+        response = self.run_gap_and_fetch(
             curation,
             gap_analysis([
                 gap_item(
@@ -516,7 +556,7 @@ class JobGapAnalysisAPITests(TestCase):
         curation = self.create_curation(
             job_analysis_for(certification_requirements=["AWS Certified Developer"])
         )
-        response = self.run_gap(
+        response = self.run_gap_and_fetch(
             curation,
             gap_analysis([
                 gap_item(
@@ -539,7 +579,7 @@ class JobGapAnalysisAPITests(TestCase):
         curation = self.create_curation(
             job_analysis_for(education_requirements=["Bachelor's degree"])
         )
-        response = self.run_gap(
+        response = self.run_gap_and_fetch(
             curation,
             gap_analysis([
                 gap_item(
@@ -560,7 +600,7 @@ class JobGapAnalysisAPITests(TestCase):
     def test_candidate_with_no_matching_skills(self):
         self.create_resume({"skills": ["Java"]})
         curation = self.create_curation(job_analysis_for(required_skills=["Python"]))
-        response = self.run_gap(
+        response = self.run_gap_and_fetch(
             curation,
             gap_analysis([gap_item("Python", "required_skill", "MATCHED", ["Java"])]),
         )
@@ -576,7 +616,7 @@ class JobGapAnalysisAPITests(TestCase):
         curation = self.create_curation(
             job_analysis_for(required_skills=["Python", "Django", "AWS"])
         )
-        response = self.run_gap(
+        response = self.run_gap_and_fetch(
             curation,
             gap_analysis([
                 gap_item("Python", "required_skill", "MATCHED", ["Python"]),
@@ -599,7 +639,7 @@ class JobGapAnalysisAPITests(TestCase):
         original_data = {"skills": ["Docker"]}
         resume = self.create_resume(original_data)
         curation = self.create_curation(job_analysis_for(cloud_technologies=["AWS"]))
-        response = self.run_gap(
+        response = self.run_gap_and_fetch(
             curation,
             gap_analysis([gap_item("AWS", "cloud_technology", "MATCHED", ["AWS"])]),
         )
@@ -628,8 +668,10 @@ class JobGapAnalysisAPITests(TestCase):
         curation = self.create_curation(job_analysis_for(required_skills=["Python"]))
         response = self.run_gap(curation, {"invalid": []})
 
-        self.assertEqual(response.status_code, 502)
-        self.assertEqual(response.data["code"], "LLM_SCHEMA_VALIDATION_FAILED")
+        self.assertEqual(response.status_code, 202)
+        job_status = poll_job(self.client, response)
+        self.assertEqual(job_status.data["status"], "failed")
+        self.assertEqual(job_status.data["error_code"], "LLM_SCHEMA_VALIDATION_FAILED")
 
     def test_ollama_unavailable_during_gap_analysis(self):
         self.create_resume({"skills": ["Python"]})
@@ -643,5 +685,7 @@ class JobGapAnalysisAPITests(TestCase):
         ):
             response = self.client.get(self.gap_url(curation))
 
-        self.assertEqual(response.status_code, 503)
-        self.assertEqual(response.data["code"], "LLM_MODEL_UNAVAILABLE")
+        self.assertEqual(response.status_code, 202)
+        job_status = poll_job(self.client, response)
+        self.assertEqual(job_status.data["status"], "failed")
+        self.assertEqual(job_status.data["error_code"], "LLM_MODEL_UNAVAILABLE")

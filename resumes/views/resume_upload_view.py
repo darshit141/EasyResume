@@ -6,34 +6,38 @@ from rest_framework.views import APIView
 
 from drf_spectacular.utils import OpenApiResponse, extend_schema
 
+from ai_jobs.models import AIJob
+from ai_jobs.serializers import AIJobSerializer
+from ai_jobs.services import enqueue_ai_job
 from resumes.serializers.job_curation_serializer import APIErrorSerializer
 from resumes.serializers.resume_serializer import ResumeUploadSerializer
-from resumes.services.llm_service import LLMServiceError, resolve_provider
+from resumes.services.llm_service import resolve_provider
 from resumes.services.resume_upload_service import (
     ResumeLimitReachedError,
     ResumeTextExtractionError,
     ResumeUploadService,
 )
-from billing.models import AIUsageLog
 from billing.services.entitlements_service import (
     EntitlementsService,
     PlanRestrictionError,
 )
 from billing.views.plan_limit_response import plan_restriction_response
-from resumes.views.error_responses import llm_error_response
 
 @extend_schema(
     tags=["Resume"],
     summary="Upload Resume",
     description=(
-        "Upload a PDF/DOC/DOCX resume (max 5MB). Extracts text, then parses "
-        "it into structured data and computes an ATS score using the "
-        "provider chosen via `ai_provider` (defaults to the server's "
-        "`LLM_PROVIDER`): `ollama` | `groq` | `gemini` call an AI model and "
-        "block synchronously until parsing completes (same LLM "
-        "timeout/retry behavior as job curation endpoints); `standard` uses "
-        "a deterministic, non-AI parser instead — near-instant, no API key, "
-        "resume text never leaves the server, but materially lower "
+        "Upload a PDF/DOC/DOCX resume (max 5MB). Extracts text (synchronous, "
+        "fast, non-AI — a corrupt/unreadable file is rejected immediately), "
+        "then parses it into structured data and computes an ATS score "
+        "using the provider chosen via `ai_provider` (defaults to the "
+        "server's `LLM_PROVIDER`): `ollama` | `groq` | `gemini` queue the "
+        "parse on a background worker and return **202** immediately — poll "
+        "`GET /api/ai-jobs/{id}/` until `status` is `completed`, then fetch "
+        "`GET /api/resumes/{resume_id}/` for the parsed result; `standard` "
+        "uses a deterministic, non-AI parser instead — near-instant, so it "
+        "stays synchronous and returns **201** directly with no API key, "
+        "resume text never leaving the server, but materially lower "
         "extraction accuracy.\n\n"
         "**Every upload creates a new, independent resume** — it never "
         "overwrites an existing one. A user may keep up to "
@@ -43,7 +47,13 @@ from resumes.views.error_responses import llm_error_response
     ),
     request=ResumeUploadSerializer,
     responses={
-        status.HTTP_201_CREATED: ResumeUploadSerializer,
+        status.HTTP_201_CREATED: OpenApiResponse(
+            response=ResumeUploadSerializer,
+            description="Returned only for `ai_provider=standard` — the non-AI parse is synchronous.",
+        ),
+        status.HTTP_202_ACCEPTED: OpenApiResponse(
+            description="Returned for every real AI provider — queued for background parsing. Poll GET /api/ai-jobs/{id}/ for the result."
+        ),
         status.HTTP_400_BAD_REQUEST: OpenApiResponse(
             response=APIErrorSerializer,
             description="Invalid file (wrong type, over 5MB, missing), or code: RESUME_LIMIT_REACHED.",
@@ -97,26 +107,41 @@ class ResumeUploadAPIView(APIView):
         except PlanRestrictionError as exc:
             return plan_restriction_response(exc)
 
-        try:
-            resume = ResumeUploadService.upload_resume(
-                request.user,
-                serializer.validated_data,
-                provider=provider,
+        if not is_ai_call:
+            # The deterministic, non-AI parser is near-instant — no reason
+            # to round-trip it through a queue, so it stays synchronous.
+            try:
+                resume = ResumeUploadService.upload_resume(
+                    request.user,
+                    serializer.validated_data,
+                    provider=provider,
+                )
+            except ResumeTextExtractionError as exc:
+                return Response(
+                    {"detail": exc.message, "code": exc.code},
+                    status=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                )
+            return Response(
+                ResumeUploadSerializer(resume).data,
+                status=status.HTTP_201_CREATED,
             )
+
+        # Real AI providers run on a background worker instead of blocking
+        # the request. Text extraction stays synchronous (fast, non-AI) so
+        # an unreadable file is still rejected immediately with 422; only
+        # the AI parse itself is queued.
+        try:
+            resume = ResumeUploadService.create_pending(request.user, serializer.validated_data)
         except ResumeTextExtractionError as exc:
             return Response(
                 {"detail": exc.message, "code": exc.code},
                 status=status.HTTP_422_UNPROCESSABLE_ENTITY,
             )
-        except LLMServiceError as exc:
-            return llm_error_response(exc)
 
-        if is_ai_call:
-            EntitlementsService.record_ai_usage(
-                request.user, AIUsageLog.ACTION_RESUME_PARSE, resolve_provider(provider)
-            )
-
-        return Response(
-            ResumeUploadSerializer(resume).data,
-            status=status.HTTP_201_CREATED,
+        job = enqueue_ai_job(
+            request.user,
+            AIJob.JOB_TYPE_RESUME_PARSE,
+            provider=resolve_provider(provider),
+            resume=resume,
         )
+        return Response(AIJobSerializer(job).data, status=status.HTTP_202_ACCEPTED)

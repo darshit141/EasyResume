@@ -90,12 +90,15 @@ INSTALLED_APPS = [
     "corsheaders",
     "drf_spectacular",
 
+    "storages",
+
     # Local Apps
     "api",
     "authentication",
      "resumes",
     "billing",
     "blog",
+    "ai_jobs",
 ]
 
 MIDDLEWARE = [
@@ -107,6 +110,7 @@ MIDDLEWARE = [
     "django.contrib.auth.middleware.AuthenticationMiddleware",
     "django.contrib.messages.middleware.MessageMiddleware",
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
+    "api.middleware.RequestIDMiddleware",
 ]
 
 ROOT_URLCONF = 'config.urls'
@@ -224,6 +228,13 @@ REST_FRAMEWORK = {
         "auth_sensitive": os.getenv("THROTTLE_AUTH_SENSITIVE", "10/min"),
         # AI-heavy job-curation endpoints (job analysis, tailored resume generation).
         "ai_resume": os.getenv("THROTTLE_AI_RESUME", "20/min"),
+        # Public, unauthenticated funnel-tracking endpoint — generous
+        # (real usage fires a handful of times per session) but capped so
+        # it can't be turned into a free-form write amplification target.
+        "analytics_track": os.getenv("THROTTLE_ANALYTICS_TRACK", "60/min"),
+        # Public B2B lead-capture form — a real person fills this out at
+        # most once; tight enough to make scripted spam submissions costly.
+        "b2b_lead": os.getenv("THROTTLE_B2B_LEAD", "5/min"),
     },
 }
 
@@ -234,7 +245,14 @@ SIMPLE_JWT = {
     "REFRESH_TOKEN_LIFETIME": timedelta(
         days=int(os.getenv("REFRESH_TOKEN_LIFETIME", 7))
     ),
-    "ROTATE_REFRESH_TOKENS": False,
+    # A stolen refresh token used to stay valid for its full 7-day lifetime
+    # with no way to detect the theft (COMMERCIAL_READINESS_AUDIT.md S5).
+    # With rotation on, every refresh call both blacklists the token that
+    # was just spent and issues a new one — so a token can only ever be
+    # used once. If the real owner is also refreshing (their token now
+    # blacklisted by an attacker's earlier use, or vice versa), that
+    # second, failed refresh is the detection signal.
+    "ROTATE_REFRESH_TOKENS": True,
     "BLACKLIST_AFTER_ROTATION": True,
     "UPDATE_LAST_LOGIN": True,
 }
@@ -251,15 +269,99 @@ SPECTACULAR_SETTINGS = {
     "COMPONENT_SPLIT_REQUEST": True,
 }
 
+# User-uploaded resumes. Local disk by default (fine for local dev and a
+# single-instance deployment with a persistent volume). Most PaaS hosts
+# (Render, Railway, Heroku, Fly.io) run an ephemeral filesystem though —
+# every deploy or restart wipes it, and any deployment with more than one
+# app instance can't share uploads between them. Setting
+# AWS_STORAGE_BUCKET_NAME switches every FileField (just the original
+# uploaded resume — everything else the app generates, like the .docx
+# export, is built in memory and streamed straight to the response) over to
+# S3-compatible object storage with no code changes elsewhere. The bucket
+# stays private; files are served via time-limited signed URLs, and nothing
+# in this app currently exposes that URL to the frontend anyway — resumes
+# are only ever read back server-side for parsing.
 MEDIA_URL = "/media/"
 MEDIA_ROOT = BASE_DIR / "media"
+
+AWS_STORAGE_BUCKET_NAME = os.getenv("AWS_STORAGE_BUCKET_NAME", "")
+
+if AWS_STORAGE_BUCKET_NAME:
+    AWS_ACCESS_KEY_ID = os.getenv("AWS_ACCESS_KEY_ID", "")
+    AWS_SECRET_ACCESS_KEY = os.getenv("AWS_SECRET_ACCESS_KEY", "")
+    AWS_S3_REGION_NAME = os.getenv("AWS_S3_REGION_NAME", "us-east-1")
+    # Only set for a non-AWS S3-compatible provider (Cloudflare R2, Backblaze
+    # B2, DigitalOcean Spaces, MinIO) — leave unset for real AWS S3.
+    AWS_S3_ENDPOINT_URL = os.getenv("AWS_S3_ENDPOINT_URL", "") or None
+    AWS_DEFAULT_ACL = None
+    AWS_QUERYSTRING_AUTH = True
+    AWS_QUERYSTRING_EXPIRE = int(os.getenv("AWS_QUERYSTRING_EXPIRE", "3600"))
+    AWS_S3_SIGNATURE_VERSION = "s3v4"
+    AWS_S3_FILE_OVERWRITE = False
+
+    STORAGES = {
+        "default": {"BACKEND": "storages.backends.s3.S3Storage"},
+        "staticfiles": {"BACKEND": "django.contrib.staticfiles.storage.StaticFilesStorage"},
+    }
+else:
+    STORAGES = {
+        "default": {"BACKEND": "django.core.files.storage.FileSystemStorage"},
+        "staticfiles": {"BACKEND": "django.contrib.staticfiles.storage.StaticFilesStorage"},
+    }
+
+# Celery / Redis — background execution for every AI-backed operation.
+# REDIS_URL is the single source for both the broker and the result
+# backend; a real deployment points this at a managed Redis instance (see
+# docker-compose.yml for the local/single-host default). Task results are
+# not actually relied on for status (ai_jobs.AIJob is the source of truth
+# polled by the API) but a result backend still lets `task.get()`/Flower
+# introspect a running task during operations.
+REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
+CELERY_BROKER_URL = REDIS_URL
+CELERY_RESULT_BACKEND = REDIS_URL
+# Under `manage.py test`, run tasks synchronously and in-process instead of
+# requiring a live broker/worker — this is what lets the existing test
+# suite's `self.client.post(...)` still observe the AI job's completed
+# side effects (and any exception it raises) without a real Celery worker.
+CELERY_TASK_ALWAYS_EAGER = RUNNING_TESTS
+CELERY_TASK_EAGER_PROPAGATES = RUNNING_TESTS
+CELERY_TASK_ACKS_LATE = True
+# A worker that crashes/is killed mid-task must not silently swallow the
+# job — redeliver it to another worker instead of losing it.
+CELERY_TASK_REJECT_ON_WORKER_LOST = True
+# Generous ceiling: the slowest supported path (tailored-resume regenerate)
+# makes two sequential LLM calls, each retried up to LLM_MAX_RETRIES times
+# at LLM_TIMEOUT seconds. This is a hard worker-side kill switch so a truly
+# stuck task can't hold a worker slot forever; it is not the primary
+# timeout mechanism (LLM_TIMEOUT is).
+CELERY_TASK_TIME_LIMIT = int(os.getenv("CELERY_TASK_TIME_LIMIT", "900"))
+CELERY_TASK_SOFT_TIME_LIMIT = int(os.getenv("CELERY_TASK_SOFT_TIME_LIMIT", "840"))
+CELERY_WORKER_MAX_TASKS_PER_CHILD = int(os.getenv("CELERY_WORKER_MAX_TASKS_PER_CHILD", "100"))
+
+# Periodic housekeeping (COMMERCIAL_READINESS_AUDIT.md G9) — requires a
+# `celery -A config beat` process running alongside the worker (see
+# docker-compose.yml's celery-beat service). Uses Celery's built-in
+# file-based scheduler; a single static daily entry doesn't need the extra
+# django-celery-beat dependency and its database-backed schedule.
+CELERY_BEAT_SCHEDULE = {
+    "cleanup-expired-otps-daily": {
+        "task": "authentication.tasks.cleanup_expired_otps_task",
+        "schedule": 86400.0,
+    },
+}
 
 # LLM configuration.  These are deliberately kept separate from the request
 # layer so the public REST API does not depend on a specific AI provider.
 # LLM_PROVIDER is the server-wide default; individual requests may override
 # it (see resumes.services.llm_service.get_llm_service) with any value in
 # resumes.services.llm_service.SUPPORTED_PROVIDERS.
-LLM_PROVIDER = os.getenv("LLM_PROVIDER", "ollama")
+#
+# Defaults to a hosted provider (groq), not ollama: CPU-bound local
+# inference cannot serve concurrent paying traffic (COMMERCIAL_READINESS_
+# AUDIT.md P0-2). Ollama remains fully supported — set LLM_PROVIDER=ollama
+# for self-hosted/privacy-sensitive deployments or local development — it
+# is just no longer what a fresh production deployment gets by default.
+LLM_PROVIDER = os.getenv("LLM_PROVIDER", "groq")
 # Sized for the slowest supported provider, not the fastest. A local
 # CPU-only Ollama run has to load the model (~60s cold) and then generate a
 # full structured resume document, which routinely exceeds two minutes;
@@ -274,6 +376,13 @@ LLM_TEMPERATURE = float(os.getenv("LLM_TEMPERATURE", "0"))
 # instead of returning — this bounds that failure mode to a fixed, fast
 # error instead of an indefinite hang.
 LLM_MAX_OUTPUT_TOKENS = int(os.getenv("LLM_MAX_OUTPUT_TOKENS", "8192"))
+# When set to a different provider than LLM_PROVIDER, an outage of the
+# default provider automatically retries once against this one before
+# failing the request (COMMERCIAL_READINESS_AUDIT.md A5) — see
+# resumes.services.llm_service.FallbackLLMService. Empty by default: no
+# fallback until explicitly configured, since it costs against a second
+# provider's quota/API key.
+LLM_FALLBACK_PROVIDER = os.getenv("LLM_FALLBACK_PROVIDER", "").lower()
 
 # How many resumes a single user may keep at once. Retune anytime without a
 # code change — enforced in resumes.services.resume_upload_service.
@@ -336,6 +445,15 @@ else:
 
 DEFAULT_FROM_EMAIL = os.getenv("DEFAULT_FROM_EMAIL", "IntelliResume <no-reply@intelliresume.local>")
 
+# Bump these when the actual legal text changes (after counsel review) so
+# existing PolicyAcceptance rows correctly reflect what a user agreed to
+# under the *old* text, and new acceptances are recorded against the new
+# version. A simple date string, not a semver — legal doesn't need patch
+# numbers, it needs "what did they see and when."
+CURRENT_PRIVACY_POLICY_VERSION = os.getenv("CURRENT_PRIVACY_POLICY_VERSION", "2026-08-21")
+CURRENT_TERMS_OF_SERVICE_VERSION = os.getenv("CURRENT_TERMS_OF_SERVICE_VERSION", "2026-08-21")
+CURRENT_COOKIE_POLICY_VERSION = os.getenv("CURRENT_COOKIE_POLICY_VERSION", "2026-08-21")
+
 # Stripe billing. Empty by default — billing endpoints return a clean,
 # explicit "not configured" error rather than crashing until real keys are
 # set. Use test-mode keys (sk_test_.../pk_test_...) during development;
@@ -344,7 +462,111 @@ DEFAULT_FROM_EMAIL = os.getenv("DEFAULT_FROM_EMAIL", "IntelliResume <no-reply@in
 STRIPE_SECRET_KEY = os.getenv("STRIPE_SECRET_KEY", "")
 STRIPE_PUBLISHABLE_KEY = os.getenv("STRIPE_PUBLISHABLE_KEY", "")
 STRIPE_WEBHOOK_SECRET = os.getenv("STRIPE_WEBHOOK_SECRET", "")
+# Off by default: requires Stripe Tax to be enabled in the Stripe Dashboard
+# first, or checkout-session creation fails outright. Flip on once that's
+# done, for correct VAT calculation on EU/UK checkouts.
+STRIPE_AUTOMATIC_TAX_ENABLED = os.getenv("STRIPE_AUTOMATIC_TAX_ENABLED", "False") == "True"
 
 # Where Stripe Checkout redirects back to after a successful/canceled
 # payment, and where CORS/CSRF need to trust requests from.
 FRONTEND_URL = os.getenv("FRONTEND_URL", "http://localhost:5173")
+
+# Shared cache — used for DRF's request throttling (ScopedRateThrottle)
+# above all else. Without this, throttling was silently wrong on any
+# multi-worker/multi-replica deployment: Django's default LocMemCache is
+# per-process, so N workers each keep their own independent counter and
+# the effective rate limit becomes N times the configured value (and
+# resets on every worker restart). Under `manage.py test`, throttling is
+# already disabled entirely (see RUNNING_TESTS above) and no live Redis is
+# guaranteed to exist, so tests use plain LocMemCache instead — this is
+# the one place RUNNING_TESTS controls infrastructure choice rather than
+# just behavior, and it's deliberate: a test run must never require a
+# live Redis just to import settings.
+#
+# django-redis, not Django's own built-in Redis backend: IGNORE_EXCEPTIONS
+# makes a Redis outage degrade to "throttling silently stops being
+# enforced" instead of every throttled endpoint hard-failing with a
+# ConnectionError — discovered live (a bare `manage.py runserver` with no
+# Redis running turned /api/auth/login/ into a 500). Losing rate-limiting
+# during a Redis blip is a far smaller problem than the API going down
+# because of one.
+CACHES = {
+    "default": (
+        {"BACKEND": "django.core.cache.backends.locmem.LocMemCache"}
+        if RUNNING_TESTS
+        else {
+            "BACKEND": "django_redis.cache.RedisCache",
+            "LOCATION": REDIS_URL,
+            "OPTIONS": {
+                "CLIENT_CLASS": "django_redis.client.DefaultClient",
+                "IGNORE_EXCEPTIONS": True,
+            },
+        }
+    )
+}
+DJANGO_REDIS_IGNORE_EXCEPTIONS = True
+DJANGO_REDIS_LOG_IGNORED_EXCEPTIONS = True
+
+# Structured logging with a request-correlation id on every line (see
+# api/middleware.py) — "an important operation should have a
+# request/correlation ID" (COMMERCIAL_READINESS_AUDIT.md §30). JSON in
+# production (machine-parseable by whatever log aggregator ingests
+# stdout); a readable plain format in local dev. Deliberately left at the
+# root/console level only — no file handlers, since containers should log
+# to stdout and let the platform collect it, not manage their own log
+# files.
+LOGGING = {
+    "version": 1,
+    "disable_existing_loggers": False,
+    "filters": {
+        "request_id": {"()": "api.middleware.RequestIDLogFilter"},
+    },
+    "formatters": {
+        "plain": {
+            "format": "%(asctime)s %(levelname)s [%(request_id)s] %(name)s: %(message)s",
+        },
+        "json": {
+            "()": "api.logging_formatters.JSONLogFormatter",
+        },
+    },
+    "handlers": {
+        "console": {
+            "class": "logging.StreamHandler",
+            "filters": ["request_id"],
+            "formatter": "json" if not DEBUG else "plain",
+        },
+    },
+    "root": {
+        "handlers": ["console"],
+        "level": os.getenv("LOG_LEVEL", "INFO"),
+    },
+    "loggers": {
+        "django.server": {"handlers": ["console"], "level": "INFO", "propagate": False},
+    },
+}
+
+# Sentry — error tracking. A no-op until SENTRY_DSN is set (no account
+# required for local dev or to run the test suite). Captures both web
+# request errors and Celery task failures (ai_jobs.tasks.run_ai_job's own
+# try/except already turns most AI-provider failures into a handled
+# AIJob.status="failed" rather than an exception, so what reaches Sentry
+# from that integration is genuinely unexpected worker crashes, not
+# routine provider hiccups).
+SENTRY_DSN = os.getenv("SENTRY_DSN", "")
+if SENTRY_DSN:
+    import sentry_sdk
+    from sentry_sdk.integrations.celery import CeleryIntegration
+    from sentry_sdk.integrations.django import DjangoIntegration
+    from sentry_sdk.integrations.logging import LoggingIntegration
+
+    sentry_sdk.init(
+        dsn=SENTRY_DSN,
+        environment=os.getenv("SENTRY_ENVIRONMENT", "production" if not DEBUG else "development"),
+        integrations=[
+            DjangoIntegration(),
+            CeleryIntegration(),
+            LoggingIntegration(level=None, event_level="ERROR"),
+        ],
+        traces_sample_rate=float(os.getenv("SENTRY_TRACES_SAMPLE_RATE", "0.0")),
+        send_default_pii=False,
+    )

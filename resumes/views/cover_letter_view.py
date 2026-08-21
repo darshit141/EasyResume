@@ -1,6 +1,3 @@
-import logging
-
-from django.db import DatabaseError
 from django.http import Http404
 from drf_spectacular.utils import OpenApiResponse, extend_schema
 from rest_framework import status
@@ -8,7 +5,9 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from billing.models import AIUsageLog
+from ai_jobs.models import AIJob
+from ai_jobs.serializers import AIJobSerializer
+from ai_jobs.services import enqueue_ai_job
 from billing.services.entitlements_service import (
     EntitlementsService,
     PlanRestrictionError,
@@ -22,13 +21,10 @@ from resumes.serializers.cover_letter_serializer import (
     CoverLetterResponseSerializer,
 )
 from resumes.serializers.job_curation_serializer import APIErrorSerializer
-from resumes.services.cover_letter_service import CoverLetterService
-from resumes.services.job_curation_service import JobCurationDatabaseError
-from resumes.services.llm_service import LLMServiceError, resolve_provider
+from resumes.services.job_gap_analysis_service import JobRequirementsUnavailableError
+from resumes.services.llm_service import resolve_provider
 from resumes.views.error_responses import llm_error_response
 from resumes.views.job_curation_view import CURATION_ID_PARAMETER
-
-logger = logging.getLogger(__name__)
 
 
 @extend_schema(
@@ -44,13 +40,19 @@ logger = logging.getLogger(__name__)
         "it still fails). Referring to the job posting's own wording is "
         "allowed; inventing candidate facts is not.\n\n"
         "`regenerate: false` (the default) returns a previously generated "
-        "letter without spending an AI call. A failed regeneration never "
-        "destroys the stored letter."
+        "letter without spending an AI call (200, synchronous). Otherwise "
+        "this runs on a background worker: returns **202** with an AI job "
+        "id — poll `GET /api/ai-jobs/{id}/` until `status` is `completed`; "
+        "`result` then carries the same bundle the 200 response below "
+        "documents. A failed regeneration never destroys the stored letter."
     ),
     parameters=[CURATION_ID_PARAMETER],
     request=CoverLetterGenerateRequestSerializer,
     responses={
         status.HTTP_200_OK: CoverLetterResponseSerializer,
+        status.HTTP_202_ACCEPTED: OpenApiResponse(
+            description="Queued for background generation. Poll GET /api/ai-jobs/{id}/ for the result."
+        ),
         status.HTTP_402_PAYMENT_REQUIRED: OpenApiResponse(
             description="Plan limit reached. code: PLAN_LIMIT_REACHED | UPGRADE_REQUIRED."
         ),
@@ -89,32 +91,24 @@ class CoverLetterGenerateAPIView(APIView):
         except PlanRestrictionError as exc:
             return plan_restriction_response(exc)
 
-        try:
-            curation = CoverLetterService(provider=provider).generate(
-                user=request.user, curation_id=curation_id, regenerate=regenerate
-            )
-        except JobResumeCuration.DoesNotExist as exc:
-            raise Http404("Job curation analysis not found.") from exc
-        except LLMServiceError as exc:
-            return llm_error_response(exc)
-        except JobCurationDatabaseError as exc:
-            return Response(
-                {"detail": exc.message, "code": exc.code},
-                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            )
-        except DatabaseError:
-            logger.exception("Unexpected database error during cover letter generation.")
-            return Response(
-                {"detail": "Unable to save cover letter data.", "code": "DATABASE_ERROR"},
-                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            )
+        if not will_call_ai:
+            # Cached path: no AI call, stays fully synchronous.
+            return Response(CoverLetterResponseSerializer(curation).data)
 
-        if will_call_ai:
-            EntitlementsService.record_ai_usage(
-                request.user, AIUsageLog.ACTION_COVER_LETTER, resolve_provider(provider)
-            )
+        if curation.status != "completed" or not curation.analysis_data:
+            return llm_error_response(JobRequirementsUnavailableError())
 
-        return Response(CoverLetterResponseSerializer(curation).data)
+        # Runs on a background worker instead of blocking the request — see
+        # ai_jobs.tasks._run_cover_letter_generation, which stores the same
+        # response bundle this endpoint used to return directly.
+        job = enqueue_ai_job(
+            request.user,
+            AIJob.JOB_TYPE_COVER_LETTER_GENERATION,
+            provider=resolve_provider(provider),
+            curation=curation,
+            input_params={"regenerate": regenerate},
+        )
+        return Response(AIJobSerializer(job).data, status=status.HTTP_202_ACCEPTED)
 
 
 @extend_schema(

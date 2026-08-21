@@ -11,16 +11,21 @@ from authentication.models import User
 
 
 class ReadinessCheckTests(TestCase):
+    @patch("api.views.readiness._check_redis", return_value=True)
     @patch("api.views.readiness.get_llm_service")
-    def test_ready_when_the_configured_model_is_available(self, get_llm_service):
+    def test_ready_when_database_redis_and_llm_are_all_available(self, get_llm_service, _check_redis):
         response = self.client.get("/api/ready/", HTTP_HOST="localhost")
 
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.json(), {"status": "READY", "llm": "AVAILABLE"})
+        self.assertEqual(
+            response.json(),
+            {"status": "READY", "database": "OK", "redis": "OK", "llm": "AVAILABLE"},
+        )
         get_llm_service.return_value.check_model_available.assert_called_once()
 
+    @patch("api.views.readiness._check_redis", return_value=True)
     @patch("api.views.readiness.get_llm_service")
-    def test_not_ready_when_the_configured_model_is_missing(self, get_llm_service):
+    def test_not_ready_when_the_configured_model_is_missing(self, get_llm_service, _check_redis):
         get_llm_service.return_value.check_model_available.side_effect = LLMModelUnavailableError()
 
         response = self.client.get("/api/ready/", HTTP_HOST="localhost")
@@ -28,8 +33,24 @@ class ReadinessCheckTests(TestCase):
         self.assertEqual(response.status_code, 503)
         self.assertEqual(
             response.json(),
-            {"status": "NOT_READY", "llm": "LLM_MODEL_UNAVAILABLE"},
+            {"status": "NOT_READY", "database": "OK", "redis": "OK", "llm": "LLM_MODEL_UNAVAILABLE"},
         )
+
+    @patch("api.views.readiness._check_redis", return_value=False)
+    @patch("api.views.readiness.get_llm_service")
+    def test_not_ready_when_redis_is_unreachable(self, get_llm_service, _check_redis):
+        response = self.client.get("/api/ready/", HTTP_HOST="localhost")
+
+        self.assertEqual(response.status_code, 503)
+        self.assertEqual(response.json()["redis"], "UNREACHABLE")
+
+
+class HealthCheckTests(TestCase):
+    def test_healthy_when_database_is_reachable(self):
+        response = self.client.get("/api/health/", HTTP_HOST="localhost")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), {"status": "OK", "database": "OK"})
 
 
 class SystemConfigurationTests(TestCase):
@@ -123,6 +144,27 @@ class AdminPanelAPITests(APITestCase):
 
         # Verify helper uses DB value
         self.assertEqual(get_config_value("LLM_TIMEOUT"), 120)
+
+    def test_free_tier_limits_are_admin_configurable(self):
+        # billing.entitlements.entitlements_for() reads these two keys via
+        # get_config_value() so they can be retuned without a redeploy —
+        # they must actually be reachable through this endpoint, or that
+        # live-tuning support is dead code no admin can ever use.
+        self.client.force_authenticate(user=self.admin_user)
+
+        response = self.client.get(reverse("admin-config"))
+        keys = {item["key"] for item in response.json()}
+        self.assertIn("FREE_AI_CALLS_PER_MONTH", keys)
+        self.assertIn("FREE_TAILORED_RESUMES_PER_MONTH", keys)
+
+        update_data = [
+            {"key": "FREE_AI_CALLS_PER_MONTH", "value": "50"},
+            {"key": "FREE_TAILORED_RESUMES_PER_MONTH", "value": "5"},
+        ]
+        response = self.client.put(reverse("admin-config"), update_data, format="json")
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(get_config_value("FREE_AI_CALLS_PER_MONTH"), 50)
+        self.assertEqual(get_config_value("FREE_TAILORED_RESUMES_PER_MONTH"), 5)
 
     def test_config_reset(self):
         SystemConfiguration.objects.create(

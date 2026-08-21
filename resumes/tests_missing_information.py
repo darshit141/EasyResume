@@ -11,6 +11,7 @@ from resumes.tests_job_curation import (
     gap_analysis,
     gap_item,
     job_analysis_for,
+    poll_job,
 )
 from resumes.tests_resume_curation import (
     CANDIDATE_PARSED_DATA,
@@ -201,9 +202,13 @@ class MissingInformationReviewAPITests(TestCase):
             "resumes.services.job_gap_analysis_service.get_llm_service",
             return_value=fresh_gap_llm,
         ):
-            refreshed_response = self.client.get(
+            queued_response = self.client.get(
                 f"{self.missing_info_url(curation)}?regenerate=true"
             )
+        self.assertEqual(queued_response.status_code, 202)
+        job_status = poll_job(self.client, queued_response)
+        self.assertEqual(job_status.data["status"], "completed")
+        refreshed_response = self.client.get(self.missing_info_url(curation))
 
         self.assertEqual(refreshed_response.status_code, 200)
         self.assertEqual(refreshed_response.data["missing_requirements"], [])
@@ -237,9 +242,11 @@ class MissingInformationReviewAPITests(TestCase):
                 format="json",
             )
 
-        self.assertEqual(tailored_response.status_code, 200)
+        self.assertEqual(tailored_response.status_code, 202)
+        tailored_job_status = poll_job(self.client, tailored_response)
+        self.assertEqual(tailored_job_status.data["status"], "completed")
         self.assertEqual(
-            tailored_response.data["tailored_resume_data"]["skills"], ["AWS"]
+            tailored_job_status.data["result"]["tailored_resume_data"]["skills"], ["AWS"]
         )
 
     def test_no_ai_generated_information_is_written_into_profile(self):
@@ -268,7 +275,8 @@ class MissingInformationReviewAPITests(TestCase):
                 self.tailored_resume_url(curation), {}, format="json"
             )
 
-        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.status_code, 202)
+        poll_job(self.client, response)
         resume.refresh_from_db()
         self.assertEqual(resume.parsed_data, {"skills": ["Java"]})
 
@@ -297,7 +305,9 @@ class MissingInformationReviewAPITests(TestCase):
                 self.tailored_resume_url(curation), {}, format="json"
             )
 
-        self.assertEqual(response.status_code, 502)
+        self.assertEqual(response.status_code, 202)
+        job_status = poll_job(self.client, response)
+        self.assertEqual(job_status.data["status"], "failed")
         resume.refresh_from_db()
         curation.refresh_from_db()
         self.assertEqual(resume.parsed_data, {"skills": ["Java"]})

@@ -26,6 +26,9 @@ urlpatterns = [
     # Blog / marketing APIs
     path("api/blog/", include("blog.urls")),
 
+    # Background AI job status polling
+    path("api/ai-jobs/", include("ai_jobs.urls")),
+
     # OpenAPI Schema
     path(
         "api/schema/",

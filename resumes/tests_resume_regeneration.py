@@ -7,7 +7,13 @@ from rest_framework.test import APIClient
 from authentication.models import User
 from resumes.models import JobResumeCuration, JobResumeCurationVersion, Resume
 from resumes.services.llm_service import LLMModelUnavailableError
-from resumes.tests_job_curation import VALID_REQUEST, gap_analysis, gap_item, job_analysis_for
+from resumes.tests_job_curation import (
+    VALID_REQUEST,
+    gap_analysis,
+    gap_item,
+    job_analysis_for,
+    poll_job,
+)
 from resumes.tests_resume_curation import QueuedLLMService, valid_tailored_result
 
 
@@ -80,6 +86,20 @@ class JobResumeCurationRegenerationAPITests(TestCase):
     def edit_url(self):
         return "/api/resumes/edit/"
 
+    def _unwrap(self, response):
+        """Generation now runs on a background worker (202 + job id) instead
+        of blocking the request. These two helpers are only ever used on the
+        success path, so this polls the job to completion and reshapes the
+        response to look exactly like the old synchronous 200 response —
+        letting the rest of this file's assertions stay unchanged, since
+        they're about resume-regeneration correctness, not the transport."""
+        self.assertEqual(response.status_code, 202, response.data)
+        job_status = poll_job(self.client, response)
+        self.assertEqual(job_status.data["status"], "completed", job_status.data)
+        response.status_code = 200
+        response.data = job_status.data["result"]
+        return response
+
     def generate(self, curation, tailored_result, payload=None):
         self.authenticate()
         fake_llm = QueuedLLMService(results=[tailored_result])
@@ -90,7 +110,7 @@ class JobResumeCurationRegenerationAPITests(TestCase):
             response = self.client.post(
                 self.tailored_url(curation), payload or {}, format="json"
             )
-        return response, fake_llm
+        return self._unwrap(response), fake_llm
 
     def regenerate(self, curation, tailored_result, gap_result):
         self.authenticate()
@@ -106,7 +126,7 @@ class JobResumeCurationRegenerationAPITests(TestCase):
             response = self.client.post(
                 self.tailored_url(curation), {"regenerate": True}, format="json"
             )
-        return response, tailored_llm, gap_llm
+        return self._unwrap(response), tailored_llm, gap_llm
 
     def test_regeneration_with_unchanged_profile_creates_a_consistent_new_version(self):
         self.create_resume({"skills": ["Java"]})
@@ -347,7 +367,9 @@ class JobResumeCurationRegenerationAPITests(TestCase):
                 self.tailored_url(curation), {"regenerate": True}, format="json"
             )
 
-        self.assertEqual(failed_response.status_code, 503)
+        self.assertEqual(failed_response.status_code, 202)
+        failed_job_status = poll_job(self.client, failed_response)
+        self.assertEqual(failed_job_status.data["status"], "failed")
         curation.refresh_from_db()
         self.assertEqual(curation.tailored_resume_data["skills"], ["Java"])
         self.assertEqual(

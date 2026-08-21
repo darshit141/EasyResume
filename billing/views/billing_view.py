@@ -1,13 +1,21 @@
+import json
 import logging
 
-from drf_spectacular.utils import OpenApiResponse, extend_schema
+from django.utils import timezone
+from drf_spectacular.utils import OpenApiParameter, OpenApiResponse, extend_schema
 from rest_framework import status
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from billing.models import Subscription
-from billing.plans import PLANS
+from billing.models import Subscription, StripeWebhookEvent
+from billing.plans import (
+    PLANS,
+    SUPPORTED_CURRENCIES,
+    format_price_display,
+    get_price,
+    normalize_currency,
+)
 from billing.serializers.billing_serializer import (
     BillingErrorSerializer,
     CheckoutRequestSerializer,
@@ -38,22 +46,70 @@ def _coupon_error_response(exc):
     return Response({"detail": str(exc), "code": exc.code}, status=status_code)
 
 
+def _safe_event_payload(event):
+    """Best-effort JSON-safe snapshot of a Stripe event for the audit log —
+    never allowed to break webhook processing itself if it can't serialize
+    cleanly."""
+    try:
+        return json.loads(json.dumps(dict(event), default=str))
+    except Exception:
+        return {"id": event.get("id"), "type": event.get("type")}
+
+
+def _price_option(plan_id, currency, period):
+    price = get_price(plan_id, currency, period)
+    if price is None:
+        return None
+    return {
+        "amount_cents": price["amount_cents"],
+        "display": format_price_display(price["amount_cents"], currency, period),
+        "purchasable": bool(price["stripe_price_id"]),
+    }
+
+
+def _resolve_plan(plan, currency):
+    return {
+        "id": plan["id"],
+        "name": plan["name"],
+        "features": plan["features"],
+        "currency": currency,
+        "monthly": _price_option(plan["id"], currency, "monthly"),
+        "annual": _price_option(plan["id"], currency, "annual"),
+    }
+
+
 @extend_schema(
     tags=["Billing"],
     summary="List available plans",
     description=(
-        "Returns the plan catalog (id, name, price, features). Public — no "
-        "authentication required, so a pricing page can be shown to signed-out "
-        "visitors. `purchasable` is false for any plan whose Stripe Price ID "
-        "hasn't been configured yet — the frontend should disable checkout for it."
+        "Returns the plan catalog (id, name, features, monthly/annual "
+        "price) resolved to one currency. Public — no authentication "
+        "required, so a pricing page can be shown to signed-out visitors. "
+        "`purchasable` is false for any plan/currency/period combination "
+        "whose Stripe Price ID hasn't been configured yet — the frontend "
+        "should disable checkout for it. Prices exclude VAT; VAT (where "
+        "applicable) is calculated at Stripe Checkout based on the "
+        "customer's billing location."
     ),
+    parameters=[
+        OpenApiParameter(
+            name="currency",
+            type=str,
+            location=OpenApiParameter.QUERY,
+            required=False,
+            enum=list(SUPPORTED_CURRENCIES),
+            description="EUR or GBP. Defaults to EUR; an unsupported value also falls back to EUR.",
+        )
+    ],
     responses={status.HTTP_200_OK: PlanSerializer(many=True)},
 )
 class PlanListAPIView(APIView):
     permission_classes = [AllowAny]
 
     def get(self, request):
-        return Response(PlanSerializer(PLANS, many=True).data)
+        currency = normalize_currency(request.query_params.get("currency"))
+        resolved = [_resolve_plan(plan, currency) for plan in PLANS]
+        return Response(PlanSerializer(resolved, many=True).data)
 
 
 @extend_schema(
@@ -118,7 +174,10 @@ class CreateCheckoutSessionAPIView(APIView):
 
         try:
             checkout_url = StripeService.create_checkout_session(
-                request.user, serializer.validated_data["plan_id"]
+                request.user,
+                serializer.validated_data["plan_id"],
+                currency=normalize_currency(serializer.validated_data.get("currency")),
+                billing_period=serializer.validated_data["billing_period"],
             )
         except BillingError as exc:
             return _billing_error_response(exc)
@@ -177,7 +236,43 @@ class StripeWebhookAPIView(APIView):
             logger.warning("Rejected Stripe webhook: invalid signature or payload.")
             return Response({"detail": "Invalid signature."}, status=status.HTTP_400_BAD_REQUEST)
 
-        SubscriptionSyncService.apply_event(event)
+        event_id = event.get("id") or ""
+        event_type = event.get("type", "")
+
+        webhook_event = None
+        if event_id:
+            webhook_event, created = StripeWebhookEvent.objects.get_or_create(
+                stripe_event_id=event_id,
+                defaults={"event_type": event_type, "payload": _safe_event_payload(event)},
+            )
+            if not created and webhook_event.processed_at is not None:
+                # Stripe redelivers events (timeouts, manual replay). Without
+                # this, a redelivered checkout.session.completed or
+                # invoice.paid would reprocess business logic that already
+                # ran once — a real correctness risk, not just noise.
+                logger.info(
+                    "Ignoring already-processed Stripe webhook event %s (%s)",
+                    event_id, event_type,
+                )
+                return Response({"received": True, "duplicate": True})
+
+        try:
+            SubscriptionSyncService.apply_event(event)
+        except Exception as exc:
+            logger.exception("Failed to apply Stripe webhook event %s (%s)", event_id, event_type)
+            if webhook_event is not None:
+                webhook_event.error = str(exc)[:1000]
+                webhook_event.save(update_fields=["error"])
+            # 500, not 200: Stripe only retries on a non-2xx response, and a
+            # genuine processing failure should be retried rather than
+            # silently dropped.
+            return Response({"detail": "Failed to process event."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+        if webhook_event is not None:
+            webhook_event.processed_at = timezone.now()
+            webhook_event.error = ""
+            webhook_event.save(update_fields=["processed_at", "error"])
+
         return Response({"received": True})
 
 

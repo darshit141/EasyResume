@@ -264,7 +264,7 @@ class JobCurationFromUrlAPITests(TestCase):
     def test_url_alone_is_accepted_and_imported(self):
         response, mock_fetch = self.post({"curate_resume": True, "job_url": JOB_URL})
 
-        self.assertEqual(response.status_code, 201)
+        self.assertEqual(response.status_code, 202)
         mock_fetch.assert_called_once_with(JOB_URL)
         curation = JobResumeCuration.objects.get()
         self.assertEqual(curation.job_title, "Senior Backend Engineer")
@@ -275,7 +275,7 @@ class JobCurationFromUrlAPITests(TestCase):
         # The user has seen the posting; their text wins and no fetch happens.
         response, mock_fetch = self.post({**VALID_REQUEST, "job_url": JOB_URL})
 
-        self.assertEqual(response.status_code, 201)
+        self.assertEqual(response.status_code, 202)
         mock_fetch.assert_not_called()
         self.assertEqual(JobResumeCuration.objects.get().job_title, VALID_REQUEST["job_title"])
 
@@ -284,7 +284,7 @@ class JobCurationFromUrlAPITests(TestCase):
             "curate_resume": True, "job_url": JOB_URL, "job_title": "My Own Title",
         })
 
-        self.assertEqual(response.status_code, 201)
+        self.assertEqual(response.status_code, 202)
         self.assertEqual(JobResumeCuration.objects.get().job_title, "My Own Title")
 
     def test_neither_url_nor_description_is_rejected(self):

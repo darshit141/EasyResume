@@ -2,12 +2,15 @@
 
 from abc import ABC, abstractmethod
 import json
+import logging
 import socket
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 from django.conf import settings
 from api.utils.config import get_config_value
+
+logger = logging.getLogger(__name__)
 
 
 class LLMServiceError(Exception):
@@ -417,6 +420,49 @@ class GeminiLLMService(LLMService):
         return True
 
 
+class FallbackLLMService(LLMService):
+    """Wraps a primary provider client with a fallback: if the primary is
+    unreachable, times out, or has no model configured, retries the exact
+    same call against the fallback provider once before giving up.
+    Transparent to every caller — same LLMService interface as any single
+    provider (COMMERCIAL_READINESS_AUDIT.md A5).
+
+    Deliberately does NOT fall back on LLMSchemaValidationError or
+    LLMInvalidResponseError: those mean the provider responded and the
+    *content* didn't pass validation, which is what each AI service's own
+    grounding/retry-with-a-stricter-prompt logic already exists to handle
+    — conflating the two would mask real prompt bugs behind a provider
+    switch instead of surfacing them.
+    """
+
+    def __init__(self, primary, fallback, fallback_provider_name):
+        self.primary = primary
+        self.fallback = fallback
+        self.fallback_provider_name = fallback_provider_name
+        self.used_fallback = False
+
+    def generate_structured(self, prompt, schema):
+        try:
+            return self.primary.generate_structured(prompt, schema)
+        except (LLMSchemaValidationError, LLMInvalidResponseError):
+            raise
+        except LLMServiceError as exc:
+            logger.warning(
+                "Primary AI provider failed (%s); retrying once with fallback provider %s.",
+                exc.code, self.fallback_provider_name,
+            )
+            self.used_fallback = True
+            return self.fallback.generate_structured(prompt, schema)
+
+    def check_model_available(self):
+        try:
+            return self.primary.check_model_available()
+        except (LLMSchemaValidationError, LLMInvalidResponseError):
+            raise
+        except LLMServiceError:
+            return self.fallback.check_model_available()
+
+
 def resolve_provider(provider=None):
     """The same fallback ``get_llm_service`` applies, exposed standalone so a
     view can know *which* provider will actually be used — e.g. to record
@@ -425,22 +471,7 @@ def resolve_provider(provider=None):
     return (provider or provider_default or "ollama").lower()
 
 
-def get_llm_service(provider=None):
-    """Build the requested provider's client without exposing it to controllers.
-
-    ``provider`` lets a single request opt into a specific AI provider
-    (e.g. a user's saved preference); it falls back to the server-wide
-    ``LLM_PROVIDER`` setting when not supplied.
-    """
-    provider = resolve_provider(provider)
-    if provider not in SUPPORTED_PROVIDERS:
-        raise LLMServiceError("Unsupported AI provider.")
-
-    timeout = get_config_value("LLM_TIMEOUT", settings.LLM_TIMEOUT)
-    max_retries = get_config_value("LLM_MAX_RETRIES", settings.LLM_MAX_RETRIES)
-    temperature = get_config_value("LLM_TEMPERATURE", settings.LLM_TEMPERATURE)
-    max_output_tokens = get_config_value("LLM_MAX_OUTPUT_TOKENS", settings.LLM_MAX_OUTPUT_TOKENS)
-
+def _build_client(provider, timeout, max_retries, temperature, max_output_tokens):
     if provider == "groq":
         return GroqLLMService(
             api_key=get_config_value("GROQ_API_KEY", settings.GROQ_API_KEY),
@@ -472,3 +503,44 @@ def get_llm_service(provider=None):
         max_output_tokens=max_output_tokens,
         keep_alive=get_config_value("OLLAMA_KEEP_ALIVE", settings.OLLAMA_KEEP_ALIVE),
     )
+
+
+def get_llm_service(provider=None):
+    """Build the requested provider's client without exposing it to controllers.
+
+    ``provider`` lets a single request opt into a specific AI provider
+    (e.g. a user's saved preference); it falls back to the server-wide
+    ``LLM_PROVIDER`` setting when not supplied.
+
+    When ``provider`` was NOT explicitly requested (the common case — most
+    calls just use the server default) and ``LLM_FALLBACK_PROVIDER`` is
+    configured, the returned client is wrapped so a primary-provider
+    outage automatically retries once against the fallback provider
+    (COMMERCIAL_READINESS_AUDIT.md A5) rather than failing the request
+    outright. An explicitly requested provider is never silently swapped
+    out from under the caller — that would bypass their plan's
+    allowed-provider gate and surprise a user who specifically chose it.
+    """
+    explicit_request = provider is not None
+    resolved_provider = resolve_provider(provider)
+    if resolved_provider not in SUPPORTED_PROVIDERS:
+        raise LLMServiceError("Unsupported AI provider.")
+
+    timeout = get_config_value("LLM_TIMEOUT", settings.LLM_TIMEOUT)
+    max_retries = get_config_value("LLM_MAX_RETRIES", settings.LLM_MAX_RETRIES)
+    temperature = get_config_value("LLM_TEMPERATURE", settings.LLM_TEMPERATURE)
+    max_output_tokens = get_config_value("LLM_MAX_OUTPUT_TOKENS", settings.LLM_MAX_OUTPUT_TOKENS)
+
+    primary = _build_client(resolved_provider, timeout, max_retries, temperature, max_output_tokens)
+
+    fallback_provider = get_config_value("LLM_FALLBACK_PROVIDER", settings.LLM_FALLBACK_PROVIDER)
+    if (
+        not explicit_request
+        and fallback_provider
+        and fallback_provider != resolved_provider
+        and fallback_provider in SUPPORTED_PROVIDERS
+    ):
+        fallback_client = _build_client(fallback_provider, timeout, max_retries, temperature, max_output_tokens)
+        return FallbackLLMService(primary, fallback_client, fallback_provider)
+
+    return primary

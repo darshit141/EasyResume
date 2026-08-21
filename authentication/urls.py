@@ -11,6 +11,10 @@ from authentication.views import (
     ProfileAPIView,
     ChangePasswordAPIView,
     LogoutAPIView,
+    AccountDeletionAPIView,
+    AccountExportAPIView,
+    PolicyAcceptanceAPIView,
+    CookieConsentAPIView,
 )
 
 urlpatterns = [
@@ -63,5 +67,25 @@ urlpatterns = [
         "change-password/",
         ChangePasswordAPIView.as_view(),
         name="change-password",
+    ),
+    path(
+        "account/delete/",
+        AccountDeletionAPIView.as_view(),
+        name="account-delete",
+    ),
+    path(
+        "account/export/",
+        AccountExportAPIView.as_view(),
+        name="account-export",
+    ),
+    path(
+        "policy-acceptance/",
+        PolicyAcceptanceAPIView.as_view(),
+        name="policy-acceptance",
+    ),
+    path(
+        "cookie-consent/",
+        CookieConsentAPIView.as_view(),
+        name="cookie-consent",
     ),
 ]

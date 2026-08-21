@@ -12,6 +12,7 @@ from resumes.tests_job_curation import (
     VALID_REQUEST,
     gap_analysis,
     gap_item,
+    poll_job,
 )
 
 
@@ -157,8 +158,10 @@ class JobResumeCurationGenerateAPITests(TestCase):
 
         response = self.generate(curation, llm_service=fake_llm)
 
-        self.assertEqual(response.status_code, 200)
-        data = response.data["tailored_resume_data"]
+        self.assertEqual(response.status_code, 202)
+        job_status = poll_job(self.client, response)
+        self.assertEqual(job_status.data["status"], "completed")
+        data = job_status.data["result"]["tailored_resume_data"]
         self.assertEqual(data["skills"], ["Java", "Spring Boot", "Kafka"])
         self.assertEqual(
             data["personal_information"]["email"],
@@ -177,8 +180,10 @@ class JobResumeCurationGenerateAPITests(TestCase):
 
         response = self.generate(curation, llm_service=fake_llm)
 
-        self.assertEqual(response.status_code, 200)
-        self.assertIsNone(response.data["version_comparison"])
+        self.assertEqual(response.status_code, 202)
+        job_status = poll_job(self.client, response)
+        self.assertEqual(job_status.data["status"], "completed")
+        self.assertIsNone(job_status.data["result"]["version_comparison"])
 
     def test_regeneration_produces_a_factual_non_ai_comparison(self):
         self.create_resume()
@@ -189,7 +194,8 @@ class JobResumeCurationGenerateAPITests(TestCase):
             skills=["Java", "Spring Boot"],
         )])
         first_response = self.generate(curation, llm_service=first_llm)
-        self.assertEqual(first_response.status_code, 200)
+        self.assertEqual(first_response.status_code, 202)
+        poll_job(self.client, first_response)
 
         regenerated_result = valid_tailored_result(
             skills=["Java", "Spring Boot", "Docker"],
@@ -212,8 +218,10 @@ class JobResumeCurationGenerateAPITests(TestCase):
                 self.url(curation), {"regenerate": True}, format="json"
             )
 
-        self.assertEqual(response.status_code, 200)
-        comparison = response.data["version_comparison"]
+        self.assertEqual(response.status_code, 202)
+        job_status = poll_job(self.client, response)
+        self.assertEqual(job_status.data["status"], "completed")
+        comparison = job_status.data["result"]["version_comparison"]
         self.assertIsNotNone(comparison)
         self.assertEqual(comparison["previous_version"], 1)
         self.assertIn("Docker", comparison["newly_matched_requirements"])
@@ -230,9 +238,10 @@ class JobResumeCurationGenerateAPITests(TestCase):
 
         response = self.generate(curation, llm_service=fake_llm)
 
-        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.status_code, 202)
+        job_status = poll_job(self.client, response)
         self.assertEqual(
-            set(response.data["tailored_resume_data"]["skills"]),
+            set(job_status.data["result"]["tailored_resume_data"]["skills"]),
             {"Java", "Spring Boot", "Kafka"},
         )
 
@@ -246,8 +255,9 @@ class JobResumeCurationGenerateAPITests(TestCase):
 
         response = self.generate(curation, llm_service=fake_llm)
 
-        self.assertEqual(response.status_code, 200)
-        self.assertNotIn("AWS", response.data["tailored_resume_data"]["skills"])
+        self.assertEqual(response.status_code, 202)
+        job_status = poll_job(self.client, response)
+        self.assertNotIn("AWS", job_status.data["result"]["tailored_resume_data"]["skills"])
 
     def test_ai_inventing_a_skill_is_rejected(self):
         self.create_resume()
@@ -257,8 +267,10 @@ class JobResumeCurationGenerateAPITests(TestCase):
 
         response = self.generate(curation, llm_service=fake_llm)
 
-        self.assertEqual(response.status_code, 502)
-        self.assertEqual(response.data["code"], "RESUME_CURATION_GROUNDING_FAILED")
+        self.assertEqual(response.status_code, 202)
+        job_status = poll_job(self.client, response)
+        self.assertEqual(job_status.data["status"], "failed")
+        self.assertEqual(job_status.data["error_code"], "RESUME_CURATION_GROUNDING_FAILED")
         self.assertEqual(fake_llm.call_count, 2)
         curation.refresh_from_db()
         self.assertEqual(curation.tailored_resume_data, {})
@@ -280,8 +292,10 @@ class JobResumeCurationGenerateAPITests(TestCase):
 
         response = self.generate(curation, llm_service=fake_llm)
 
-        self.assertEqual(response.status_code, 502)
-        self.assertEqual(response.data["code"], "RESUME_CURATION_GROUNDING_FAILED")
+        self.assertEqual(response.status_code, 202)
+        job_status = poll_job(self.client, response)
+        self.assertEqual(job_status.data["status"], "failed")
+        self.assertEqual(job_status.data["error_code"], "RESUME_CURATION_GROUNDING_FAILED")
         curation.refresh_from_db()
         self.assertEqual(curation.tailored_resume_data, {})
 
@@ -301,8 +315,10 @@ class JobResumeCurationGenerateAPITests(TestCase):
 
         response = self.generate(curation, llm_service=fake_llm)
 
-        self.assertEqual(response.status_code, 502)
-        self.assertEqual(response.data["code"], "RESUME_CURATION_GROUNDING_FAILED")
+        self.assertEqual(response.status_code, 202)
+        job_status = poll_job(self.client, response)
+        self.assertEqual(job_status.data["status"], "failed")
+        self.assertEqual(job_status.data["error_code"], "RESUME_CURATION_GROUNDING_FAILED")
 
     def test_ai_changing_dates_is_rejected(self):
         self.create_resume()
@@ -320,8 +336,10 @@ class JobResumeCurationGenerateAPITests(TestCase):
 
         response = self.generate(curation, llm_service=fake_llm)
 
-        self.assertEqual(response.status_code, 502)
-        self.assertEqual(response.data["code"], "RESUME_CURATION_GROUNDING_FAILED")
+        self.assertEqual(response.status_code, 202)
+        job_status = poll_job(self.client, response)
+        self.assertEqual(job_status.data["status"], "failed")
+        self.assertEqual(job_status.data["error_code"], "RESUME_CURATION_GROUNDING_FAILED")
 
     def test_ai_changing_years_of_experience_is_rejected(self):
         self.create_resume()
@@ -339,8 +357,10 @@ class JobResumeCurationGenerateAPITests(TestCase):
 
         response = self.generate(curation, llm_service=fake_llm)
 
-        self.assertEqual(response.status_code, 502)
-        self.assertEqual(response.data["code"], "RESUME_CURATION_GROUNDING_FAILED")
+        self.assertEqual(response.status_code, 202)
+        job_status = poll_job(self.client, response)
+        self.assertEqual(job_status.data["status"], "failed")
+        self.assertEqual(job_status.data["error_code"], "RESUME_CURATION_GROUNDING_FAILED")
 
     def test_ai_changing_employer_is_rejected(self):
         self.create_resume()
@@ -358,8 +378,10 @@ class JobResumeCurationGenerateAPITests(TestCase):
 
         response = self.generate(curation, llm_service=fake_llm)
 
-        self.assertEqual(response.status_code, 502)
-        self.assertEqual(response.data["code"], "RESUME_CURATION_GROUNDING_FAILED")
+        self.assertEqual(response.status_code, 202)
+        job_status = poll_job(self.client, response)
+        self.assertEqual(job_status.data["status"], "failed")
+        self.assertEqual(job_status.data["error_code"], "RESUME_CURATION_GROUNDING_FAILED")
 
     def test_retry_recovers_after_stricter_prompt(self):
         self.create_resume()
@@ -370,10 +392,12 @@ class JobResumeCurationGenerateAPITests(TestCase):
 
         response = self.generate(curation, llm_service=fake_llm)
 
-        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.status_code, 202)
+        job_status = poll_job(self.client, response)
+        self.assertEqual(job_status.data["status"], "completed")
         self.assertEqual(fake_llm.call_count, 2)
         self.assertEqual(
-            response.data["tailored_resume_data"]["skills"],
+            job_status.data["result"]["tailored_resume_data"]["skills"],
             ["Java", "Spring Boot", "Kafka"],
         )
 
@@ -386,8 +410,10 @@ class JobResumeCurationGenerateAPITests(TestCase):
 
         response = self.generate(curation, llm_service=fake_llm)
 
-        self.assertEqual(response.status_code, 502)
-        self.assertEqual(response.data["code"], "LLM_SCHEMA_VALIDATION_FAILED")
+        self.assertEqual(response.status_code, 202)
+        job_status = poll_job(self.client, response)
+        self.assertEqual(job_status.data["status"], "failed")
+        self.assertEqual(job_status.data["error_code"], "LLM_SCHEMA_VALIDATION_FAILED")
         self.assertEqual(fake_llm.call_count, 1)
 
     def test_ai_unavailable_returns_service_error(self):
@@ -397,8 +423,10 @@ class JobResumeCurationGenerateAPITests(TestCase):
 
         response = self.generate(curation, llm_service=fake_llm)
 
-        self.assertEqual(response.status_code, 503)
-        self.assertEqual(response.data["code"], "LLM_MODEL_UNAVAILABLE")
+        self.assertEqual(response.status_code, 202)
+        job_status = poll_job(self.client, response)
+        self.assertEqual(job_status.data["status"], "failed")
+        self.assertEqual(job_status.data["error_code"], "LLM_MODEL_UNAVAILABLE")
         curation.refresh_from_db()
         self.assertEqual(curation.tailored_resume_error_code, "LLM_MODEL_UNAVAILABLE")
 
@@ -424,7 +452,9 @@ class JobResumeCurationGenerateAPITests(TestCase):
         curation = self.create_curation()
         first_llm = QueuedLLMService(results=[valid_tailored_result()])
         first_response = self.generate(curation, llm_service=first_llm)
-        self.assertEqual(first_response.status_code, 200)
+        self.assertEqual(first_response.status_code, 202)
+        first_job_status = poll_job(self.client, first_response)
+        self.assertEqual(first_job_status.data["status"], "completed")
         self.assertEqual(first_llm.call_count, 1)
 
         cached_llm = QueuedLLMService(results=[])
@@ -433,7 +463,7 @@ class JobResumeCurationGenerateAPITests(TestCase):
         self.assertEqual(cached_llm.call_count, 0)
         self.assertEqual(
             cached_response.data["tailored_resume_data"]["skills"],
-            first_response.data["tailored_resume_data"]["skills"],
+            first_job_status.data["result"]["tailored_resume_data"]["skills"],
         )
 
         regenerated_result = valid_tailored_result(
@@ -454,11 +484,13 @@ class JobResumeCurationGenerateAPITests(TestCase):
             regenerate_response = self.client.post(
                 self.url(curation), {"regenerate": True}, format="json"
             )
-        self.assertEqual(regenerate_response.status_code, 200)
+        self.assertEqual(regenerate_response.status_code, 202)
+        regenerate_job_status = poll_job(self.client, regenerate_response)
+        self.assertEqual(regenerate_job_status.data["status"], "completed")
         self.assertEqual(regenerate_llm.call_count, 1)
         self.assertEqual(fresh_gap_llm.call_count, 1)
         self.assertEqual(
-            regenerate_response.data["tailored_resume_data"]["skills"],
+            regenerate_job_status.data["result"]["tailored_resume_data"]["skills"],
             ["Java", "Kafka"],
         )
 
@@ -494,7 +526,8 @@ class TailoredResumeDocxExportAPITests(TestCase):
         curation = self.create_curation()
         fake_llm = QueuedLLMService(results=[valid_tailored_result()])
         generate_response = self.generate(curation, llm_service=fake_llm)
-        self.assertEqual(generate_response.status_code, 200)
+        self.assertEqual(generate_response.status_code, 202)
+        poll_job(self.client, generate_response)
 
         response = self.client.get(self.export_url(curation))
 

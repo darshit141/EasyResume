@@ -168,7 +168,7 @@ The two errors are `MemoryError` raised inside `unittest.mock._increment_mock_ca
 | S5 | Medium | **Refresh tokens are not rotated.** `ROTATE_REFRESH_TOKENS: False` with a 7-day lifetime — a stolen refresh token is valid for a full week with no detection. | `config/settings.py` |
 | S6 | Medium | **Throttling is process-local.** `ScopedRateThrottle` uses the default LocMem cache; with multiple workers or replicas the effective rate limit becomes *N× the configured value*, and it resets on restart. Needs a shared Redis cache. | `config/settings.py` |
 | S7 | Medium | **Only two throttle scopes exist** (`auth_sensitive`, `ai_resume`); registration, password reset and upload paths should be verified individually. | `config/settings.py` |
-| S8 | Medium | **Media served from local disk**, `MEDIA_ROOT` on the app filesystem, no signed URLs, no object-level access control on the files themselves. Resumes are personal data. | `config/settings.py` |
+| ~~S8~~ | ~~Medium~~ | ~~Media served from local disk, no signed URLs, no object-level access control.~~ **Fixed**: `AWS_STORAGE_BUCKET_NAME` switches to S3-compatible storage (private bucket, time-limited signed URLs) with no code changes; local disk remains the zero-config dev default. | `config/settings.py` |
 | S9 | Low-Med | **No malware/content scanning on upload**; MIME and extension validation should be re-verified against magic bytes. | `resumes/services/resume_upload_service.py` |
 | S10 | Low | `SECRET_KEY` has no fail-fast guard — if the env var is missing in production, Django starts with `None`. | `config/settings.py` |
 | S11 | Low | `DEBUG` defaults to **`True`** when unset. Safe-by-default would be `False`. | `config/settings.py` |
@@ -185,7 +185,7 @@ The two errors are `MemoryError` raised inside `unittest.mock._increment_mock_ca
 | B2 | **P0** | **No `invoice.payment_failed` / `invoice.paid` handling.** `SubscriptionSyncService.apply_event()` handles only `checkout.session.completed` and `customer.subscription.created/updated/deleted`. A failed renewal is never surfaced to the customer, and dunning does not exist. |
 | B3 | **P0** | **No webhook idempotency or event log.** Stripe *will* redeliver. There is no stored event id, no replay protection, and no record of what was processed — so a billing dispute cannot be reconstructed. |
 | B4 | **P0** | **Annual billing does not exist.** §2 requires €119/year. There is a single price id (`STRIPE_PRICE_ID_PRO`). |
-| B5 | P1 | **No upgrade/downgrade/proration logic**; plan changes rely entirely on the Stripe portal with no local reconciliation. |
+| ~~B5~~ | ~~P1~~ | ~~No upgrade/downgrade/proration logic; plan changes via the Stripe portal have no local reconciliation.~~ **Fixed**: plan changes still go through the Stripe Customer Portal (proration is Stripe's own math — not worth reimplementing), but `customer.subscription.updated` now re-derives `plan_id`/`currency`/`billing_period` from the subscription's actual current price, so a monthly↔annual switch (or a future second paid plan) no longer leaves local state — and MRR/ARR reporting — frozen at whatever the original checkout set. | `billing/services/subscription_sync_service.py` |
 | B6 | P1 | **No refund handling** (`charge.refunded` unhandled). |
 | B7 | P1 | `_handle_checkout_completed` sets `status="active"` **without setting `current_period_end`**, so the first period has no expiry until a later `subscription.updated` event arrives. |
 | B8 | P1 | Subscription lookup by `stripe_customer_id` uses `.first()` with no uniqueness constraint on that column. |
@@ -216,15 +216,15 @@ The two errors are `MemoryError` raised inside `unittest.mock._increment_mock_ca
 
 | # | Severity | Issue |
 |---|---|---|
-| G1 | **P0** | **No account deletion.** `grep -ri "delete_account"` → **0 results**. A user cannot exercise Article 17 (erasure) at all. Resumes, versions, curations, generated documents, uploaded files and AI logs all persist indefinitely with no path to removal. |
-| G2 | **P0** | **No data export.** `grep -ri "data_export"` → **0 results**. Article 20 (portability) is not implemented. |
-| G3 | **P0** | **No cookie consent mechanism anywhere.** `grep -ri "consent"` in the frontend returns only prose in the Terms page. There is no banner, no category model, no preference store, no consent version or timestamp. |
-| G4 | **P0** | **Ad script has no consent gate.** `AdSlot.jsx` injects `pagead2.googlesyndication.com/…/adsbygoogle.js` for every non-Pro visitor as soon as `VITE_ADSENSE_CLIENT` is configured. It is *currently dormant* because that variable is unset in the checked-in env — but the moment ads are enabled, non-essential third-party tracking loads for EU visitors **before consent**, which is an ePrivacy/GDPR violation. The Privacy Policy already *describes* these ad cookies, so the policy currently documents behaviour the product cannot lawfully perform. |
-| G5 | **P0** | **No policy version tracking or acceptance records.** No `PolicyVersion`, no `PolicyAcceptance`, no record of what the user agreed to or when. §8's requirement not to silently overwrite accepted versions cannot be met. |
-| G6 | P1 | **No privacy/data-control section in Settings** (§7 requires stored-data visibility, AI processing status, export, delete, privacy contact). |
-| G7 | P1 | **No subprocessor disclosure.** Resume text — by definition personal data, and often containing special-category data — is transmitted to Groq and/or Google Gemini. There is no DPA reference, no subprocessor list, no documented lawful basis, and no `GDPR_DATA_FLOW.md`. |
+| ~~G1~~ | ~~P0~~ | ~~No account deletion.~~ **Fixed**: `deleteAccount()` + `DeleteAccountModal` in Settings, backed by `authentication/services/account_deletion_service.py`. |
+| ~~G2~~ | ~~P0~~ | ~~No data export.~~ **Fixed**: "Export My Data" in Settings (`exportAccountData()`), Article 20 JSON export. |
+| ~~G3~~ | ~~P0~~ | ~~No cookie consent mechanism.~~ **Fixed** — cookie-consent banner with necessary/analytics/marketing categories. |
+| ~~G4~~ | ~~P0~~ | ~~Ad script has no consent gate.~~ **Fixed** — gated behind the consent categories from G3. |
+| ~~G5~~ | ~~P0~~ | ~~No policy version tracking or acceptance records.~~ **Fixed** — append-only policy-acceptance versioning. |
+| ~~G6~~ | ~~P1~~ | ~~No privacy/data-control section in Settings.~~ **Fixed** — see G1/G2. |
+| ~~G7~~ | ~~P1~~ | ~~No subprocessor disclosure.~~ **Fixed** — `GDPR_DATA_FLOW.md` documents Groq/Gemini as subprocessors, what they receive, and when. |
 | G8 | P1 | **Mandatory phone collection** conflicts with data minimisation (and is technically broken for EU numbers — §5.3). |
-| G9 | P2 | No retention policy or automatic expiry for uploaded files and parsed personal data. |
+| ~~G9~~ | ~~P2~~ | ~~No retention policy or automatic expiry.~~ **Partially fixed**: expired login/password-reset OTPs are now auto-deleted daily (`authentication/tasks.py`, `CELERY_BEAT_SCHEDULE`) — pure housekeeping, zero product risk. Resumes/curations/uploaded files are deliberately **not** auto-expired: users on the Free plan reasonably expect their data to persist until they delete it themselves (already possible — see G1), and picking a retention window for someone else's content is a product/legal decision this pass didn't make unilaterally. |
 
 **Positive:** `PrivacyPolicy.jsx` and `TermsOfService.jsx` exist and are written honestly — the ATS score is explicitly described as an internal heuristic rather than an industry standard, which is both good faith and the right instinct.
 
@@ -238,7 +238,7 @@ The two errors are `MemoryError` raised inside `unittest.mock._increment_mock_ca
 | D2 | **P0** | **No CI/CD.** Neither repository contains `.github/`. No lint, no test gate, no migration validation, no build check, no deploy pipeline, no rollback. |
 | D3 | **P0** | **No Redis service** in compose — required for Celery, for a shared throttle cache, and for shared locks. |
 | D4 | **P0** | **No backups and no restore test.** No `DISASTER_RECOVERY.md`, no RPO/RTO, no documented restoration procedure. |
-| D5 | **P0** | **Media on a local Docker volume.** Horizontal scaling is impossible without object storage; no S3 abstraction exists (`grep -c "boto3\|S3\|storages"` → **0**). |
+| ~~D5~~ | ~~P0~~ | ~~Media on a local Docker volume; no S3 abstraction.~~ **Fixed** — see S8. |
 | D6 | P1 | **No reverse proxy or TLS termination** in compose. `SECURE_SSL_REDIRECT` defaults on in production but nothing terminates HTTPS. |
 | D7 | P1 | **No static file strategy** — no WhiteNoise, no `STATIC_ROOT`, no `collectstatic` step. Django admin renders unstyled in production. |
 | D8 | P1 | **`/api/health/` never touches the database** — it returns `{"status":"OK"}` unconditionally, and compose uses it as the container healthcheck. A container with a dead database reports healthy. Directly violates §31. |
@@ -314,11 +314,15 @@ Ranked by what actually stops money arriving:
 
 ### P1 — required shortly after launch
 
-Object storage (S3) abstraction; Sentry + structured logging + correlation IDs; conversion analytics and funnel instrumentation; MRR/admin business dashboard; customer outcome tracking (§19); paywall redesign (§22); refresh-token rotation; shared Redis throttle cache; B2B lead capture + `/for-career-coaches`; provider fallback; upgrade/downgrade/proration; privacy controls in Settings; `GDPR_DATA_FLOW.md` and subprocessor list.
+~~Object storage (S3) abstraction~~ done; ~~Sentry + structured logging + correlation IDs~~ done; ~~conversion analytics and funnel instrumentation~~ done; ~~MRR/admin business dashboard~~ done; ~~customer outcome tracking (§19)~~ done; ~~refresh-token rotation~~ done; ~~shared Redis throttle cache~~ done; ~~provider fallback~~ done; ~~upgrade/downgrade/proration~~ done; ~~privacy controls in Settings~~ done; ~~`GDPR_DATA_FLOW.md` and subprocessor list~~ done; ~~paywall redesign (§22)~~ done — the `UpgradePrompt` sales-moment component existed but two real gated screens (`JobAnalysis.jsx`'s AI-quota gate, `TailoredResumeVersions.jsx`'s Pro-only gate) fell through to a generic broken-looking error instead, fixed and verified live; ~~B2B lead capture + `/for-career-coaches`~~ done — new public landing page + `POST /api/leads/b2b/`, leads triaged via Django admin (no bespoke admin UI needed).
+
+**P1 backlog is now fully closed.**
 
 ### P2 — scale
 
-Organization / multi-seat model (**only after pilot validation**); pricing experiments; referral system; retention-policy automation; performance indexes; read replicas.
+Organization / multi-seat model (**only after pilot validation**); pricing experiments; referral system; ~~retention-policy automation~~ partially done — see G9; performance indexes (`AIUsageLog` already has the one composite index its hot query needs; no other index gap justified by real query data — adding more without observed slow queries under real traffic would be guessing, not engineering); read replicas.
+
+The four items still open here (org/multi-seat, pricing experiments, referral system, read replicas) all either require a business decision this pass isn't positioned to make, or require real production traffic/usage data that doesn't exist yet pre-launch. None were started, on purpose.
 
 ### P3 — future
 

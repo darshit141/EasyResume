@@ -9,7 +9,7 @@ import stripe
 from django.conf import settings
 
 from billing.models import Subscription
-from billing.plans import get_plan
+from billing.plans import DEFAULT_CURRENCY, get_plan, get_price
 
 
 class BillingError(Exception):
@@ -32,7 +32,7 @@ class PlanNotFoundError(BillingError):
 
 class PlanNotPurchasableError(BillingError):
     code = "PLAN_NOT_PURCHASABLE"
-    message = "This plan is not yet available for purchase (no Stripe price configured)."
+    message = "This plan is not yet available for purchase in that currency/billing period (no Stripe price configured)."
 
 
 class NoStripeCustomerError(BillingError):
@@ -62,28 +62,57 @@ class StripeService:
         return customer.id
 
     @classmethod
-    def create_checkout_session(cls, user, plan_id):
+    def create_checkout_session(cls, user, plan_id, currency=DEFAULT_CURRENCY, billing_period="monthly"):
         cls._require_configured()
 
         plan = get_plan(plan_id)
         if plan is None:
             raise PlanNotFoundError()
-        if not plan["stripe_price_id"]:
+        price = get_price(plan_id, currency, billing_period)
+        if not price or not price["stripe_price_id"]:
             raise PlanNotPurchasableError()
 
         subscription, _ = Subscription.objects.get_or_create(user=user)
         customer_id = cls.get_or_create_customer(user, subscription)
 
-        session = stripe.checkout.Session.create(
+        session_kwargs = dict(
             customer=customer_id,
             mode="subscription",
-            line_items=[{"price": plan["stripe_price_id"], "quantity": 1}],
+            line_items=[{"price": price["stripe_price_id"], "quantity": 1}],
             success_url=f"{settings.FRONTEND_URL}/app/settings?checkout=success",
             cancel_url=f"{settings.FRONTEND_URL}/app/settings?checkout=canceled",
             client_reference_id=str(user.id),
-            metadata={"user_id": str(user.id), "plan_id": plan_id},
+            metadata={
+                "user_id": str(user.id),
+                "plan_id": plan_id,
+                "currency": currency,
+                "billing_period": billing_period,
+            },
         )
+        # Stripe Tax must be turned on in the Stripe Dashboard before this can
+        # be enabled — until then, enabling it makes checkout-session
+        # creation fail outright. Off by default so existing setups aren't
+        # broken by this change; flip on once Stripe Tax is configured for
+        # correct VAT handling across EU/UK customers.
+        if settings.STRIPE_AUTOMATIC_TAX_ENABLED:
+            session_kwargs["automatic_tax"] = {"enabled": True}
+            session_kwargs["billing_address_collection"] = "required"
+
+        session = stripe.checkout.Session.create(**session_kwargs)
         return session.url
+
+    @classmethod
+    def get_subscription(cls, stripe_subscription_id):
+        cls._require_configured()
+        return stripe.Subscription.retrieve(stripe_subscription_id)
+
+    @classmethod
+    def cancel_subscription(cls, stripe_subscription_id):
+        """Cancels immediately (not at period end) — used for account
+        deletion, where the account won't exist to keep being billed
+        against regardless of what the current period already paid for."""
+        cls._require_configured()
+        return stripe.Subscription.cancel(stripe_subscription_id)
 
     @classmethod
     def create_portal_session(cls, user):

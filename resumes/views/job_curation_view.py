@@ -21,13 +21,19 @@ from resumes.serializers.job_curation_serializer import (
     JobUrlPreviewRequestSerializer,
     JobUrlPreviewResponseSerializer,
 )
-from resumes.services.job_gap_analysis_service import JobGapAnalysisService
+from resumes.services.job_gap_analysis_service import (
+    JobGapAnalysisService,
+    JobRequirementsUnavailableError,
+)
 from resumes.services.job_curation_service import (
     JobCurationDatabaseError,
     JobCurationService,
 )
 from resumes.services.job_url_fetch_service import JobUrlFetchError, fetch_job_posting
 from resumes.services.llm_service import SUPPORTED_PROVIDERS, LLMServiceError, resolve_provider
+from ai_jobs.models import AIJob
+from ai_jobs.serializers import AIJobSerializer
+from ai_jobs.services import enqueue_ai_job
 from billing.models import AIUsageLog
 from billing.services.entitlements_service import (
     EntitlementsService,
@@ -319,27 +325,33 @@ class JobCurationCreateAPIView(APIView):
             )
 
         try:
-            curation = JobCurationService(provider=data.get("ai_provider")).create_analysis(
+            curation = JobCurationService(provider=data.get("ai_provider")).create_pending(
                 user=request.user,
                 job_title=job_title,
                 job_description=job_description,
                 job_url=job_url,
                 resume_id=data.get("resume_id"),
             )
-        except LLMServiceError as exc:
-            return llm_error_response(exc)
         except JobCurationDatabaseError as exc:
             return Response(
                 {"detail": exc.message, "code": exc.code},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
 
-        EntitlementsService.record_ai_usage(
-            request.user, AIUsageLog.ACTION_JOB_ANALYSIS, resolve_provider(data.get("ai_provider"))
+        # The AI call itself now runs on a background worker (see
+        # ai_jobs.tasks._run_job_analysis) instead of blocking this request
+        # — a slow/unavailable provider can no longer tie up a Gunicorn
+        # worker. AIUsageLog is recorded by the worker only on success, same
+        # "only successful calls count against quota" rule as before.
+        job = enqueue_ai_job(
+            request.user,
+            AIJob.JOB_TYPE_JOB_ANALYSIS,
+            provider=resolve_provider(data.get("ai_provider")),
+            curation=curation,
         )
         return Response(
-            JobResumeCurationSerializer(curation).data,
-            status=status.HTTP_201_CREATED,
+            AIJobSerializer(job).data,
+            status=status.HTTP_202_ACCEPTED,
         )
 
 
@@ -520,6 +532,21 @@ class JobGapAnalysisAPIView(APIView):
         except PlanRestrictionError as exc:
             return plan_restriction_response(exc)
 
+        if not already_has_gap_analysis:
+            curation = JobResumeCuration.objects.filter(id=curation_id, user=request.user).first()
+            if curation is None:
+                raise Http404("Job curation analysis not found.")
+            if curation.status != "completed" or not curation.analysis_data:
+                return llm_error_response(JobRequirementsUnavailableError())
+
+            job = enqueue_ai_job(
+                request.user,
+                AIJob.JOB_TYPE_GAP_ANALYSIS,
+                provider=resolve_provider(provider),
+                curation=curation,
+            )
+            return Response(AIJobSerializer(job).data, status=status.HTTP_202_ACCEPTED)
+
         try:
             curation = JobGapAnalysisService(provider=provider).get_or_create_gap_analysis(
                 request.user,
@@ -530,8 +557,4 @@ class JobGapAnalysisAPIView(APIView):
         except LLMServiceError as exc:
             return llm_error_response(exc)
 
-        if not already_has_gap_analysis:
-            EntitlementsService.record_ai_usage(
-                request.user, AIUsageLog.ACTION_GAP_ANALYSIS, resolve_provider(provider)
-            )
         return Response(JobGapAnalysisResponseSerializer(curation).data)

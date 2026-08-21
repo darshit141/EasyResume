@@ -123,3 +123,72 @@ class ResumeUploadService:
             )
 
         return resume
+
+    @staticmethod
+    def create_pending(user, validated_data):
+        """The async counterpart to `upload_resume`, used for every real AI
+        provider (not `standard`): text extraction is fast and non-AI, so it
+        stays synchronous here — a corrupt/unreadable file is rejected
+        immediately rather than accepted into a queue that would only fail
+        later. Only the AI parse itself (see `run_parse`) moves to a
+        background worker."""
+        uploaded_file = validated_data["file"]
+
+        try:
+            extracted_text = TextExtractor.extract_text(uploaded_file)
+        except Exception as exc:
+            logger.exception("Failed to extract text from uploaded resume.")
+            raise ResumeTextExtractionError() from exc
+
+        if len(extracted_text.strip()) < _MIN_EXTRACTED_CHARS:
+            logger.info(
+                "Rejected upload: extracted only %d characters of text.",
+                len(extracted_text.strip()),
+            )
+            raise ResumeTextExtractionError()
+
+        uploaded_file.seek(0)
+        resume = Resume.objects.create(
+            user=user,
+            file=uploaded_file,
+            original_filename=uploaded_file.name,
+            status="processing",
+        )
+        return resume
+
+    @staticmethod
+    def run_parse(resume, provider=None):
+        """Runs the AI parse for an already-created, status="processing"
+        resume. Called by the background worker (ai_jobs.tasks) — never
+        call this directly from a view. On any failure the resume is marked
+        status="failed" (never left stuck at "processing") and the original
+        exception re-raised so the AIJob row records the same error code."""
+        try:
+            with resume.file.open("rb") as fh:
+                try:
+                    extracted_text = TextExtractor.extract_text(fh)
+                except LLMServiceError:
+                    raise
+                except Exception as exc:
+                    logger.exception("Failed to re-extract text for queued resume parse.")
+                    raise ResumeTextExtractionError() from exc
+
+            parsed_data = ResumeParser.parse(extracted_text, provider=provider)
+            ats_score = ATSScorer.calculate_score(parsed_data)
+        except Exception:
+            resume.status = "failed"
+            resume.save(update_fields=["status", "updated_at"])
+            raise
+
+        with transaction.atomic():
+            resume.parsed_data = parsed_data
+            resume.ats_score = ats_score
+            resume.status = "completed"
+            resume.save(update_fields=["parsed_data", "ats_score", "status", "updated_at"])
+            ResumeVersion.objects.create(
+                resume=resume,
+                version=1,
+                parsed_data=resume.parsed_data,
+                ats_score=resume.ats_score,
+            )
+        return resume

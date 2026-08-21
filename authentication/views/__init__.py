@@ -7,3 +7,7 @@ from .verify_login_otp_view import VerifyLoginOTPAPIView
 from .profile_view import ProfileAPIView
 from .change_password_view import ChangePasswordAPIView
 from .logout_view import LogoutAPIView
+from .account_deletion_view import AccountDeletionAPIView
+from .account_export_view import AccountExportAPIView
+from .policy_acceptance_view import PolicyAcceptanceAPIView
+from .cookie_consent_view import CookieConsentAPIView

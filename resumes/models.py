@@ -105,6 +105,7 @@ class JobResumeCuration(models.Model):
     """
 
     STATUS_CHOICES = [
+        ("queued", "Queued"),
         ("processing", "Processing"),
         ("completed", "Completed"),
         ("failed", "Failed"),
