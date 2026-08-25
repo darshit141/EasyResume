@@ -154,6 +154,11 @@ class SubscriptionSyncService:
         ).first()
         if subscription is None:
             return
+
+        from billing.services.dunning_mailer import send_payment_failed_email
+
+        send_payment_failed_email(subscription.user, invoice)
+
         logger.warning(
             "Invoice payment failed for user_id=%s stripe_customer_id=%s invoice=%s",
             subscription.user_id,

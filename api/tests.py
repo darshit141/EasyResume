@@ -145,6 +145,26 @@ class AdminPanelAPITests(APITestCase):
         # Verify helper uses DB value
         self.assertEqual(get_config_value("LLM_TIMEOUT"), 120)
 
+    def test_provider_api_keys_are_not_admin_configurable(self):
+        # These must never be settable through SystemConfiguration — that
+        # table's masking only hides the value in API responses, not what's
+        # actually stored in the database, so routing a real provider key
+        # through it means a DB leak exposes plaintext credentials.
+        self.client.force_authenticate(user=self.admin_user)
+
+        response = self.client.get(reverse("admin-config"))
+        keys = {item["key"] for item in response.json()}
+        self.assertNotIn("GROQ_API_KEY", keys)
+        self.assertNotIn("GEMINI_API_KEY", keys)
+
+        response = self.client.put(
+            reverse("admin-config"),
+            [{"key": "GROQ_API_KEY", "value": "gsk_should_not_be_settable"}],
+            format="json",
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertFalse(SystemConfiguration.objects.filter(key="GROQ_API_KEY").exists())
+
     def test_free_tier_limits_are_admin_configurable(self):
         # billing.entitlements.entitlements_for() reads these two keys via
         # get_config_value() so they can be retuned without a redeploy —

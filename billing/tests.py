@@ -427,6 +427,36 @@ class SubscriptionSyncServiceTests(TestCase):
 
         self.assertEqual(Subscription.objects.get(stripe_customer_id="cus_123").status, "active")
 
+    def test_invoice_payment_failed_emails_the_customer(self):
+        from django.core import mail
+
+        Subscription.objects.create(user=self.user, stripe_customer_id="cus_123", status="active")
+
+        event = {
+            "type": "invoice.payment_failed",
+            "data": {"object": {
+                "customer": "cus_123", "id": "in_123",
+                "hosted_invoice_url": "https://invoice.stripe.com/i/acct_123/test_abc",
+            }},
+        }
+        SubscriptionSyncService.apply_event(event)
+
+        self.assertEqual(len(mail.outbox), 1)
+        self.assertEqual(mail.outbox[0].to, [self.user.email])
+        self.assertIn("didn't go through", mail.outbox[0].subject)
+        self.assertIn("https://invoice.stripe.com/i/acct_123/test_abc", mail.outbox[0].body)
+
+    def test_invoice_payment_failed_for_unknown_customer_sends_no_email(self):
+        from django.core import mail
+
+        event = {
+            "type": "invoice.payment_failed",
+            "data": {"object": {"customer": "cus_unknown", "id": "in_123"}},
+        }
+        SubscriptionSyncService.apply_event(event)
+
+        self.assertEqual(len(mail.outbox), 0)
+
     def test_invoice_paid_recovers_a_past_due_subscription(self):
         Subscription.objects.create(user=self.user, stripe_customer_id="cus_123", status="past_due")
 

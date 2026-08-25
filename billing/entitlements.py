@@ -36,6 +36,13 @@ FREE_ENTITLEMENTS = {
     "allowed_ai_providers": ["ollama", "standard", "groq", "gemini"],
     "docx_export": False,
     "tailored_resume_version_history": False,
+    # Adopted, not a placeholder: free-tier ads offset AI compute cost for
+    # the non-paying cohort without touching paying users (Pro is ads:
+    # False below) and without hiding the free tier's actual usefulness
+    # behind a paywall. Standard freemium-with-ads pattern; revisit only if
+    # ad revenue turns out not to be worth the UX cost once there's real
+    # traffic data. Actually serving ads still requires a real AdSense
+    # publisher id (VITE_ADSENSE_CLIENT) — this flag is dormant until then.
     "ads": True,
 }
 

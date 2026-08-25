@@ -1,10 +1,25 @@
 """The plan catalog — centralized so pricing can change (amounts, adding a
 currency, adding a billing period) without touching any other file.
 
-Pro's EUR/GBP amounts below are the audit's starting hypothesis
-(COMMERCIAL_READINESS_AUDIT.md §2: ~€14.99/mo, €119/yr) — planning
-benchmarks, not a reviewed business decision. Override any of them via env
-without a code change.
+Pro's EUR/GBP amounts below are the adopted launch pricing, not a
+placeholder (COMMERCIAL_READINESS_AUDIT.md's original starting hypothesis,
+now finalized):
+
+  - EUR 14.99/mo, GBP 12.99/mo — deliberately below premium competitors in
+    this category (comparable AI resume tools commonly run $20-29/mo).
+    This is penetration pricing: a new entrant with no reviews or brand
+    equity yet competes on price first and moves upmarket once retention
+    and NPS data justify it, not before.
+  - EUR 119/yr, GBP 99/yr — roughly a 34-36% discount over paying monthly,
+    intentionally more generous than a typical "two months free" (~17%)
+    structure. For a pre-revenue product, converting a monthly signup into
+    an annual one is worth more than the margin given up: it locks in cash
+    up front and meaningfully lowers early-churn risk while the product is
+    still building a track record.
+
+Override any of them via env without a code change — revisit both numbers
+once there's real conversion/retention data to react to, not on a
+schedule.
 
 `stripe_price_id` is intentionally blank by default: a real Price object
 must be created in the Stripe Dashboard for each (currency, billing

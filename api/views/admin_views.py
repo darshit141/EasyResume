@@ -10,6 +10,15 @@ from authentication.models import User
 from api.models import SystemConfiguration
 from api.serializers.admin_serializers import AdminUserSerializer
 
+# GROQ_API_KEY / GEMINI_API_KEY are deliberately NOT in this list. The
+# masking below (is_sensitive_key) only hides a value in the API response —
+# it does nothing to protect what's actually sitting in the database, so
+# routing live provider keys through SystemConfiguration meant a DB leak
+# (backup, dump, SQL injection) exposed real credentials in plaintext.
+# Every other genuine secret in this app (STRIPE_SECRET_KEY, SECRET_KEY, DB
+# credentials) is env-var-only for the same reason; these two now match.
+# Rotating a key requires an env change + redeploy instead of a UI click —
+# a deliberate trade against live plaintext key storage.
 DEFAULT_CONFIGS = [
     {
         "key": "LLM_PROVIDER",
@@ -60,12 +69,6 @@ DEFAULT_CONFIGS = [
         "description": "Model retention time in Ollama (e.g. 30m)",
     },
     {
-        "key": "GROQ_API_KEY",
-        "category": "llm",
-        "value_type": "string",
-        "description": "Groq API Key",
-    },
-    {
         "key": "GROQ_MODEL",
         "category": "llm",
         "value_type": "string",
@@ -76,12 +79,6 @@ DEFAULT_CONFIGS = [
         "category": "llm",
         "value_type": "string",
         "description": "Base URL for Groq API",
-    },
-    {
-        "key": "GEMINI_API_KEY",
-        "category": "llm",
-        "value_type": "string",
-        "description": "Google Gemini API Key",
     },
     {
         "key": "GEMINI_MODEL",

@@ -19,6 +19,10 @@ staticfiles/
 # Logs
 *.log
 
+# Celery beat's local runtime state (schedule persistence) - not portable
+# between machines, regenerated automatically on first run.
+celerybeat-schedule*
+
 # OS
 .DS_Store
 Thumbs.db
