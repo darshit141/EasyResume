@@ -229,7 +229,15 @@ class StripeWebhookAPIView(APIView):
     def post(self, request):
         signature = request.META.get("HTTP_STRIPE_SIGNATURE", "")
         try:
-            event = StripeService.construct_webhook_event(request.body, signature)
+            # construct_webhook_event returns a StripeObject in production
+            # (it supports [] access but not .get(), which this view and
+            # SubscriptionSyncService both use) — .to_dict() normalizes it
+            # once, here at the boundary, so nothing downstream needs its
+            # own StripeObject-vs-dict workaround. Tolerates a plain dict
+            # too (already has no .to_dict) for tests that construct one
+            # directly.
+            raw_event = StripeService.construct_webhook_event(request.body, signature)
+            event = raw_event.to_dict() if hasattr(raw_event, "to_dict") else raw_event
         except BillingError as exc:
             return _billing_error_response(exc)
         except Exception:

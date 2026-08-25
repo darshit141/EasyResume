@@ -1,5 +1,6 @@
 from unittest.mock import MagicMock, patch
 
+import stripe
 from django.test import TestCase, override_settings
 from rest_framework.test import APIClient
 
@@ -19,13 +20,21 @@ class PlanListAPITests(TestCase):
         self.assertEqual(ids, {"free", "pro"})
 
     def test_plan_without_a_configured_price_is_not_purchasable(self):
+        # Explicitly blank every Pro Price ID for this test rather than
+        # relying on the ambient environment never having one configured —
+        # a real STRIPE_PRICE_ID_PRO_* in .env (e.g. for live Stripe
+        # testing) would otherwise make this test's assumption false.
         client = APIClient()
-        response = client.get("/api/billing/plans/")
+        with patch.dict(PLANS_BY_ID["pro"]["prices"]["EUR"]["monthly"], {"stripe_price_id": ""}), \
+             patch.dict(PLANS_BY_ID["pro"]["prices"]["EUR"]["annual"], {"stripe_price_id": ""}), \
+             patch.dict(PLANS_BY_ID["pro"]["prices"]["GBP"]["monthly"], {"stripe_price_id": ""}), \
+             patch.dict(PLANS_BY_ID["pro"]["prices"]["GBP"]["annual"], {"stripe_price_id": ""}):
+            response = client.get("/api/billing/plans/")
 
-        for plan in response.data:
-            if plan["id"] == "pro":
-                self.assertFalse(plan["monthly"]["purchasable"])
-                self.assertFalse(plan["annual"]["purchasable"])
+            for plan in response.data:
+                if plan["id"] == "pro":
+                    self.assertFalse(plan["monthly"]["purchasable"])
+                    self.assertFalse(plan["annual"]["purchasable"])
 
     def test_free_plan_has_no_prices(self):
         client = APIClient()
@@ -196,6 +205,39 @@ class StripeWebhookAPITests(TestCase):
             HTTP_STRIPE_SIGNATURE="bad-signature",
         )
         self.assertEqual(response.status_code, 400)
+
+    @override_settings(STRIPE_SECRET_KEY="sk_test_fake", STRIPE_WEBHOOK_SECRET="whsec_fake")
+    def test_real_stripe_event_object_is_handled_not_just_a_plain_dict(self):
+        # Every other test in this class mocks construct_event to return a
+        # plain dict, which is NOT what the real Stripe SDK returns (it
+        # returns a stripe.Event/StripeObject, which supports [] access but
+        # not .get()) — that mismatch let a real bug ship: every actual
+        # Stripe webhook 500'd on `event.get("id")` despite this whole test
+        # class being green. stripe.Event.construct_from reproduces the
+        # real SDK's return type, so this test would have caught it.
+        client = APIClient()
+        real_shaped_event = stripe.Event.construct_from(
+            {
+                "id": "evt_real_shape",
+                "type": "checkout.session.completed",
+                "data": {"object": {"id": "cs_test", "customer": "cus_test", "metadata": {}}},
+            },
+            "sk_test_fake",
+        )
+        with patch("billing.services.stripe_service.stripe.Webhook.construct_event", return_value=real_shaped_event), \
+             patch("billing.views.billing_view.SubscriptionSyncService.apply_event") as mock_apply:
+            response = client.post(
+                "/api/billing/webhook/", data=b"{}", content_type="application/json",
+                HTTP_STRIPE_SIGNATURE="valid-looking-signature",
+            )
+
+        self.assertEqual(response.status_code, 200)
+        # apply_event must receive a plain dict (matching every other
+        # sync-service test's fixtures), not the raw StripeObject.
+        called_with = mock_apply.call_args[0][0]
+        self.assertIsInstance(called_with, dict)
+        self.assertEqual(called_with["id"], "evt_real_shape")
+        self.assertEqual(called_with["type"], "checkout.session.completed")
 
     @override_settings(STRIPE_SECRET_KEY="sk_test_fake", STRIPE_WEBHOOK_SECRET="whsec_fake")
     def test_valid_event_is_applied_and_returns_200(self):
