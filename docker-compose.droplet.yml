@@ -1,0 +1,108 @@
+# Deployment compose file for a single small VPS (used for the low-budget
+# DigitalOcean droplet deployment — a full stack in ~500MB RAM, isolated
+# from anything else already running on the box, no managed database
+# services). This is NOT the same as docker-compose.yml at the repo root,
+# which assumes its own dedicated infrastructure (managed Postgres/Redis,
+# more generous resource limits) — this one is deliberately tight.
+#
+# Expected layout: this file lives in a parent directory with both repos
+# cloned as siblings —
+#   /opt/intelliresume/
+#     docker-compose.droplet.yml  (this file, as docker-compose.yml)
+#     .env                        (see .env.example in this repo)
+#     backend/                    (this repo, branch darshit)
+#     frontend/                   (intelliresume-react, branch darshit —
+#                                   needs its Dockerfile.prod + nginx.conf)
+#
+# Memory budget (~500MB total, tuned for a 1-2GB droplet already running
+# other things): postgres 150m, redis 40m, backend 200m (2 gunicorn
+# workers), worker 80m, beat 100m, frontend/nginx 20m. If `beat` OOM-loops
+# (exit 137) on a fresh deploy, it needs the full 100m to load the Django
+# app for its scheduler — don't shrink it further without checking
+# `docker stats` first.
+#
+# No HTTPS/domain here on purpose — reachable over plain HTTP on port 8090
+# via the droplet's IP. Add a real domain + TLS (e.g. via the shared
+# system nginx's SNI-routing stream{} block, see the other sites' configs
+# for the pattern) once one is ready to point at this deployment.
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: intelliresume
+      POSTGRES_USER: intelliresume
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    mem_limit: 150m
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U intelliresume"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    mem_limit: 40m
+    command: redis-server --maxmemory 30mb --maxmemory-policy allkeys-lru
+
+  backend:
+    build:
+      context: ./backend
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: postgres://intelliresume:${POSTGRES_PASSWORD}@postgres:5432/intelliresume
+      REDIS_URL: redis://redis:6379/0
+    command: gunicorn --bind 0.0.0.0:8000 --workers 2 --timeout 60 config.wsgi:application
+    mem_limit: 200m
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  worker:
+    build:
+      context: ./backend
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: postgres://intelliresume:${POSTGRES_PASSWORD}@postgres:5432/intelliresume
+      REDIS_URL: redis://redis:6379/0
+    command: celery -A config worker --loglevel=info --concurrency=1
+    mem_limit: 80m
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  beat:
+    build:
+      context: ./backend
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: postgres://intelliresume:${POSTGRES_PASSWORD}@postgres:5432/intelliresume
+      REDIS_URL: redis://redis:6379/0
+    command: celery -A config beat --loglevel=info
+    mem_limit: 100m
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile.prod
+    restart: unless-stopped
+    ports:
+      - "8090:80"
+    mem_limit: 20m
+    depends_on:
+      - backend
+
+volumes:
+  pgdata:
