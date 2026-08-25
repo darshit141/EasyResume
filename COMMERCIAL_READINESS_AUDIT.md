@@ -320,9 +320,15 @@ Ranked by what actually stops money arriving:
 
 ### P2 — scale
 
-Organization / multi-seat model (**only after pilot validation**); pricing experiments; referral system; ~~retention-policy automation~~ partially done — see G9; performance indexes (`AIUsageLog` already has the one composite index its hot query needs; no other index gap justified by real query data — adding more without observed slow queries under real traffic would be guessing, not engineering); read replicas.
+~~retention-policy automation~~ partially done — see G9; performance indexes (`AIUsageLog` already has the one composite index its hot query needs; no other index gap justified by real query data — adding more without observed slow queries under real traffic would be guessing, not engineering); read replicas (still correctly deferred — no production traffic yet to justify one).
 
-The four items still open here (org/multi-seat, pricing experiments, referral system, read replicas) all either require a business decision this pass isn't positioned to make, or require real production traffic/usage data that doesn't exist yet pre-launch. None were started, on purpose.
+Three items below were explicit business decisions, made deliberately rather than left as unreviewed placeholders. Deciding not to build something is still a decision — spreading engineering effort across three unvalidated bets pre-launch is worse capital allocation than saying no to all three and revisiting each on its own trigger.
+
+**Resume/file retention window — decided: no automatic deletion.** Self-service delete (G1) already satisfies GDPR Article 17; nothing here is legally required beyond that. Resumes are KB-sized text/docx — storage cost is immaterial at any realistic near-term scale, so there's no cost lever to pull yet either. An inactivity-based auto-purge risks deleting an infrequent-but-real user's data (someone job-hunting who logs back in every few months) for a savings that doesn't matter. Revisit only if storage cost becomes material at real scale, or a specific jurisdiction mandates a retention limit — neither is true today.
+
+**Referral system — decided: not yet.** A referral program amplifies existing retention; it's worthless as a growth lever without retention data to amplify, and its reward economics (credits/free months against real revenue) can't be sized responsibly with zero subscriber history to base them on. Revisit after ~60-90 days of real Pro subscriber renewal data shows what's actually worth incentivizing.
+
+**Multi-seat/org model — decided: not yet, pilot manually first.** Building real multi-tenant billing/permissions is the single largest engineering lift of anything decided this pass — committing it without a validated paying buyer is exactly the kind of bet that stalls an early-stage product. The right next step already exists: `/for-career-coaches` (built this session) is the demand-signal channel. If a coach or agency lead actually wants multiple seats, handle it manually — a few individually-managed accounts under one negotiated arrangement — rather than building the product speculatively. Revisit once 2+ real paying customers have been piloted that way and actually want the real thing.
 
 ### P3 — future
 
