@@ -36,10 +36,36 @@ class LoginAPIView(APIView):
                     status=result["status"],
                 )
 
-            # Login successful
+            # Single-factor login (OTP disabled by an admin): tokens are
+            # issued here instead of at the verify-otp step. Same response
+            # shape as VerifyLoginOTPAPIView so the frontend has exactly one
+            # "you are logged in" contract to handle, not two.
+            if not result.get("otp_required", True):
+                user = result["user"]
+                return Response(
+                    {
+                        "success": True,
+                        "otp_required": False,
+                        "message": result["message"],
+                        "email": result["email"],
+                        "access": result["access"],
+                        "refresh": result["refresh"],
+                        "user": {
+                            "id": user.id,
+                            "name": user.name,
+                            "email": user.email,
+                            "phone": user.phone,
+                            "is_staff": user.is_staff,
+                        },
+                    },
+                    status=result["status"],
+                )
+
+            # Two-factor: password accepted, OTP sent, tokens come later.
             return Response(
                 {
                     "success": result["success"],
+                    "otp_required": True,
                     "message": result["message"],
                     "email": result["email"],
                 },

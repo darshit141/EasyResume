@@ -238,6 +238,22 @@ REST_FRAMEWORK = {
     },
 }
 
+# Whether logging in requires a second factor (an emailed OTP) after the
+# password, or the password alone is enough.
+#
+# Defaults to True - two-factor by default, so security never silently
+# drops just because this setting was added. An admin can turn it off from
+# the admin panel (it is read through get_config_value at request time, so
+# the change takes effect immediately without a redeploy), which is the
+# right call for a team that finds the OTP step too much friction, or
+# while no real email provider is configured and codes only reach the
+# server log.
+#
+# Turning this off means a leaked or reused password is enough to take
+# over an account, with no second factor standing in the way - that is the
+# actual trade being made, and it is why the default is on.
+LOGIN_OTP_REQUIRED = os.getenv("LOGIN_OTP_REQUIRED", "True") == "True"
+
 SIMPLE_JWT = {
     "ACCESS_TOKEN_LIFETIME": timedelta(
         minutes=int(os.getenv("ACCESS_TOKEN_LIFETIME", 30))

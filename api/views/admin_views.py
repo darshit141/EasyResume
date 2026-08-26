@@ -116,6 +116,18 @@ DEFAULT_CONFIGS = [
         "value_type": "list",
         "description": "Comma-separated list of domains allowed for job URL parsing",
     },
+    {
+        "key": "LOGIN_OTP_REQUIRED",
+        "category": "security",
+        "value_type": "boolean",
+        "description": (
+            "Require an emailed one-time code after the password when logging in. "
+            "Enabled = two-factor login (recommended). Disabled = the password "
+            "alone signs a user in, so a leaked or reused password is enough to "
+            "take over an account. Takes effect on the next login attempt, no "
+            "redeploy needed."
+        ),
+    },
 ]
 
 
