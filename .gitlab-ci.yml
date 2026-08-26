@@ -37,6 +37,13 @@ test:
     DEBUG: "False"
     ALLOWED_HOSTS: "localhost,127.0.0.1"
     REDIS_URL: "redis://localhost:6379/0"
+    # DEBUG=False turns on the production hardening block in settings.py,
+    # which defaults SECURE_SSL_REDIRECT to True. The test client speaks
+    # plain HTTP, so every request would 301-redirect to HTTPS before ever
+    # reaching a view - the whole suite fails with "301 != 200/202/404".
+    # Testing with DEBUG=False is still right (it exercises what ships);
+    # only the redirect needs disabling.
+    SECURE_SSL_REDIRECT: "False"
   before_script:
     - pip install --no-cache-dir -r requirements.txt
   script:
