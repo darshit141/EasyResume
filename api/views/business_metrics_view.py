@@ -114,6 +114,39 @@ def _outcome_metrics():
         # (not 0) when there's no applied-or-later data yet to divide by.
         "interview_rate": round(interviewed_or_later / applied_or_later, 4) if applied_or_later else None,
         "offer_rate": round(offers / applied_or_later, 4) if applied_or_later else None,
+        **_outcome_capture_metrics(counts),
+    }
+
+
+def _outcome_capture_metrics(counts):
+    """How much outcome data actually exists — the health metric for the
+    follow-up loop itself.
+
+    Every rate above is computed from user-reported outcomes, so they are
+    only as trustworthy as the share of applications that ever got one. A
+    100% interview rate across three reported applications says nothing.
+    This measures the denominator's credibility, and is the number to watch
+    to know whether the nudge emails are working.
+
+    "Resolved" means the application moved past `applied` to a real result.
+    Something still sitting at `applied` is an application whose outcome we
+    simply do not know.
+    """
+    resolved = (
+        counts.get(JobResumeCuration.APPLICATION_STATUS_INTERVIEWING, 0)
+        + counts.get(JobResumeCuration.APPLICATION_STATUS_OFFER, 0)
+        + counts.get(JobResumeCuration.APPLICATION_STATUS_REJECTED, 0)
+    )
+    submitted = counts.get(JobResumeCuration.APPLICATION_STATUS_APPLIED, 0) + resolved
+
+    return {
+        "applications_submitted": submitted,
+        "outcomes_resolved": resolved,
+        "awaiting_outcome": counts.get(JobResumeCuration.APPLICATION_STATUS_APPLIED, 0),
+        "outcome_capture_rate": round(resolved / submitted, 4) if submitted else None,
+        "nudges_sent": JobResumeCuration.objects.filter(
+            outcome_nudge_sent_at__isnull=False
+        ).count(),
     }
 
 

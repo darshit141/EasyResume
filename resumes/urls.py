@@ -5,6 +5,7 @@ from resumes.views.resume_view import ResumeViewAPIView
 from resumes.views.resume_edit_view import ResumeEditAPIView
 from resumes.views.resume_list_view import ResumeListAPIView
 from resumes.views.resume_detail_view import ResumeDetailAPIView
+from resumes.views.outcome_record_view import RecordOutcomeAPIView
 from resumes.views.resume_version_view import ResumeVersionAPIView
 from resumes.views.resume_version_detail_view import (
     ResumeVersionDetailAPIView,
@@ -31,6 +32,11 @@ from resumes.views.tailored_resume_version_view import (
 )
 
 urlpatterns = [
+    path(
+        "outcomes/record/",
+        RecordOutcomeAPIView.as_view(),
+        name="record-application-outcome",
+    ),
     path(
         "upload/",
         ResumeUploadAPIView.as_view(),

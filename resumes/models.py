@@ -230,6 +230,17 @@ class JobResumeCuration(models.Model):
         help_text="The user's own private notes about this application.",
     )
 
+    outcome_nudge_sent_at = models.DateTimeField(
+        null=True,
+        blank=True,
+        help_text=(
+            "When the 'did you hear back?' follow-up was emailed for this "
+            "application. Set so the nudge is only ever sent once - the "
+            "outcome data is only worth collecting if asking for it doesn't "
+            "become a recurring annoyance."
+        ),
+    )
+
     created_at = models.DateTimeField(
         auto_now_add=True,
     )

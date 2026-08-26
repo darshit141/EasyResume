@@ -235,6 +235,10 @@ REST_FRAMEWORK = {
         # Public B2B lead-capture form — a real person fills this out at
         # most once; tight enough to make scripted spam submissions costly.
         "b2b_lead": os.getenv("THROTTLE_B2B_LEAD", "5/min"),
+        # Public, unauthenticated outcome-recording link from the nudge
+        # email. Generous enough for a real person clicking once, capped so
+        # the endpoint cannot be hammered to brute-force tokens.
+        "outcome_record": os.getenv("THROTTLE_OUTCOME_RECORD", "20/min"),
     },
 }
 
@@ -253,6 +257,13 @@ REST_FRAMEWORK = {
 # over an account, with no second factor standing in the way - that is the
 # actual trade being made, and it is why the default is on.
 LOGIN_OTP_REQUIRED = os.getenv("LOGIN_OTP_REQUIRED", "True") == "True"
+
+# How long after an application is marked "applied" to send the single
+# "did you hear back?" follow-up. A week is late enough that something has
+# usually happened, early enough that the candidate still remembers the
+# application. Admin-tunable, because the right window is an empirical
+# question this product does not have the data to answer yet.
+OUTCOME_NUDGE_AFTER_DAYS = int(os.getenv("OUTCOME_NUDGE_AFTER_DAYS", "7"))
 
 SIMPLE_JWT = {
     "ACCESS_TOKEN_LIFETIME": timedelta(
@@ -362,6 +373,13 @@ CELERY_WORKER_MAX_TASKS_PER_CHILD = int(os.getenv("CELERY_WORKER_MAX_TASKS_PER_C
 CELERY_BEAT_SCHEDULE = {
     "cleanup-expired-otps-daily": {
         "task": "authentication.tasks.cleanup_expired_otps_task",
+        "schedule": 86400.0,
+    },
+    # Outcome data is the one asset here that compounds and that a general
+    # AI assistant cannot replicate - but only if it actually gets
+    # collected, which passive UI does not achieve.
+    "send-outcome-nudges-daily": {
+        "task": "resumes.tasks.send_outcome_nudges_task",
         "schedule": 86400.0,
     },
 }
