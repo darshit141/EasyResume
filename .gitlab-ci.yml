@@ -80,7 +80,20 @@ deploy:
       git reset --hard origin/main
       cd /opt/intelliresume
       docker compose build backend worker beat
-      docker compose up -d backend worker beat
+      # --force-recreate is load-bearing: without it compose can leave a
+      # container on the OLD image even though a new one was just built,
+      # producing a green deploy that shipped nothing (this actually
+      # happened to the frontend deploy).
+      docker compose up -d --force-recreate backend worker beat
+      # Assert the running container is on the image we just built, so a
+      # silent no-op deploy fails the job instead of passing.
+      RUNNING=$(docker inspect intelliresume-backend-1 --format '{{.Image}}')
+      LATEST=$(docker images intelliresume-backend:latest --format '{{.ID}}' --no-trunc)
+      if [ "$RUNNING" != "$LATEST" ]; then
+        echo "DEPLOY FAILED: container is running $RUNNING but the freshly built image is $LATEST"
+        exit 1
+      fi
+      echo "verified: backend container is running the newly built image"
       # Migrations run after the new image is live but before we call it
       # done - a failure here fails the job loudly rather than leaving a
       # half-deployed app that looks fine until someone hits the new code.
