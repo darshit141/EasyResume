@@ -1,0 +1,91 @@
+# GitLab CI/CD for the backend.
+#
+# NOTE: .github/workflows/ in this repo targets GitHub Actions and does NOT
+# run here - these repos are hosted on GitLab, which only reads this file.
+# The GitHub workflows are kept for reference/portability but have never
+# executed. This file is the pipeline that actually runs.
+#
+# Required CI/CD variables (Settings > CI/CD > Variables):
+#   DEPLOY_SSH_KEY  - private SSH key with root access to the droplet.
+#                     Type: File. Protected: off (so it works on any branch
+#                     you deploy from). Masked: off (multi-line keys can't
+#                     be masked).
+#   DEPLOY_HOST     - droplet IP, e.g. 143.244.132.107
+#   DEPLOY_USER     - ssh user, e.g. root
+
+stages:
+  - test
+  - deploy
+
+# Run the real suite against real Postgres, since production is Postgres -
+# testing on SQLite would not exercise what actually ships. Redis is
+# deliberately not started: RUNNING_TESTS makes Celery tasks execute
+# synchronously in-process, and the cache backend is configured to fail
+# open, so no live broker is needed.
+test:
+  stage: test
+  image: python:3.12-slim
+  services:
+    - name: postgres:16-alpine
+      alias: postgres
+  variables:
+    POSTGRES_DB: intelliresume_ci
+    POSTGRES_USER: intelliresume
+    POSTGRES_PASSWORD: ci-only-password
+    DATABASE_URL: "postgres://intelliresume:ci-only-password@postgres:5432/intelliresume_ci"
+    SECRET_KEY: "ci-only-secret-key-not-used-anywhere-real"
+    DEBUG: "False"
+    ALLOWED_HOSTS: "localhost,127.0.0.1"
+    REDIS_URL: "redis://localhost:6379/0"
+  before_script:
+    - pip install --no-cache-dir -r requirements.txt
+  script:
+    # Catches a model change committed without its migration - a common way
+    # to break a deploy that every other check would pass.
+    - python manage.py makemigrations --check --dry-run
+    - python manage.py migrate --noinput
+    - python manage.py check
+    - python manage.py test
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_COMMIT_BRANCH
+
+# Manual trigger on purpose: main is deployed to a live site with real
+# users, so shipping should be a decision, not a side effect of pushing.
+# To make it automatic instead, delete the `when: manual` line below.
+deploy:
+  stage: deploy
+  image: alpine:latest
+  needs: ["test"]
+  before_script:
+    - apk add --no-cache openssh-client
+    - mkdir -p ~/.ssh && chmod 700 ~/.ssh
+    - cp "$DEPLOY_SSH_KEY" ~/.ssh/id_ed25519
+    - chmod 600 ~/.ssh/id_ed25519
+    - ssh-keyscan -H "$DEPLOY_HOST" >> ~/.ssh/known_hosts 2>/dev/null
+  script:
+    - |
+      ssh "$DEPLOY_USER@$DEPLOY_HOST" bash -s <<'REMOTE'
+      set -euo pipefail
+      cd /opt/intelliresume/backend
+      git fetch origin main
+      git checkout main
+      git reset --hard origin/main
+      cd /opt/intelliresume
+      docker compose build backend worker beat
+      docker compose up -d backend worker beat
+      # Migrations run after the new image is live but before we call it
+      # done - a failure here fails the job loudly rather than leaving a
+      # half-deployed app that looks fine until someone hits the new code.
+      docker compose exec -T backend python manage.py migrate --noinput
+      docker compose exec -T backend python manage.py check --deploy || true
+      REMOTE
+    - echo "Verifying the deployed app actually responds..."
+    - apk add --no-cache curl
+    - curl -fsS "http://$DEPLOY_HOST:8090/api/ready/" || (echo "readiness check FAILED after deploy" && exit 1)
+  environment:
+    name: production
+    url: http://143.244.132.107:8090
+  rules:
+    - if: $CI_COMMIT_BRANCH == "main"
+      when: manual
