@@ -20,6 +20,7 @@ from authentication.models import User
 from billing.models import AIUsageLog, Subscription
 from billing.plans import get_price
 from resumes.models import JobResumeCuration, Resume
+from resumes.services.outcome_insights_service import outcome_insights
 
 
 def _monthly_equivalent_cents(subscription):
@@ -215,4 +216,5 @@ class AdminBusinessMetricsAPIView(APIView):
             "ai_cost": _ai_cost_metrics(),
             "funnel": _funnel_metrics(),
             "customer_outcomes": _outcome_metrics(),
+            "outcome_insights": outcome_insights(),
         })
