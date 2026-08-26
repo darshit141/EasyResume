@@ -35,6 +35,13 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
     volumes:
       - pgdata:/var/lib/postgresql/data
+    # Bound to 127.0.0.1 only, never 0.0.0.0 - reachable from the droplet
+    # itself (and therefore through an SSH tunnel) but NOT exposed to the
+    # public internet. Host port is 5433, not 5432, because another
+    # project on this shared box already owns 127.0.0.1:5432 - connecting
+    # on 5432 reaches that one, not this.
+    ports:
+      - "127.0.0.1:5433:5432"
     mem_limit: 150m
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U intelliresume"]
