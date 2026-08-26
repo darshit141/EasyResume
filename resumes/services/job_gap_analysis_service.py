@@ -255,7 +255,35 @@ class JobGapAnalysisService:
         )
         result["overall_match_percentage"] = round((score / total) * 100, 2) if total else 0
         self._validate_summary_fields(result)
+        self._recompute_ats_coverage(result)
         return result
+
+    @staticmethod
+    def _recompute_ats_coverage(result):
+        """Derive the ATS coverage percentage from the keyword lists instead
+        of trusting the number the model reported.
+
+        Deciding *which* job keywords a resume covers is a semantic
+        judgement the model is genuinely good at. The percentage is
+        arithmetic over its own answer - and nothing previously forced the
+        two to agree. Schema validation checked only that the field
+        existed, so a response claiming 85% next to a one-covered,
+        three-missing split passed straight through and was shown to the
+        user as fact.
+
+        Recomputing here also makes the number reproducible: the same
+        covered/missing split always yields the same percentage, which a
+        model-generated figure could not guarantee run to run.
+        """
+        coverage = result.get("ats_keyword_coverage") or {}
+        covered = coverage.get("covered_keywords") or []
+        missing = coverage.get("missing_keywords") or []
+
+        total = len(covered) + len(missing)
+        coverage["coverage_percentage"] = (
+            round((len(covered) / total) * 100, 2) if total else 0
+        )
+        result["ats_keyword_coverage"] = coverage
 
     def _validate_requirement_item(
         self,
