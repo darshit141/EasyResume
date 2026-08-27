@@ -23,6 +23,27 @@ SECTION_ORDER = [
 ITEM_FIELDS = {"experience", "projects", "education", "certifications"}
 
 
+def _entry_parts(item):
+    """Split one entry into its heading line and its bullets.
+
+    Shares the exact fallback behaviour of the PDF exporter: older
+    curations (and any generation where the model skipped the split) carry
+    only the flat `tailored_text`, which renders as a single bullet rather
+    than being dropped - so previously generated resumes keep working.
+    """
+    if not isinstance(item, dict):
+        return "", [str(item)] if item else []
+
+    header = str(item.get("header") or "").strip()
+    bullets = [str(b).strip() for b in (item.get("bullets") or []) if str(b).strip()]
+
+    if not header and not bullets:
+        flat = str(item.get("tailored_text") or "").strip()
+        return "", ([flat] if flat else [])
+
+    return header, bullets
+
+
 class TailoredResumeExportService:
     """Builds a .docx document from a curation's tailored_resume_data."""
 
@@ -74,12 +95,24 @@ class TailoredResumeExportService:
                 skills_run.font.size = Pt(10.5)
             elif field in ITEM_FIELDS:
                 for item in value:
-                    text = item.get("tailored_text") if isinstance(item, dict) else item
-                    if not text:
+                    entry_header, bullets = _entry_parts(item)
+                    if not entry_header and not bullets:
                         continue
-                    item_paragraph = document.add_paragraph(style="List Bullet")
-                    item_run = item_paragraph.add_run(text)
-                    item_run.font.size = Pt(10.5)
+
+                    if entry_header:
+                        # Role/company/dates as a bold line above its bullets,
+                        # rather than as one more bullet in the list - the
+                        # layout a resume is actually read in.
+                        entry_paragraph = document.add_paragraph()
+                        entry_run = entry_paragraph.add_run(entry_header)
+                        entry_run.bold = True
+                        entry_run.font.size = Pt(10.5)
+                        entry_run.font.color.rgb = NAVY
+
+                    for bullet in bullets:
+                        item_paragraph = document.add_paragraph(style="List Bullet")
+                        item_run = item_paragraph.add_run(bullet)
+                        item_run.font.size = Pt(10.5)
 
         buffer = io.BytesIO()
         document.save(buffer)

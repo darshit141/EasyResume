@@ -334,6 +334,25 @@ class TailoredResumeItemSerializer(serializers.Serializer):
     tailored_text = serializers.CharField(
         help_text="The AI-tailored wording, validated to introduce no new facts.",
     )
+    header = serializers.CharField(
+        required=False,
+        allow_blank=True,
+        help_text=(
+            "The entry's identifying line only - role/title, employer and dates - "
+            "so it can be rendered as a heading above its bullets. Absent on "
+            "curations generated before this field existed; clients should fall "
+            "back to tailored_text."
+        ),
+    )
+    bullets = serializers.ListField(
+        child=serializers.CharField(),
+        required=False,
+        help_text=(
+            "The entry's individual achievements, one per bullet. A formatting "
+            "split of the same grounded content as tailored_text - each bullet is "
+            "grounding-checked identically, so this introduces no new facts."
+        ),
+    )
 
 
 class TailoredResumeDataSerializer(serializers.Serializer):

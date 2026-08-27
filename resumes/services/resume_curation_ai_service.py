@@ -109,10 +109,34 @@ class ResumeCurationAIService:
                     )
                     continue
                 violations += cls._grounding_violations(field, text, candidate_text)
+
+                # header/bullets are a formatting split of the same content,
+                # so they get the identical grounding check - otherwise they
+                # would be an unguarded channel for inventing detail that
+                # tailored_text is not allowed to contain.
+                header = str(item.get("header") or "").strip()
+                bullets = [
+                    str(b).strip() for b in (item.get("bullets") or []) if str(b).strip()
+                ]
+                if header:
+                    violations += cls._grounding_violations(field, header, candidate_text)
+                for bullet in bullets:
+                    violations += cls._grounding_violations(field, bullet, candidate_text)
+
+                # Falling back rather than failing: a missing split is a
+                # cosmetic shortfall, and rejecting an otherwise valid,
+                # fully-grounded resume over layout would be the wrong
+                # trade. Renderers treat an empty bullets list as "show the
+                # header alone".
+                if not header and not bullets:
+                    header = text
+
                 validated_entries.append({
                     "source_index": index,
                     "source_text": source_list[index],
                     "tailored_text": text,
+                    "header": header,
+                    "bullets": bullets,
                 })
             result_items[field] = validated_entries
 
@@ -139,13 +163,29 @@ class ResumeCurationAIService:
             if not isinstance(raw[field], list):
                 raise LLMSchemaValidationError()
             for item in raw[field]:
-                if not isinstance(item, dict) or set(item) != {"source_index", "tailored_text"}:
+                if not isinstance(item, dict):
+                    raise LLMSchemaValidationError()
+                # source_index/tailored_text carry the grounded content and
+                # stay mandatory. header/bullets are the layout split and are
+                # tolerated as absent: a model that omits them yields a
+                # plainer resume, which is far better than failing an
+                # otherwise valid, fully-grounded generation over formatting.
+                if not {"source_index", "tailored_text"} <= set(item):
+                    raise LLMSchemaValidationError()
+                if not set(item) <= {"source_index", "tailored_text", "header", "bullets"}:
                     raise LLMSchemaValidationError()
                 index = item["source_index"]
                 if not isinstance(index, int) or isinstance(index, bool):
                     raise LLMSchemaValidationError()
                 if not isinstance(item["tailored_text"], str):
                     raise LLMSchemaValidationError()
+                if "header" in item and not isinstance(item["header"], str):
+                    raise LLMSchemaValidationError()
+                if "bullets" in item:
+                    if not isinstance(item["bullets"], list) or not all(
+                        isinstance(bullet, str) for bullet in item["bullets"]
+                    ):
+                        raise LLMSchemaValidationError()
 
     @classmethod
     def _significant_tokens(cls, text):

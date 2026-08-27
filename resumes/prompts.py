@@ -155,13 +155,25 @@ GAP_ANALYSIS_SCHEMA = {
 }
 
 
+# `header` and `bullets` exist so an entry can be rendered the way a resume
+# actually reads - a role/company/date line, then the achievements beneath
+# it - instead of one run-on paragraph. They are a *formatting* split of
+# the same grounded content as `tailored_text`, never new information:
+# every one is grounding-checked against verified candidate data exactly as
+# tailored_text is.
+#
+# tailored_text is kept alongside them as the flat form: it is what older
+# stored curations contain, and it is what the version-comparison service
+# diffs against.
 TAILORED_RESUME_ITEM_SCHEMA = {
     "type": "object",
     "properties": {
         "source_index": {"type": "integer", "minimum": 0},
         "tailored_text": {"type": "string"},
+        "header": {"type": "string"},
+        "bullets": {"type": "array", "items": {"type": "string"}, "maxItems": 8},
     },
-    "required": ["source_index", "tailored_text"],
+    "required": ["source_index", "tailored_text", "header", "bullets"],
     "additionalProperties": False,
 }
 
@@ -285,6 +297,19 @@ STRICT RULES:
   CANDIDATE_SOURCE_DATA and a "tailored_text" that rewrites that entry's wording and
   emphasis without adding any company, date, title, technology, or metric that is not
   already present in that same source entry.
+- Every item must ALSO split that same content into "header" and "bullets", so it can
+  be laid out the way a resume actually reads:
+    - "header" is the identifying line only: role/title, employer or institution, and
+      dates, e.g. "Software Engineer - Keyanna Technology | Mar 2025 - Present". No
+      responsibilities or achievements belong in the header.
+    - "bullets" is a list of the separate responsibilities/achievements from that same
+      entry, one per bullet, each a complete phrase. Split on the distinct
+      accomplishments already present in the source entry - do NOT invent extra bullets
+      to pad it out, and do NOT merge everything into a single bullet.
+    - If a source entry genuinely has no identifying line (a bare certification name,
+      for example), put the whole thing in "header" and return an empty "bullets" list.
+    - header and bullets together must contain the same facts as tailored_text and
+      nothing more. They are a formatting split, not an opportunity to add detail.
 - Never change a date, year, duration, or numeric metric from the source entry.
 - The summary must be specific to JOB_TITLE but built only from CANDIDATE_SOURCE_DATA
   facts, referencing CANDIDATE_MATCH_SUMMARY only to decide emphasis, never to add facts.

@@ -72,6 +72,10 @@ def _styles():
             "Body", fontName="Helvetica", fontSize=10, leading=14,
             textColor=NAVY, spaceAfter=2,
         ),
+        "entry_header": ParagraphStyle(
+            "EntryHeader", fontName="Helvetica-Bold", fontSize=10.5, leading=14,
+            textColor=NAVY, spaceBefore=6, spaceAfter=2,
+        ),
     }
 
 
@@ -82,6 +86,29 @@ def _clean(value):
     which would otherwise raise a parse error or silently truncate the line.
     """
     return escape(str(value or "").strip())
+
+
+def _entry_parts(item):
+    """Split one experience/project/education entry into its heading line and
+    its bullets.
+
+    Newer curations carry `header` and `bullets` directly. Older ones - and
+    any generation where the model skipped the split - only have the flat
+    `tailored_text`, which is rendered as a single bullet with no heading
+    rather than being dropped. Existing users' saved resumes therefore keep
+    working unchanged instead of rendering blank.
+    """
+    if not isinstance(item, dict):
+        return "", [str(item)] if item else []
+
+    header = str(item.get("header") or "").strip()
+    bullets = [str(b).strip() for b in (item.get("bullets") or []) if str(b).strip()]
+
+    if not header and not bullets:
+        flat = str(item.get("tailored_text") or "").strip()
+        return "", ([flat] if flat else [])
+
+    return header, bullets
 
 
 class TailoredResumePdfService:
@@ -129,18 +156,32 @@ class TailoredResumePdfService:
                     Paragraph(_clean(", ".join(str(s) for s in value)), styles["body"])
                 )
             elif field in ITEM_FIELDS:
-                items = []
                 for item in value:
-                    text = item.get("tailored_text") if isinstance(item, dict) else item
-                    if not text:
+                    header, bullets = _entry_parts(item)
+                    if not header and not bullets:
                         continue
-                    items.append(
-                        ListItem(Paragraph(_clean(text), styles["body"]), leftIndent=10)
-                    )
-                if items:
-                    story.append(
-                        ListFlowable(items, bulletType="bullet", start="•", leftIndent=12)
-                    )
+
+                    if header:
+                        # The role/company/date line reads as a heading, not
+                        # as one more bullet - which is how a human skims a
+                        # resume and how the section structure stays legible.
+                        story.append(Paragraph(_clean(header), styles["entry_header"]))
+
+                    if bullets:
+                        story.append(
+                            ListFlowable(
+                                [
+                                    ListItem(
+                                        Paragraph(_clean(b), styles["body"]), leftIndent=10
+                                    )
+                                    for b in bullets
+                                ],
+                                bulletType="bullet",
+                                start="•",
+                                leftIndent=12,
+                                spaceAfter=4,
+                            )
+                        )
 
         if len(story) <= 1:
             # Nothing but a name would produce a near-empty PDF that reads as
