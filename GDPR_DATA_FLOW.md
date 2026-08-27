@@ -28,6 +28,7 @@ document describes the technical mechanics underneath it.
 | **Groq** | Resume text, job description text | Only when the user selects `groq` as their AI provider |
 | **Google (Gemini)** | Resume text, job description text | Only when the user selects `gemini` as their AI provider |
 | **Stripe** | Name, email, payment details | Only for a user who starts checkout — card details never touch this application's servers |
+| **Resend** | Email address, and the contents of the message sent to it | Every transactional email: login OTP codes, billing/dunning notices, and outcome follow-ups. Used because DigitalOcean blocks outbound SMTP from the droplet, so mail leaves over Resend's HTTPS API instead |
 | Self-hosted Ollama | Resume/job text | Stays on the operator's own infrastructure — not a third party |
 | `standard` parser | Resume text | Stays on this application's own server — no AI provider involved at all |
 
