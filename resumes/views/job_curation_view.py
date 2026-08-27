@@ -275,7 +275,12 @@ class JobCurationCreateAPIView(APIView):
     throttle_scope = "ai_resume"
 
     def post(self, request):
-        serializer = JobCurationRequestSerializer(data=request.data)
+        # validate_resume_id checks the resume belongs to the caller, so it
+        # needs the request. Without this context every explicit resume
+        # choice was rejected with "Authentication required."
+        serializer = JobCurationRequestSerializer(
+            data=request.data, context={"request": request}
+        )
         if not serializer.is_valid():
             return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
