@@ -25,6 +25,9 @@ from resumes.services.missing_information_review_service import (
 from resumes.services.tailored_resume_export_service import (
     TailoredResumeExportService,
 )
+from resumes.services.tailored_resume_pdf_service import (
+    TailoredResumePdfService,
+)
 from resumes.services.tailored_resume_version_comparison_service import (
     TailoredResumeVersionComparisonService,
 )
@@ -383,5 +386,51 @@ class TailoredResumeDocxExportAPIView(APIView):
             buffer.getvalue(),
             content_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
         )
+        response["Content-Disposition"] = f'attachment; filename="{filename}"'
+        return response
+
+
+@extend_schema(
+    tags=["Job Resume Curation"],
+    summary="Export the current tailored resume as an ATS-readable PDF",
+    description=(
+        "Downloads the most recently generated tailored resume as a real, "
+        "text-based PDF. No AI call - it purely formats the already-validated, "
+        "source-grounded `tailored_resume_data`.\n\n"
+        "Generated server-side rather than by the browser's print dialog on "
+        "purpose. Print-to-PDF output depends on which printer the user picks: "
+        "Windows' 'Microsoft Print to PDF' rasterises the page into images, "
+        "producing a file with no text layer that an applicant tracking system "
+        "cannot read a single word of - while still looking perfect on screen. "
+        "This endpoint always emits a real text layer.\n\n"
+        "Available on every plan: PDF download is a Free-tier feature (DOCX "
+        "export is the Pro-gated one)."
+    ),
+    parameters=[CURATION_ID_PARAMETER],
+    responses={
+        status.HTTP_200_OK: OpenApiResponse(
+            description="The .pdf file, as a binary download (Content-Type: application/pdf)."
+        ),
+        status.HTTP_401_UNAUTHORIZED: OpenApiResponse(description="Authentication required."),
+        status.HTTP_404_NOT_FOUND: OpenApiResponse(
+            description="No curation with this ID exists for the authenticated user, or no tailored resume has been generated yet."
+        ),
+    },
+)
+class TailoredResumePdfExportAPIView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, curation_id):
+        curation = JobResumeCuration.objects.filter(
+            id=curation_id,
+            user=request.user,
+        ).first()
+        if curation is None or not curation.tailored_resume_data:
+            raise Http404("No tailored resume has been generated for this curation.")
+
+        buffer = TailoredResumePdfService.build_pdf(curation.tailored_resume_data)
+        filename = TailoredResumePdfService.build_filename(curation.job_title)
+
+        response = HttpResponse(buffer.getvalue(), content_type="application/pdf")
         response["Content-Disposition"] = f'attachment; filename="{filename}"'
         return response

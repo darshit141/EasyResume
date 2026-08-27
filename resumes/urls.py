@@ -20,6 +20,7 @@ from resumes.views.job_curation_view import (
 from resumes.views.resume_curation_view import (
     JobResumeCurationGenerateAPIView,
     TailoredResumeDocxExportAPIView,
+    TailoredResumePdfExportAPIView,
 )
 from resumes.views.cover_letter_view import (
     ApplicationStatusAPIView,
@@ -105,6 +106,11 @@ urlpatterns = [
         "job-curations/<int:curation_id>/tailored-resume/export/docx/",
         TailoredResumeDocxExportAPIView.as_view(),
         name="job-curation-tailored-resume-export-docx",
+    ),
+    path(
+        "job-curations/<int:curation_id>/tailored-resume/export/pdf/",
+        TailoredResumePdfExportAPIView.as_view(),
+        name="job-curation-tailored-resume-export-pdf",
     ),
     path(
         "job-curations/<int:curation_id>/missing-information/",
