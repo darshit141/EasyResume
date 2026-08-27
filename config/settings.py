@@ -465,8 +465,24 @@ GEMINI_BASE_URL = os.getenv(
 # switch to real SMTP delivery with no code changes required; works with
 # any standard SMTP provider (Gmail app password, SendGrid, Mailgun, SES
 # SMTP, etc.) — set EMAIL_HOST/PORT/USER/PASSWORD accordingly.
+# Delivery transport, in preference order.
+#
+# Resend's HTTP API comes first because it is the only one that works on
+# this deployment: DigitalOcean blocks outbound SMTP (25/465/587) on
+# droplets to prevent spam abuse - verified here, where connections to a
+# provider's SMTP port time out from the host itself. Every SMTP provider
+# fails identically under that block, so it is a hosting constraint rather
+# than anything to solve by switching credentials.
+#
+# SMTP is kept as the second option for deployments without that
+# restriction, and the console backend is the local-dev default, where
+# codes print to the server log and no delivery is configured at all.
+RESEND_API_KEY = os.getenv("RESEND_API_KEY", "")
+
 EMAIL_HOST = os.getenv("EMAIL_HOST", "")
-if EMAIL_HOST:
+if RESEND_API_KEY:
+    EMAIL_BACKEND = "config.email_backends.ResendAPIEmailBackend"
+elif EMAIL_HOST:
     EMAIL_BACKEND = "django.core.mail.backends.smtp.EmailBackend"
     EMAIL_PORT = int(os.getenv("EMAIL_PORT", "587"))
     EMAIL_HOST_USER = os.getenv("EMAIL_HOST_USER", "")
