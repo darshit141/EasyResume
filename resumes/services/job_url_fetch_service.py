@@ -33,6 +33,7 @@ from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 from django.conf import settings
 from api.utils.config import get_config_value
+from resumes.services.apify_job_fetch_service import fetch_via_apify
 
 logger = logging.getLogger(__name__)
 
@@ -532,6 +533,14 @@ def fetch_job_posting(url):
             "(page is likely JavaScript-rendered or gated): %s",
             len(text), url,
         )
+        # Last resort before giving up: a handful of allowlisted ATS
+        # platforms (Workday among them) render entirely client-side, which
+        # is exactly what a headless-browser fetch fixes. No-ops (returns
+        # None) when APIFY_API_TOKEN isn't configured, so this is inert
+        # until that's set up.
+        rescued = fetch_via_apify(url)
+        if rescued:
+            return rescued
         raise JobUrlUnreadableError()
 
     title_match = re.search(r"<title[^>]*>(.*?)</title>", markup, re.DOTALL | re.IGNORECASE)

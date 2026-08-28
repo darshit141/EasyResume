@@ -440,6 +440,12 @@ ALLOWED_JOB_URL_DOMAINS = [
     if domain.strip()
 ]
 
+# Optional rescue for job postings the free fetch above can't read because
+# they render client-side (see resumes/services/apify_job_fetch_service.py).
+# Left empty, that rescue is a no-op and JOB_URL_UNREADABLE behaves exactly
+# as it did before this existed — nothing breaks by leaving this unset.
+APIFY_API_TOKEN = os.getenv("APIFY_API_TOKEN", "")
+
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
 OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "")
 # How long Ollama keeps the model resident in memory after a request.

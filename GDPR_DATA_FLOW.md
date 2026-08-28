@@ -29,6 +29,7 @@ document describes the technical mechanics underneath it.
 | **Google (Gemini)** | Resume text, job description text | Only when the user selects `gemini` as their AI provider |
 | **Stripe** | Name, email, payment details | Only for a user who starts checkout — card details never touch this application's servers |
 | **Resend** | Email address, and the contents of the message sent to it | Every transactional email: login OTP codes, billing/dunning notices, and outcome follow-ups. Used because DigitalOcean blocks outbound SMTP from the droplet, so mail leaves over Resend's HTTPS API instead |
+| **Apify** | The job posting URL the user submitted, and the page content at that URL | Only when "Import from link" hits a posting the primary fetch can't read (a page that renders client-side) — used as a last-resort rescue to fetch and render it. Never receives resume data or anything about the user themselves |
 | Self-hosted Ollama | Resume/job text | Stays on the operator's own infrastructure — not a third party |
 | `standard` parser | Resume text | Stays on this application's own server — no AI provider involved at all |
 
