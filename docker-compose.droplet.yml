@@ -21,10 +21,13 @@
 # app for its scheduler — don't shrink it further without checking
 # `docker stats` first.
 #
-# No HTTPS/domain here on purpose — reachable over plain HTTP on port 8090
-# via the droplet's IP. Add a real domain + TLS (e.g. via the shared
-# system nginx's SNI-routing stream{} block, see the other sites' configs
-# for the pattern) once one is ready to point at this deployment.
+# TLS is terminated by the host's system nginx, which routes port 443 by
+# SNI to a loopback listener for intelliresume.patrixel.com and proxies to
+# the frontend container. That makes https://intelliresume.patrixel.com the
+# only supported way in, so 8090 is bound to loopback rather than published
+# on the public interface — otherwise the whole app, logins included, stays
+# reachable unencrypted on the droplet's IP and silently bypasses the
+# certificate.
 services:
   postgres:
     image: postgres:16-alpine
@@ -106,7 +109,9 @@ services:
       dockerfile: Dockerfile.prod
     restart: unless-stopped
     ports:
-      - "8090:80"
+      # Loopback only: the host nginx proxies to this, and nothing else
+      # should be able to reach the app without going through TLS.
+      - "127.0.0.1:8090:80"
     mem_limit: 20m
     depends_on:
       - backend
