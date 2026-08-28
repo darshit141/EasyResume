@@ -5,8 +5,112 @@
 **Repositories audited:** `intelliresume-backend` (Django 6.0.7 / DRF), `intelliresume-react` (React 19 / Vite 6)
 **Scope:** Read-only architecture, security, billing, AI, GDPR, deployment and commercial audit. **No application code was modified.**
 
-> **Verdict: NOT commercially launchable today.**
+> **Verdict (2026-08-19 baseline — SUPERSEDED, see section 0): NOT commercially launchable today.**
 > The product core is genuinely strong — notably the evidence-gated gap analysis, which is a real and defensible differentiator. The gaps are almost entirely in the *commercial, legal and operational shell* around that core, not in the core itself. Fifteen P0 items block first revenue.
+
+---
+
+## 0. Re-audit — 2026-08-28 (authoritative current status)
+
+**Everything below section 1 is the original 2026-08-19 baseline audit and is
+retained as the historical record. This section supersedes its verdict.**
+
+Method: read-only inspection of the working tree on `main` (commit `7649e8c`),
+plus one full local execution of the backend test suite. No application code
+was modified. Where a claim below could not be verified from the repository
+— anything depending on production environment variables or on Stripe's
+live-mode state — it is recorded as *unverified* rather than as passing.
+
+### 0.1 Revised verdict
+
+> **The fifteen P0 items that blocked launch are closed in code**, and the
+> full commercial journey — signup → OTP → resume upload → JD analysis →
+> evidence-gated gap analysis → tailored resume → paywall → checkout →
+> webhook → entitlement upgrade → DOCX download → outcome → GDPR export →
+> GDPR deletion — now passes as a single automated test
+> (`api/tests_commercial_e2e.py`). The remaining launch risk is no longer
+> architectural or structural; it is **configuration**. Stripe has still
+> never been driven against real infrastructure in any mode, and the live
+> Price IDs cannot be confirmed from this repository. Until that is done the
+> product is **launch-capable, and proven against its own code, but not yet
+> proven against Stripe**.
+
+The distinction matters commercially. The end-to-end test fakes exactly two
+boundaries, both of them someone else's network: the LLM provider and the
+Stripe SDK. Everything between them is the real implementation, so the test
+now rules out an entire class of failure — an entitlement that doesn't
+refresh after activation, a webhook that updates a row nobody reads, a
+paywall that returns the wrong contract to the UI. What it cannot rule out
+is Stripe-side misconfiguration: a Price ID that doesn't exist in live mode,
+a currency mismatch, a webhook secret that doesn't match. That is a
+half-day of verification with a real test-mode account, not weeks of
+engineering — but it must happen before a real card is charged.
+
+Notably, writing that test surfaced **no defects in the application**. Every
+failure encountered while building it was a wrong assumption in the test
+itself, corrected against the implementation: the paywall returns `402
+Payment Required` rather than `403` (deliberate, and the frontend routes off
+it), account deletion is a `POST` that re-authenticates with the password,
+and the evidence gate rejected a fixture whose requirements were absent from
+the job analysis. A codebase where the end-to-end harness is wrong and the
+product is right is in better shape than the reverse.
+
+### 0.2 P0 status — verified against code
+
+| ID | Item | Status | Evidence |
+|---|---|---|---|
+| P0-1 | Celery + Redis + `AIJob`; AI off the request cycle | **Done** | `ai_jobs/models.py` (6 job types, 6 statuses incl. `RETRYING`/`CANCELLED`), `ai_jobs/tasks.py` `run_ai_job` with duplicate-delivery guard |
+| P0-2 | Cloud AI default, Ollama demoted to opt-in | **Done** | `.env.example` sets `LLM_PROVIDER=groq`; automatic fallback provider on primary failure (`llm_service.py`) |
+| P0-3 | Gunicorn/LLM timeout inversion | **Done** | `--timeout 60` now that LLM work runs in workers (`Dockerfile`, both compose files) |
+| P0-4 | PostgreSQL in production | **Done** | Postgres whenever `DATABASE_URL` is set (`config/settings.py`); droplet compose runs `postgres:16-alpine`; CI runs against real Postgres |
+| P0-5 | Centralized multi-currency pricing | **Done** | `billing/plans.py` — EUR/GBP × monthly/annual, a Stripe Price ID per combination, env-overridable amounts |
+| P0-6 | Stripe hardening | **Done (code)** | `StripeWebhookEvent` with unique `stripe_event_id` (idempotency + event log); handlers for `checkout.session.completed`, `customer.subscription.*`, `invoice.paid`, `invoice.payment_failed`, `charge.refunded` |
+| P0-7 | GDPR account deletion | **Done** | `account_deletion_service.py` — cascade, media file removal, Stripe cancellation, newsletter purge |
+| P0-8 | GDPR data export | **Done** | `account_export_service.py` — profile, resumes + versions, curations, subscription, AI usage, consents |
+| P0-9 | Cookie consent that actually gates tracking | **Done** | `CookieConsentContext.jsx`; `AdSlot.jsx` requires `marketingAllowed` before the AdSense loader is injected at all |
+| P0-10 | Policy version + acceptance tracking | **Done** | `PolicyAcceptance` (type, version, timestamp) and `CookieConsent.consent_version` |
+| P0-11 | Expanded AI usage logging | **Done** | `AIUsageLog` — model, latency, input/output tokens, `cost_estimate_usd`, `request_id`, `job` FK |
+| P0-12 | Fix failing tests; add CI | **Done** | **548 tests, 0 failures, ~4s** (baseline was 355 tests / 915s / 5 failing). GitHub Actions CI on Postgres, including `makemigrations --check` |
+| P0-13 | Usable `phone` field | **Done** | `max_length=30`, nullable, optional |
+| P0-14 | Mask admin-config secrets | **Done** | `is_sensitive_key()` masks values in responses and refuses to overwrite with a masked value; provider API keys moved out of the database |
+| P0-15 | Real `/health` + `/ready`; backups + restore test | **Done** | `api/views/readiness.py` checks DB + Redis + LLM; `scripts/backup_db.sh` / `restore_db.sh`; `DISASTER_RECOVERY.md` records a completed restore drill |
+
+Beyond the original P0 set, work has also landed on outcome tracking
+(`outcome_insights_service.py`, the `/outcome` route), analytics events and
+business metrics (`api/views/business_metrics_view.py`), B2B lead capture
+(`B2BLead`), the `/for-career-coaches` landing page, an admin dashboard
+(`/app/admin`), S3-compatible storage support, and Sentry error tracking.
+
+### 0.3 Remaining blockers
+
+**P0 — do before charging a real customer**
+
+| ID | Blocker | Why it blocks |
+|---|---|---|
+| R0-1 | **Stripe has never been exercised end-to-end**, not even in test mode. No test-mode checkout, no webhook replay, no upgrade/downgrade/cancel/refund run against real Stripe. | All billing confidence currently comes from code reading and mocked unit tests. The failure modes that matter here — Price ID/currency mismatch, webhook secret mismatch, entitlement not refreshing after activation — are invisible to mocks. |
+| ~~R0-2~~ | ~~No automated end-to-end commercial test.~~ **Closed 2026-08-28** — `api/tests_commercial_e2e.py` walks the whole revenue path over real HTTP endpoints and a real database, faking only the LLM and Stripe SDK boundaries. | Was the brief's own definition of commercial readiness (§35). The revenue path now has a regression guard; suite is 548 tests, all passing. |
+| R0-3 | **Live Stripe configuration is unverified.** The four `STRIPE_PRICE_ID_PRO_*` values, the API keys and the webhook secret are correctly blank in `.env.example`; whether they are populated in the production environment cannot be determined from this repository. | A blank Price ID fails checkout for that currency/period. It fails safely, but it fails. Confirm on the droplet before launch. |
+| R0-4 | **VAT treatment is undecided in practice.** `STRIPE_AUTOMATIC_TAX_ENABLED` defaults to `False`. | Selling to EU consumers with tax disabled creates a VAT liability that is far cheaper to get right before the first invoice than after. This needs an accountant's answer, not an engineering one. |
+
+**P1 — shortly after launch**
+
+- AI providers have still never been benchmarked for latency, cost or quality; the Groq-vs-Gemini default is a reasoned assumption rather than a measurement. Note that `.env.example` says `groq` while the local `.env` says `gemini` — the production value should be a deliberate and recorded choice.
+- Droplet capacity is small by design: 2 Gunicorn workers, Celery `--concurrency=1`. Adequate for the first customers; it needs a headroom plan before any acquisition push.
+- Object storage is supported but not enabled (`AWS_STORAGE_BUCKET_NAME` is empty), so media sits on the droplet's local disk. Acceptable on a single instance; it blocks horizontal scaling and widens the backup surface.
+- The restore drill validated the *mechanism* at roughly 100KB, not at production data volume. Re-run it once real data exists and update the RTO accordingly.
+
+**P2 — scale**
+
+- Documents from the brief's §53 list that do not yet exist: `ARCHITECTURE.md`, `SECURITY.md`, `AI_ARCHITECTURE.md`, `AI_COST_MODEL.md`, `COMMERCIAL_SCORECARD.md`, `GO_TO_MARKET.md`. (`README`, `BILLING`, `DEPLOYMENT`, `GDPR_DATA_FLOW`, `DISASTER_RECOVERY` and `STRIPE_SETUP` do exist.)
+- There is no `Organization` / `OrganizationMember` / multi-seat model. **This is a recorded decision, not an oversight** (commit `a7cacf3`): pilot agencies manually through the `/for-career-coaches` lead channel first and build multi-tenancy only once demand is demonstrated. That matches the brief's §23–24 and §51.
+- No referral system — also a recorded deferral, pending retention data.
+
+### 0.4 What this re-audit did not verify
+
+1. **Nothing was run against production.** Findings come from the working tree plus one local suite run (SQLite-backed, as configured locally; CI covers Postgres).
+2. **Stripe was not contacted**, in either live or test mode.
+3. **The frontend test story was not assessed.** The backend suite is strong; no equivalent frontend suite was located.
+4. **AI output quality was not evaluated.** The evidence gate is now asserted under adversarial conditions — the end-to-end test scripts the model to claim an unsupported Kubernetes match with invented evidence, and the server correctly overrules it to MISSING. That proves the *guard* holds. It does not measure real-world generation quality against real job descriptions, which still requires human review of real output.
 
 ---
 
