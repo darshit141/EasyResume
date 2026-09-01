@@ -137,6 +137,7 @@ class EntitlementsService:
             "allowed_ai_providers": entitlements["allowed_ai_providers"],
             "docx_export": entitlements["docx_export"],
             "tailored_resume_version_history": entitlements["tailored_resume_version_history"],
+            "resume_template_customization": entitlements["resume_template_customization"],
             "shows_ads": entitlements["ads"],
         }
 

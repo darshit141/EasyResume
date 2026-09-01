@@ -31,6 +31,7 @@ from resumes.services.tailored_resume_pdf_service import (
 from resumes.services.tailored_resume_version_comparison_service import (
     TailoredResumeVersionComparisonService,
 )
+from resumes.services.resume_template_service import ResumeTemplateService
 from ai_jobs.models import AIJob
 from ai_jobs.serializers import AIJobSerializer
 from ai_jobs.services import enqueue_ai_job
@@ -314,6 +315,9 @@ class JobResumeCurationGenerateAPIView(APIView):
                 "tailored_resume_version": version,
                 "tailored_resume_data": curation.tailored_resume_data,
                 "tailored_resume_error_code": curation.tailored_resume_error_code,
+                "template_config": ResumeTemplateService.config_for_version(
+                    version, user=request.user
+                ),
                 "gap_review": gap_review,
                 "version_comparison": version_comparison,
                 "created_at": curation.created_at,
@@ -379,7 +383,13 @@ class TailoredResumeDocxExportAPIView(APIView):
         if curation is None or not curation.tailored_resume_data:
             raise Http404("No tailored resume has been generated for this curation.")
 
-        buffer = TailoredResumeExportService.build_docx(curation.tailored_resume_data)
+        buffer = TailoredResumeExportService.build_docx(
+            curation.tailored_resume_data,
+            template_config=ResumeTemplateService.config_for_version(
+                curation.tailored_resume_versions.order_by("-version").first(),
+                user=request.user,
+            ),
+        )
         filename = TailoredResumeExportService.build_filename(curation.job_title)
 
         response = HttpResponse(
@@ -428,7 +438,13 @@ class TailoredResumePdfExportAPIView(APIView):
         if curation is None or not curation.tailored_resume_data:
             raise Http404("No tailored resume has been generated for this curation.")
 
-        buffer = TailoredResumePdfService.build_pdf(curation.tailored_resume_data)
+        buffer = TailoredResumePdfService.build_pdf(
+            curation.tailored_resume_data,
+            template_config=ResumeTemplateService.config_for_version(
+                curation.tailored_resume_versions.order_by("-version").first(),
+                user=request.user,
+            ),
+        )
         filename = TailoredResumePdfService.build_filename(curation.job_title)
 
         response = HttpResponse(buffer.getvalue(), content_type="application/pdf")

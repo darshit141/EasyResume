@@ -64,6 +64,7 @@ def _run_tailored_resume_generation(job):
     from resumes.services.tailored_resume_version_comparison_service import (
         TailoredResumeVersionComparisonService,
     )
+    from resumes.services.resume_template_service import ResumeTemplateService
 
     regenerate = bool(job.input_params.get("regenerate", False))
     curation, version = JobResumeCurationService(provider=job.provider or None).generate(
@@ -84,6 +85,9 @@ def _run_tailored_resume_generation(job):
         "tailored_resume_version": version,
         "tailored_resume_data": curation.tailored_resume_data,
         "tailored_resume_error_code": curation.tailored_resume_error_code,
+        "template_config": ResumeTemplateService.config_for_version(
+            version, user=job.user
+        ),
         "gap_review": gap_review,
         "version_comparison": version_comparison,
         "created_at": curation.created_at,

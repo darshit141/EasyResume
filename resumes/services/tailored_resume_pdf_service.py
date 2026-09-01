@@ -15,11 +15,17 @@ by extracting the text back out of the generated file.
 
 Like the .docx exporter, this never generates or infers content. It only
 formats exactly what tailored_resume_data already contains.
+
+Layout is driven by a resolved template config (see
+resumes.resume_template). Passing ``template_config=None`` uses
+DEFAULT_TEMPLATE, which reproduces the pre-template output exactly. The PDF
+deliberately stays single-column even when the template asks for two - a
+two-column PDF is an ATS risk, and the template's ATS report says so.
 """
 
 import io
 
-from reportlab.lib.enums import TA_LEFT
+from reportlab.lib.enums import TA_CENTER, TA_LEFT
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.styles import ParagraphStyle
 from reportlab.lib.units import mm
@@ -33,50 +39,61 @@ from reportlab.platypus import (
 )
 from xml.sax.saxutils import escape
 
-NAVY = HexColor("#101828")
-GRAY = HexColor("#475467")
+from resumes.resume_template import (
+    DENSITY_SCALE,
+    SECTION_HEADINGS,
+    resolve_template,
+    visible_sections,
+)
 
-SECTION_ORDER = [
-    ("summary", "Professional Summary"),
-    ("skills", "Core Skills"),
-    ("experience", "Professional Experience"),
-    ("projects", "Projects"),
-    ("education", "Education"),
-    ("certifications", "Certifications"),
-]
+GRAY = HexColor("#475467")
 
 ITEM_FIELDS = {"experience", "projects", "education", "certifications"}
 
+# sans / serif -> a concrete pair of PDF base-14 faces (always present in
+# every reader, nothing embedded, nothing an ATS can fail to extract).
+_FONT_MAP = {
+    "sans": ("Helvetica", "Helvetica-Bold"),
+    "serif": ("Times-Roman", "Times-Bold"),
+}
 
-def _styles():
-    """Standard fonts only (Helvetica is one of the PDF base-14).
 
-    Embedding an exotic font risks a reader falling back to glyph outlines,
-    which is another route to text an ATS cannot extract. Plain, boring and
-    parseable is the entire point here.
-    """
+def _styles(config):
+    regular, bold = _FONT_MAP.get(config["font_family"], _FONT_MAP["sans"])
+    accent = HexColor(config["accent_color"])
+    scale = DENSITY_SCALE.get(config["density"], 1.0)
+    name_align = TA_CENTER if config["name_alignment"] == "center" else TA_LEFT
+
+    def sp(value):
+        return round(value * scale, 1)
+
     return {
         "name": ParagraphStyle(
-            "Name", fontName="Helvetica-Bold", fontSize=20, leading=24,
-            textColor=NAVY, alignment=TA_LEFT, spaceAfter=2,
+            "Name", fontName=bold, fontSize=20, leading=24,
+            textColor=accent, alignment=name_align, spaceAfter=2,
         ),
         "contact": ParagraphStyle(
-            "Contact", fontName="Helvetica", fontSize=9.5, leading=13,
-            textColor=GRAY, spaceAfter=10,
+            "Contact", fontName=regular, fontSize=9.5, leading=13,
+            textColor=GRAY, alignment=name_align, spaceAfter=sp(10),
         ),
         "heading": ParagraphStyle(
-            "Heading", fontName="Helvetica-Bold", fontSize=11, leading=14,
-            textColor=NAVY, spaceBefore=10, spaceAfter=4,
+            "Heading", fontName=bold, fontSize=11, leading=14,
+            textColor=accent, spaceBefore=sp(10), spaceAfter=sp(4),
         ),
         "body": ParagraphStyle(
-            "Body", fontName="Helvetica", fontSize=10, leading=14,
-            textColor=NAVY, spaceAfter=2,
+            "Body", fontName=regular, fontSize=10, leading=14,
+            textColor=HexColor("#101828"), spaceAfter=sp(2),
         ),
         "entry_header": ParagraphStyle(
-            "EntryHeader", fontName="Helvetica-Bold", fontSize=10.5, leading=14,
-            textColor=NAVY, spaceBefore=6, spaceAfter=2,
+            "EntryHeader", fontName=bold, fontSize=10.5, leading=14,
+            textColor=accent, spaceBefore=sp(6), spaceAfter=sp(2),
         ),
     }
+
+
+def _heading_text(key, config):
+    label = SECTION_HEADINGS.get(key, key.title())
+    return label.upper() if config["heading_style"] == "caps" else label
 
 
 def _clean(value):
@@ -115,7 +132,8 @@ class TailoredResumePdfService:
     """Builds a text-based PDF from a curation's tailored_resume_data."""
 
     @staticmethod
-    def build_pdf(tailored_resume_data):
+    def build_pdf(tailored_resume_data, template_config=None):
+        config = template_config or resolve_template(None, None)
         buffer = io.BytesIO()
         document = SimpleDocTemplate(
             buffer,
@@ -127,7 +145,7 @@ class TailoredResumePdfService:
             title="Tailored Resume",
         )
 
-        styles = _styles()
+        styles = _styles(config)
         story = []
 
         personal = tailored_resume_data.get("personal_information") or {}
@@ -139,12 +157,12 @@ class TailoredResumePdfService:
         if contact_line:
             story.append(Paragraph(_clean(contact_line), styles["contact"]))
 
-        for field, heading in SECTION_ORDER:
+        for field in visible_sections(config):
             value = tailored_resume_data.get(field)
             if not value:
                 continue
 
-            story.append(Paragraph(heading.upper(), styles["heading"]))
+            story.append(Paragraph(_heading_text(field, config), styles["heading"]))
 
             if field == "summary":
                 story.append(Paragraph(_clean(value), styles["body"]))

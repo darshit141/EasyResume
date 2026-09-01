@@ -5,6 +5,9 @@ from resumes.serializers.job_curation_serializer import TailoredResumeDataSerial
 from resumes.serializers.missing_information_serializer import (
     MissingInformationReviewSerializer,
 )
+from resumes.serializers.resume_template_serializer import (
+    ResolvedTemplateConfigSerializer,
+)
 
 
 class TailoredResumeVersionSerializer(serializers.Serializer):
@@ -49,6 +52,9 @@ class JobResumeCurationRegenerationResponseSerializer(serializers.Serializer):
     )
     tailored_resume_data = TailoredResumeDataSerializer()
     tailored_resume_error_code = serializers.CharField()
+    # The resolved resume-layout template this version renders with, so the
+    # frontend preview, PDF and DOCX all agree without a second request.
+    template_config = ResolvedTemplateConfigSerializer(required=False, allow_null=True)
     gap_review = MissingInformationReviewSerializer()
     version_comparison = TailoredResumeVersionComparisonSerializer(
         allow_null=True,

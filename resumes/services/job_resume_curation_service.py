@@ -11,6 +11,7 @@ from resumes.services.job_gap_analysis_service import (
 )
 from resumes.services.llm_service import LLMServiceError
 from resumes.services.resume_curation_ai_service import ResumeCurationAIService
+from resumes.services.resume_template_service import ResumeTemplateService
 
 
 logger = logging.getLogger(__name__)
@@ -100,6 +101,10 @@ class JobResumeCurationService:
                         "overall_match_percentage"
                     ),
                     gap_analysis_snapshot=gap_curation.gap_analysis_data,
+                    # Freeze the layout template in force right now onto this
+                    # version, so it always re-renders as it looked when
+                    # generated even if the user changes their default later.
+                    template_config=ResumeTemplateService.config_for_user(user),
                 )
             logger.info(
                 "%s completed user_id=%s curation_id=%s version=%s",

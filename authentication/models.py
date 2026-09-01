@@ -29,6 +29,22 @@ class User(AbstractBaseUser, PermissionsMixin):
         default=True,
     )
 
+    # The user's default resume layout template — a preset id from
+    # resumes.resume_template.TEMPLATE_PRESETS plus an optional dict of
+    # per-field overrides (Pro only). Every tailored resume the user
+    # generates snapshots the resolved config onto its version, so changing
+    # this never retroactively alters an already-generated resume.
+    resume_template_id = models.CharField(
+        max_length=40,
+        default="ats_classic",
+        blank=True,
+    )
+
+    resume_template_overrides = models.JSONField(
+        default=dict,
+        blank=True,
+    )
+
     is_staff = models.BooleanField(
         default=False,
     )

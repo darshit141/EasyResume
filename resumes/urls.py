@@ -27,6 +27,10 @@ from resumes.views.cover_letter_view import (
     CoverLetterGenerateAPIView,
 )
 from resumes.views.missing_information_view import MissingInformationReviewAPIView
+from resumes.views.resume_template_view import (
+    ResumeTemplateListAPIView,
+    ResumeTemplatePreferenceAPIView,
+)
 from resumes.views.tailored_resume_version_view import (
     TailoredResumeVersionDetailAPIView,
     TailoredResumeVersionListAPIView,
@@ -71,6 +75,16 @@ urlpatterns = [
         "versions/<int:version_id>/",
         ResumeVersionDetailAPIView.as_view(),
         name="resume-version-detail",
+    ),
+    path(
+        "templates/",
+        ResumeTemplateListAPIView.as_view(),
+        name="resume-template-list",
+    ),
+    path(
+        "template-preference/",
+        ResumeTemplatePreferenceAPIView.as_view(),
+        name="resume-template-preference",
     ),
     path(
         "job-curations/",

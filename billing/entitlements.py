@@ -36,6 +36,10 @@ FREE_ENTITLEMENTS = {
     "allowed_ai_providers": ["ollama", "standard", "groq", "gemini"],
     "docx_export": False,
     "tailored_resume_version_history": False,
+    # Free users may pick one of the built-in resume layout presets; tuning
+    # the individual knobs (section order, accent colour, font, spacing) is
+    # the Pro feature. Enforced in ResumeTemplateService.set_preference.
+    "resume_template_customization": False,
     # Adopted, not a placeholder: free-tier ads offset AI compute cost for
     # the non-paying cohort without touching paying users (Pro is ads:
     # False below) and without hiding the free tier's actual usefulness
@@ -53,6 +57,7 @@ PRO_ENTITLEMENTS = {
     "allowed_ai_providers": ["ollama", "standard", "groq", "gemini"],
     "docx_export": True,
     "tailored_resume_version_history": True,
+    "resume_template_customization": True,
     "ads": False,
 }
 
@@ -62,6 +67,7 @@ FEATURE_LABELS = {
     "docx_export": "Word (.docx) export",
     "tailored_resume_version_history": "Version history and comparisons",
     "ai_provider": "Choosing an AI provider",
+    "resume_template_customization": "Customising the resume layout",
 }
 
 

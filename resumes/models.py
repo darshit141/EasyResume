@@ -287,6 +287,17 @@ class JobResumeCurationVersion(models.Model):
         blank=True,
     )
 
+    # The resolved resume-layout template config in force when this version
+    # was generated (see resumes.resume_template.resolve_template). Snapshot
+    # so a historical version always re-renders exactly as it looked when
+    # created, even after the user changes their default template later. An
+    # empty dict means "generated before templates existed" — every renderer
+    # falls back to DEFAULT_TEMPLATE for that case.
+    template_config = models.JSONField(
+        default=dict,
+        blank=True,
+    )
+
     created_at = models.DateTimeField(
         auto_now_add=True,
     )
