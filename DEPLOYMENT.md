@@ -130,6 +130,15 @@ Set every one of these on your hosting platform (not committed to git —
 | `SENTRY_ENVIRONMENT` | `production` |
 | `EMAIL_HOST` + `EMAIL_HOST_USER` + `EMAIL_HOST_PASSWORD` | A real SMTP provider — without this, OTP codes only ever print to the server log, which means **no one can actually log in in production**. This one is easy to miss because everything looks fine until the first real user tries to sign in. |
 
+### Rewarded ads → credits (optional)
+
+Off unless `REWARDED_ADS_ENABLED=true` is set in the admin Configuration tab. The **provider is chosen there too** (`REWARDED_AD_PROVIDER` = `admanager` or `partner`); credit value, daily cap, and expiry are the other `REWARDED_AD_*` keys on that screen. Only the network ids and the S2S secret are env vars:
+
+| Variable | Value |
+|---|---|
+| `GAM_NETWORK_CODE` + `GAM_REWARDED_AD_UNIT_PATH` | For `REWARDED_AD_PROVIDER=admanager`. SSV is verified against Google's published keys, so no key is stored. Point the ad unit's SSV callback at `https://<api-domain>/api/billing/credits/rewarded-ad/callback/`. |
+| `PARTNER_REWARDED_SCRIPT_URL` + `PARTNER_REWARDED_PLACEMENT_ID` + `PARTNER_REWARDED_SHOW_FN` + `PARTNER_REWARDED_S2S_SECRET` | For `REWARDED_AD_PROVIDER=partner` — whichever third-party rewarded-video SDK you sign with. The S2S postback is expected HMAC-SHA256 signed (see `PartnerRewardedAdProvider.verify_callback`); adjust that one method if the chosen network signs differently. Postback URL is the same callback path. |
+
 ### Leave at their defaults unless you have a specific reason
 
 `LLM_PROVIDER` (groq; set to `kira` to route AI through kiraai.vn),

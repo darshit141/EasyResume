@@ -9,6 +9,7 @@ from django.utils import timezone
 
 from billing.entitlements import FEATURE_LABELS, entitlements_for
 from billing.models import AIUsageLog, Subscription
+from billing.services.credit_service import CreditService
 
 
 class PlanRestrictionError(Exception):
@@ -96,26 +97,36 @@ class EntitlementsService:
         )
 
     @staticmethod
+    def bonus_credits(user):
+        """Unexpired credits the user earned (e.g. by watching a rewarded
+        ad). Each one lifts both free-tier monthly ceilings by one while it
+        lasts."""
+        return CreditService.active_balance(user)
+
+    @staticmethod
     def check_can_use_ai(user):
         """The blanket cost-control gate: covers every AI-backed action
         combined, separate from the narrower `tailored_resumes_per_month`
         feature limit. Skip entirely for the `standard` parser — it isn't
         an AI call, so it never needs a permission check."""
         entitlements = EntitlementsService.for_user(user)
-        limit = entitlements["ai_calls_per_month"]
-        if limit is None:
+        base_limit = entitlements["ai_calls_per_month"]
+        if base_limit is None:
             return
 
+        bonus = EntitlementsService.bonus_credits(user)
+        limit = base_limit + bonus
         used = EntitlementsService.ai_calls_used_this_month(user)
         if used >= limit:
             raise PlanLimitReachedError(
-                f"You've used all {limit} AI-assisted actions included in the Free plan "
+                f"You've used all {base_limit} AI-assisted actions included in the Free plan "
                 f"this month. Upgrade to Pro for unlimited AI usage, or wait until your "
                 f"allowance resets.",
                 feature="ai_usage",
                 used=used,
                 limit=limit,
                 resets_at=_next_month_start().isoformat(),
+                earn_credit_available=_earn_credit_available(user),
             )
 
     @staticmethod
@@ -126,14 +137,18 @@ class EntitlementsService:
         used = EntitlementsService.tailored_resumes_used_this_month(user)
         ai_limit = entitlements["ai_calls_per_month"]
         ai_used = EntitlementsService.ai_calls_used_this_month(user)
+        bonus = EntitlementsService.bonus_credits(user) if ai_limit is not None else 0
+        eff_limit = None if limit is None else limit + bonus
+        eff_ai_limit = None if ai_limit is None else ai_limit + bonus
         return {
             "plan_id": entitlements["plan_id"],
             "tailored_resumes_used": used,
-            "tailored_resumes_limit": limit,
-            "tailored_resumes_remaining": None if limit is None else max(0, limit - used),
+            "tailored_resumes_limit": eff_limit,
+            "tailored_resumes_remaining": None if eff_limit is None else max(0, eff_limit - used),
             "ai_calls_used": ai_used,
-            "ai_calls_limit": ai_limit,
-            "ai_calls_remaining": None if ai_limit is None else max(0, ai_limit - ai_used),
+            "ai_calls_limit": eff_ai_limit,
+            "ai_calls_remaining": None if eff_ai_limit is None else max(0, eff_ai_limit - ai_used),
+            "bonus_credits": bonus,
             "allowed_ai_providers": entitlements["allowed_ai_providers"],
             "docx_export": entitlements["docx_export"],
             "tailored_resume_version_history": entitlements["tailored_resume_version_history"],
@@ -144,20 +159,23 @@ class EntitlementsService:
     @staticmethod
     def check_can_generate_tailored_resume(user):
         entitlements = EntitlementsService.for_user(user)
-        limit = entitlements["tailored_resumes_per_month"]
-        if limit is None:
+        base_limit = entitlements["tailored_resumes_per_month"]
+        if base_limit is None:
             return
 
+        bonus = EntitlementsService.bonus_credits(user)
+        limit = base_limit + bonus
         used = EntitlementsService.tailored_resumes_used_this_month(user)
         if used >= limit:
             raise PlanLimitReachedError(
-                f"You've used all {limit} tailored resumes included in the Free plan "
+                f"You've used all {base_limit} tailored resumes included in the Free plan "
                 f"this month. Upgrade to Pro for unlimited tailored resumes, or wait "
                 f"until your allowance resets.",
                 feature="tailored_resumes",
                 used=used,
                 limit=limit,
                 resets_at=_next_month_start().isoformat(),
+                earn_credit_available=_earn_credit_available(user),
             )
 
     @staticmethod
@@ -188,6 +206,21 @@ class EntitlementsService:
                 f"{label} is a Pro feature. Upgrade to unlock it.",
                 feature=feature,
             )
+
+
+def _earn_credit_available(user):
+    """Whether to tell the frontend it can offer 'watch an ad for a credit'
+    alongside the upgrade prompt: the feature is on, a provider is usable,
+    and this account hasn't hit today's cap."""
+    try:
+        from billing.services.rewarded_ad_providers import get_rewarded_ad_provider
+
+        provider = get_rewarded_ad_provider()
+        if not provider.is_configured():
+            return False
+        return CreditService.can_watch_rewarded_ad(user)
+    except Exception:  # never let a nice-to-have hint break the real error
+        return False
 
 
 def _month_start():

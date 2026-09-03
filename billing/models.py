@@ -148,6 +148,75 @@ class AIUsageLog(models.Model):
         return f"{self.user.email} - {self.action} ({self.provider})"
 
 
+class CreditGrant(models.Model):
+    """A bonus allowance a free-tier user earned rather than paid for.
+
+    While a grant is unexpired it lifts *both* monthly free ceilings — the
+    blanket ``ai_calls_per_month`` and the marketed ``tailored_resumes_per_
+    month`` — by ``amount`` (see EntitlementsService.bonus_credits). There is
+    deliberately no separate "spend" record: a grant simply stops counting
+    once ``expires_at`` passes, which keeps the accounting identical to how
+    the base monthly quotas already work (a rolling count against a limit,
+    not a decrementing wallet) and means a credit that was never used just
+    lapses instead of lingering forever.
+
+    ``reason`` records how it was earned. ``external_id`` is the ad network's
+    own transaction id for a ``rewarded_ad`` grant and is what makes the
+    server-to-server reward callback idempotent — the same transaction
+    delivered twice (ad networks retry) creates one grant, not two.
+    """
+
+    REASON_REWARDED_AD = "rewarded_ad"
+    REASON_REFERRAL = "referral"
+    REASON_PROFILE_COMPLETION = "profile_completion"
+    REASON_DAILY_STREAK = "daily_streak"
+    REASON_ADMIN_GRANT = "admin_grant"
+    REASON_CHOICES = [
+        (REASON_REWARDED_AD, "Rewarded ad"),
+        (REASON_REFERRAL, "Referral"),
+        (REASON_PROFILE_COMPLETION, "Profile completion"),
+        (REASON_DAILY_STREAK, "Daily streak"),
+        (REASON_ADMIN_GRANT, "Admin grant"),
+    ]
+
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="credit_grants",
+    )
+    amount = models.PositiveIntegerField()
+    reason = models.CharField(max_length=30, choices=REASON_CHOICES)
+    # The ad provider that issued a rewarded-ad grant ("admanager" /
+    # "partner"); blank for every other reason.
+    provider = models.CharField(max_length=20, blank=True)
+    # The provider's transaction id, unique per (reason, external_id) so a
+    # retried reward callback is a no-op. Blank for reasons that have no
+    # external transaction (referral, streak, admin grant).
+    external_id = models.CharField(max_length=200, blank=True)
+    granted_at = models.DateTimeField(auto_now_add=True)
+    expires_at = models.DateTimeField()
+
+    class Meta:
+        ordering = ["-granted_at"]
+        indexes = [
+            models.Index(fields=["user", "expires_at"]),
+        ]
+        constraints = [
+            # Idempotency for reward callbacks: a provider transaction id
+            # can back at most one grant. The partial condition keeps the
+            # many blank-external_id rows (referral / streak / admin) from
+            # colliding with each other.
+            models.UniqueConstraint(
+                fields=["reason", "external_id"],
+                condition=~models.Q(external_id=""),
+                name="unique_reason_external_id",
+            ),
+        ]
+
+    def __str__(self):
+        return f"{self.user.email} +{self.amount} ({self.reason})"
+
+
 class Coupon(models.Model):
     """A code that grants Pro access without going through Stripe.
 

@@ -484,6 +484,37 @@ KIRA_API_KEY = os.getenv("KIRA_API_KEY", "")
 KIRA_MODEL = os.getenv("KIRA_MODEL", "kira-3.5-flash")
 KIRA_BASE_URL = os.getenv("KIRA_BASE_URL", "https://kiraai.vn/api/v1")
 
+# --- Rewarded ads -> earned credits ---------------------------------------
+# A free-tier user can watch an opt-in rewarded video to earn a credit (one
+# extra AI action + one extra tailored resume, expiring after a few days).
+# The master switch, provider choice, credit value, per-day cap and expiry
+# are all in the admin Configuration tab (SystemConfiguration keys
+# REWARDED_ADS_ENABLED / REWARDED_AD_PROVIDER / REWARDED_AD_CREDITS_PER_VIEW
+# / REWARDED_AD_MAX_PER_DAY / REWARDED_AD_CREDIT_TTL_DAYS). Two providers are
+# supported; the operator picks one. Only non-secret ids and the S2S secret
+# live here — never in SystemConfiguration, matching the LLM key policy.
+#
+# Defaults for the admin-tunable policy keys (DB SystemConfiguration wins
+# over these at runtime; these are the fallback + what the admin UI shows
+# before anything is set).
+REWARDED_ADS_ENABLED = os.getenv("REWARDED_ADS_ENABLED", "False")
+REWARDED_AD_PROVIDER = os.getenv("REWARDED_AD_PROVIDER", "admanager")
+REWARDED_AD_CREDITS_PER_VIEW = int(os.getenv("REWARDED_AD_CREDITS_PER_VIEW", "1"))
+REWARDED_AD_MAX_PER_DAY = int(os.getenv("REWARDED_AD_MAX_PER_DAY", "3"))
+REWARDED_AD_CREDIT_TTL_DAYS = int(os.getenv("REWARDED_AD_CREDIT_TTL_DAYS", "7"))
+
+# Google Ad Manager (provider = "admanager"): server-side verification uses
+# Google's published verifier keys, so no key is stored here.
+GAM_NETWORK_CODE = os.getenv("GAM_NETWORK_CODE", "")
+GAM_REWARDED_AD_UNIT_PATH = os.getenv("GAM_REWARDED_AD_UNIT_PATH", "")
+# Generic third-party network (provider = "partner"): configure to whichever
+# rewarded-video SDK you sign with. The S2S postback is expected to be
+# HMAC-SHA256 signed (see PartnerRewardedAdProvider.verify_callback).
+PARTNER_REWARDED_SCRIPT_URL = os.getenv("PARTNER_REWARDED_SCRIPT_URL", "")
+PARTNER_REWARDED_PLACEMENT_ID = os.getenv("PARTNER_REWARDED_PLACEMENT_ID", "")
+PARTNER_REWARDED_SHOW_FN = os.getenv("PARTNER_REWARDED_SHOW_FN", "")
+PARTNER_REWARDED_S2S_SECRET = os.getenv("PARTNER_REWARDED_S2S_SECRET", "")
+
 # Email. Defaults to Django's console backend (prints the full email to
 # the server log — zero setup, fine for local dev). Set EMAIL_HOST to
 # switch to real SMTP delivery with no code changes required; works with

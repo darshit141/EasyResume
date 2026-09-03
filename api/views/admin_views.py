@@ -115,6 +115,36 @@ DEFAULT_CONFIGS = [
         "description": "Maximum number of resumes a user can upload",
     },
     {
+        "key": "REWARDED_ADS_ENABLED",
+        "category": "ads",
+        "value_type": "boolean",
+        "description": "Let free-tier users watch a rewarded video to earn a bonus credit.",
+    },
+    {
+        "key": "REWARDED_AD_PROVIDER",
+        "category": "ads",
+        "value_type": "string",
+        "description": "Which rewarded-ad network serves the video: admanager (Google Ad Manager) or partner (a third-party SDK configured via env).",
+    },
+    {
+        "key": "REWARDED_AD_CREDITS_PER_VIEW",
+        "category": "ads",
+        "value_type": "integer",
+        "description": "Bonus credits granted per completed rewarded ad. One credit = one extra AI action and one extra tailored resume.",
+    },
+    {
+        "key": "REWARDED_AD_MAX_PER_DAY",
+        "category": "ads",
+        "value_type": "integer",
+        "description": "Most rewarded ads one account may be credited for per day.",
+    },
+    {
+        "key": "REWARDED_AD_CREDIT_TTL_DAYS",
+        "category": "ads",
+        "value_type": "integer",
+        "description": "Days an earned credit stays usable before it expires.",
+    },
+    {
         "key": "FREE_AI_CALLS_PER_MONTH",
         "category": "limits",
         "value_type": "integer",

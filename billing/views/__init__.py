@@ -11,6 +11,11 @@ from billing.views.coupon_admin_view import (
     AdminCouponListCreateAPIView,
     AdminCouponToggleActiveAPIView,
 )
+from billing.views.credits_view import (
+    CreditsStatusAPIView,
+    RewardedAdCallbackAPIView,
+    RewardedAdTicketAPIView,
+)
 
 __all__ = [
     "CouponRedeemAPIView",
@@ -22,4 +27,7 @@ __all__ = [
     "SubscriptionStatusAPIView",
     "AdminCouponListCreateAPIView",
     "AdminCouponToggleActiveAPIView",
+    "CreditsStatusAPIView",
+    "RewardedAdCallbackAPIView",
+    "RewardedAdTicketAPIView",
 ]
