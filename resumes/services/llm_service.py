@@ -48,7 +48,7 @@ class LLMTimeoutError(LLMServiceError):
     message = "AI service request timed out."
 
 
-SUPPORTED_PROVIDERS = ("ollama", "groq", "gemini")
+SUPPORTED_PROVIDERS = ("ollama", "groq", "gemini", "kira")
 
 # Resume upload/parsing has one extra choice unavailable elsewhere: a
 # deterministic, non-AI parser (see StandardResumeParserService). The other
@@ -287,6 +287,24 @@ class GroqLLMService(LLMService):
         return True
 
 
+class KiraLLMService(GroqLLMService):
+    """Client for Kira (kiraai.vn), an OpenAI-compatible aggregator API.
+
+    Kira exposes the exact same ``/chat/completions`` and ``/models``
+    contract as Groq — Bearer auth, ``response_format: {"type":
+    "json_object"}``, ``choices[0].message.content`` — so it reuses the
+    Groq client wholesale rather than duplicating it. It is a separate
+    class only so ``get_llm_service`` / ``_build_client`` can point at it
+    by provider name and callers can assert which provider they got.
+
+    It is configured with its own base URL, key and model (see
+    ``KIRA_*`` in settings). It tends to offer a much larger context
+    window and higher rate limits than the free tiers of the other
+    providers, which is why a deployment sharing one key across many
+    users would pick it as the default (``LLM_PROVIDER=kira``).
+    """
+
+
 def _to_gemini_schema(schema):
     """Convert a draft-07-style JSON schema into Gemini's OpenAPI-subset
     schema: uppercase type names, and ``["string", "null"]`` unions turned
@@ -491,6 +509,17 @@ def _build_client(provider, timeout, max_retries, temperature, max_output_tokens
             max_retries=max_retries,
             temperature=temperature,
             base_url=get_config_value("GEMINI_BASE_URL", settings.GEMINI_BASE_URL),
+            max_output_tokens=max_output_tokens,
+        )
+
+    if provider == "kira":
+        return KiraLLMService(
+            api_key=get_config_value("KIRA_API_KEY", settings.KIRA_API_KEY),
+            model=get_config_value("KIRA_MODEL", settings.KIRA_MODEL),
+            timeout=timeout,
+            max_retries=max_retries,
+            temperature=temperature,
+            base_url=get_config_value("KIRA_BASE_URL", settings.KIRA_BASE_URL),
             max_output_tokens=max_output_tokens,
         )
 

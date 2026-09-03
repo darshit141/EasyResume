@@ -11,6 +11,7 @@ from resumes.services.llm_service import (
     FallbackLLMService,
     GeminiLLMService,
     GroqLLMService,
+    KiraLLMService,
     LLMEmptyResponseError,
     LLMInvalidResponseError,
     LLMModelUnavailableError,
@@ -19,6 +20,7 @@ from resumes.services.llm_service import (
     LLMSchemaValidationError,
     LLMTimeoutError,
     OllamaLLMService,
+    SUPPORTED_PROVIDERS,
     _to_gemini_schema,
     get_llm_service,
 )
@@ -372,6 +374,99 @@ class GroqLLMServiceTests(SimpleTestCase):
         with patch("resumes.services.llm_service.urlopen", return_value=_fake_response(body)):
             with self.assertRaises(LLMModelUnavailableError):
                 service.check_model_available()
+
+
+class KiraLLMServiceTests(SimpleTestCase):
+    """Kira (kiraai.vn) speaks the same OpenAI-compatible wire format as
+    Groq, so KiraLLMService is a thin subclass. These tests confirm the
+    inherited behaviour still holds when constructed as Kira and that the
+    class stays wired into provider resolution."""
+
+    def make_service(self, api_key="test-key", model="kira-3.5-flash"):
+        return KiraLLMService(
+            api_key=api_key,
+            model=model,
+            timeout=5,
+            max_retries=0,
+            temperature=0,
+            base_url="https://kiraai.vn/api/v1",
+        )
+
+    def test_is_a_groq_client_subclass(self):
+        self.assertTrue(issubclass(KiraLLMService, GroqLLMService))
+
+    def test_successful_completion_returns_parsed_json(self):
+        service = self.make_service()
+        body = json.dumps({
+            "choices": [{"message": {"content": json.dumps({"skills": ["Python"]})}}]
+        }).encode("utf-8")
+        with patch("resumes.services.llm_service.urlopen", return_value=_fake_response(body)):
+            result = service.generate_structured("prompt", {"type": "object"})
+        self.assertEqual(result, {"skills": ["Python"]})
+
+    def test_request_hits_configured_base_url_with_bearer_auth(self):
+        service = self.make_service()
+        body = json.dumps({"choices": [{"message": {"content": "{}"}}]}).encode("utf-8")
+        captured = {}
+
+        def fake_urlopen(request, timeout=None):
+            captured["request"] = request
+            return _fake_response(body)
+
+        with patch("resumes.services.llm_service.urlopen", side_effect=fake_urlopen):
+            service.generate_structured("prompt", {"type": "object"})
+
+        request = captured["request"]
+        self.assertEqual(request.full_url, "https://kiraai.vn/api/v1/chat/completions")
+        self.assertEqual(request.get_header("Authorization"), "Bearer test-key")
+        payload = json.loads(request.data.decode("utf-8"))
+        self.assertEqual(payload["model"], "kira-3.5-flash")
+        self.assertEqual(payload["response_format"], {"type": "json_object"})
+
+    def test_missing_api_key_is_rejected_without_a_network_call(self):
+        service = self.make_service(api_key="")
+        with patch("resumes.services.llm_service.urlopen") as mock_urlopen:
+            with self.assertRaises(LLMModelUnavailableError):
+                service.generate_structured("prompt", {})
+            mock_urlopen.assert_not_called()
+
+    def test_timeout_is_converted_to_application_error(self):
+        service = self.make_service()
+        with patch("resumes.services.llm_service.urlopen", side_effect=TimeoutError):
+            with self.assertRaises(LLMTimeoutError):
+                service.generate_structured("prompt", {})
+
+    def test_model_availability_succeeds_when_model_is_listed(self):
+        service = self.make_service()
+        body = json.dumps({"data": [{"id": "kira-3.5-flash"}]}).encode("utf-8")
+        with patch("resumes.services.llm_service.urlopen", return_value=_fake_response(body)):
+            self.assertTrue(service.check_model_available())
+
+    def test_kira_is_a_supported_provider(self):
+        self.assertIn("kira", SUPPORTED_PROVIDERS)
+
+    @override_settings(
+        LLM_PROVIDER="kira",
+        LLM_FALLBACK_PROVIDER="",
+        KIRA_API_KEY="k",
+        KIRA_MODEL="kira-3.5-flash",
+        KIRA_BASE_URL="https://kiraai.vn/api/v1",
+    )
+    def test_get_llm_service_returns_kira_client_when_configured_as_default(self):
+        self.assertIsInstance(get_llm_service(), KiraLLMService)
+
+    @override_settings(
+        LLM_PROVIDER="groq",
+        LLM_FALLBACK_PROVIDER="kira",
+        KIRA_API_KEY="k",
+        KIRA_MODEL="kira-3.5-flash",
+        KIRA_BASE_URL="https://kiraai.vn/api/v1",
+    )
+    def test_kira_can_be_the_configured_fallback_provider(self):
+        service = get_llm_service()
+        self.assertIsInstance(service, FallbackLLMService)
+        self.assertEqual(service.fallback_provider_name, "kira")
+        self.assertIsInstance(service.fallback, KiraLLMService)
 
 
 class GeminiLLMServiceTests(SimpleTestCase):

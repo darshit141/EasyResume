@@ -33,7 +33,7 @@ FREE_ENTITLEMENTS = {
     # Every provider is available on every plan — Groq and Gemini are no
     # longer Pro-exclusive. Cost is controlled entirely by
     # `ai_calls_per_month` above, not by which provider a request picks.
-    "allowed_ai_providers": ["ollama", "standard", "groq", "gemini"],
+    "allowed_ai_providers": ["ollama", "standard", "groq", "gemini", "kira"],
     "docx_export": False,
     "tailored_resume_version_history": False,
     # Free users may pick one of the built-in resume layout presets; tuning
@@ -54,7 +54,7 @@ PRO_ENTITLEMENTS = {
     "plan_id": "pro",
     "tailored_resumes_per_month": None,
     "ai_calls_per_month": None,
-    "allowed_ai_providers": ["ollama", "standard", "groq", "gemini"],
+    "allowed_ai_providers": ["ollama", "standard", "groq", "gemini", "kira"],
     "docx_export": True,
     "tailored_resume_version_history": True,
     "resume_template_customization": True,

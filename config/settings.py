@@ -466,6 +466,19 @@ GEMINI_BASE_URL = os.getenv(
     "GEMINI_BASE_URL", "https://generativelanguage.googleapis.com/v1beta"
 )
 
+# Kira (kiraai.vn): an OpenAI-compatible aggregator API. Reuses the Groq
+# client (see resumes.services.llm_service.KiraLLMService) since the wire
+# format is identical. Attractive as a scaling default — its context
+# window and rate limits are far larger than the other providers' free
+# tiers, so one key can serve many concurrent users. Set LLM_PROVIDER=kira
+# (env or the admin Configuration tab) to make it the server-wide default.
+# Chat model ids: kira-mini-1.0 (free, very high limits), kira-3.5-flash,
+# kira-3.5-pro, kira-2.5-flash, kira-2.5-pro. The image/video/tts model ids
+# Kira also lists are not usable here — this integration is text-only.
+KIRA_API_KEY = os.getenv("KIRA_API_KEY", "")
+KIRA_MODEL = os.getenv("KIRA_MODEL", "kira-3.5-flash")
+KIRA_BASE_URL = os.getenv("KIRA_BASE_URL", "https://kiraai.vn/api/v1")
+
 # Email. Defaults to Django's console backend (prints the full email to
 # the server log — zero setup, fine for local dev). Set EMAIL_HOST to
 # switch to real SMTP delivery with no code changes required; works with

@@ -24,7 +24,7 @@ DEFAULT_CONFIGS = [
         "key": "LLM_PROVIDER",
         "category": "llm",
         "value_type": "string",
-        "description": "Default LLM provider (ollama, groq, gemini)",
+        "description": "Default LLM provider (ollama, groq, gemini, kira)",
     },
     {
         "key": "LLM_TIMEOUT",
@@ -91,6 +91,22 @@ DEFAULT_CONFIGS = [
         "category": "llm",
         "value_type": "string",
         "description": "Base URL for Gemini API",
+    },
+    {
+        "key": "KIRA_MODEL",
+        "category": "llm",
+        "value_type": "string",
+        "description": (
+            "Kira (kiraai.vn) chat model id: kira-mini-1.0 (free, very high "
+            "limits), kira-3.5-flash, kira-3.5-pro, kira-2.5-flash, "
+            "kira-2.5-pro"
+        ),
+    },
+    {
+        "key": "KIRA_BASE_URL",
+        "category": "llm",
+        "value_type": "string",
+        "description": "Base URL for the Kira API",
     },
     {
         "key": "MAX_RESUMES_PER_USER",

@@ -119,7 +119,7 @@ Set every one of these on your hosting platform (not committed to git —
 | `STRIPE_WEBHOOK_SECRET` | Live webhook signing secret from step 4 |
 | `STRIPE_PRICE_ID_PRO_EUR_MONTHLY` etc. | Live Price IDs from step 4 (whichever currency/period combos you're launching with) |
 | `STRIPE_AUTOMATIC_TAX_ENABLED` | `True` (already the case if you copied `.env` forward — leave it; Stripe Tax must already be active from step 4) |
-| `GROQ_API_KEY` and/or `GEMINI_API_KEY` | Production-tier keys, not a personal free-tier key that'll rate-limit under real traffic |
+| `GROQ_API_KEY` and/or `GEMINI_API_KEY` and/or `KIRA_API_KEY` | Production-tier keys, not a personal free-tier key that'll rate-limit under real traffic. `KIRA_API_KEY` (kiraai.vn) is an OpenAI-compatible provider with a large context window and high rate limits — a good choice for one key serving many users; set `LLM_PROVIDER=kira` to make it the default. API keys are env-var-only (never the admin Configuration tab); `KIRA_MODEL` / `KIRA_BASE_URL` can be tuned from that tab. |
 
 ### Recommended
 
@@ -132,7 +132,8 @@ Set every one of these on your hosting platform (not committed to git —
 
 ### Leave at their defaults unless you have a specific reason
 
-`LLM_PROVIDER` (groq), `FREE_AI_CALLS_PER_MONTH`, `FREE_TAILORED_RESUMES_PER_MONTH`,
+`LLM_PROVIDER` (groq; set to `kira` to route AI through kiraai.vn),
+`KIRA_MODEL` (`kira-3.5-flash`), `FREE_AI_CALLS_PER_MONTH`, `FREE_TAILORED_RESUMES_PER_MONTH`,
 `MAX_RESUMES_PER_USER`, `ACCESS_TOKEN_LIFETIME`, `REFRESH_TOKEN_LIFETIME`,
 throttle rates (`THROTTLE_*`) — all tunable later without a code change,
 none of them block launch.
