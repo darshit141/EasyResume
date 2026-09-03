@@ -1,6 +1,7 @@
 from django.http import Http404
 
 from resumes.models import Resume, ResumeVersion
+from resumes.resume_content import normalize_parsed_data
 from resumes.utils.ats_scorer import ATSScorer
 
 
@@ -32,6 +33,11 @@ class ResumeEditService:
 
     @staticmethod
     def _apply_edit(resume, parsed_data):
+        # Accept either shape from the client — a legacy flat string per job,
+        # or the header/bullets entry — and store the canonical one, so the
+        # editor, the renderers and the tailoring pipeline all read the same
+        # thing regardless of what the caller sent.
+        parsed_data = normalize_parsed_data(parsed_data)
         ats_score = ATSScorer.calculate_score(parsed_data)
 
         resume.parsed_data = parsed_data

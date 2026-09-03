@@ -1,6 +1,7 @@
 """LLM-backed resume parsing used after the existing file text extraction."""
 
 from resumes.prompts import RESUME_JSON_SCHEMA, build_resume_extraction_prompt
+from resumes.resume_content import ENTRY_SECTIONS, normalize_entry_list
 from resumes.services.llm_service import LLMSchemaValidationError, get_llm_service
 
 
@@ -9,10 +10,11 @@ class ResumeParserService:
 
     personal_information_fields = ("name", "email", "phone")
     scalar_fields = ("name", "email", "phone", "summary")
-    collection_fields = (
-        "skills", "experience", "education", "projects", "certifications",
-        "achievements", "languages",
-    )
+    # Sections whose entries are {header, bullets} objects.
+    entry_fields = ENTRY_SECTIONS
+    # Sections that stay flat string lists.
+    string_list_fields = ("skills", "achievements", "languages")
+    collection_fields = entry_fields + string_list_fields
 
     def __init__(self, llm_service=None, provider=None):
         self.llm_service = llm_service or get_llm_service(provider)
@@ -50,9 +52,24 @@ class ResumeParserService:
                 raise LLMSchemaValidationError()
             validated[field] = value
 
-        for field in cls.collection_fields:
+        for field in cls.string_list_fields:
             value = result[field]
             if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
                 raise LLMSchemaValidationError()
-            validated[field] = value
+            validated[field] = [item.strip() for item in value if item.strip()]
+
+        for field in cls.entry_fields:
+            value = result[field]
+            if not isinstance(value, list):
+                raise LLMSchemaValidationError()
+            # Every item must be something an entry can be built from — a
+            # string (tolerated) or a {header, bullets} object. Anything
+            # else is the model ignoring the schema, which is a real fault.
+            if not all(isinstance(item, (str, dict)) for item in value):
+                raise LLMSchemaValidationError()
+            for item in value:
+                if isinstance(item, dict) and not ({"header", "bullets"} & set(item)):
+                    raise LLMSchemaValidationError()
+            validated[field] = normalize_entry_list(value)
+
         return validated

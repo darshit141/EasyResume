@@ -3,6 +3,7 @@ import logging
 from django.db import DatabaseError, transaction
 
 from resumes.models import JobResumeCuration, JobResumeCurationVersion, Resume
+from resumes.resume_content import flatten_parsed_data_for_grounding
 from resumes.services.job_curation_service import JobCurationDatabaseError
 from resumes.services.job_gap_analysis_service import (
     CandidateDataUnavailableError,
@@ -139,7 +140,11 @@ class JobResumeCurationService:
         if not resume or not resume.parsed_data:
             raise CandidateDataUnavailableError()
 
-        parsed_data = resume.parsed_data
+        # Flatten every header/bullets entry to a text block so the tailoring
+        # prompt and its grounding check — both of which reason over strings
+        # — see the whole entry (header AND every bullet), not just a
+        # summary line. Legacy string entries pass through unchanged.
+        parsed_data = flatten_parsed_data_for_grounding(resume.parsed_data)
         return {
             "resume_id": resume.id,
             "personal_information": parsed_data.get("personal_information") or {

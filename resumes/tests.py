@@ -55,7 +55,10 @@ class ResumeParserServiceTests(SimpleTestCase):
             "name": "Jane Doe", "email": "jane@example.com", "phone": None,
         },
         "name": "Jane Doe", "email": "jane@example.com", "phone": None,
-        "summary": None, "skills": ["Python"], "experience": ["Developer"],
+        "summary": None, "skills": ["Python"],
+        "experience": [
+            {"header": "Developer - Acme (2020-2024)", "bullets": ["Built the API.", "Cut latency 40%."]},
+        ],
         "education": [], "projects": [], "certifications": [],
         "achievements": [], "languages": [],
     }
@@ -64,8 +67,24 @@ class ResumeParserServiceTests(SimpleTestCase):
         parsed = ResumeParserService(FakeLLMService(self.valid_data)).parse("resume")
         self.assertEqual(parsed, self.valid_data)
 
+    def test_a_bare_string_entry_is_coerced_to_header_bullets(self):
+        data = {**self.valid_data, "experience": ["Developer at Acme"]}
+        parsed = ResumeParserService(FakeLLMService(data)).parse("resume")
+        self.assertEqual(parsed["experience"], [{"header": "Developer at Acme", "bullets": []}])
+
+    def test_every_bullet_survives_a_multi_bullet_entry(self):
+        bullets = [f"Did important thing number {n}." for n in range(12)]
+        data = {**self.valid_data, "experience": [{"header": "Engineer - BigCo", "bullets": bullets}]}
+        parsed = ResumeParserService(FakeLLMService(data)).parse("resume")
+        self.assertEqual(parsed["experience"][0]["bullets"], bullets)
+
     def test_rejects_schema_mismatch(self):
         invalid = {**self.valid_data, "skills": "Python"}
+        with self.assertRaises(LLMSchemaValidationError):
+            ResumeParserService(FakeLLMService(invalid)).parse("resume")
+
+    def test_rejects_an_experience_entry_that_is_neither_string_nor_entry(self):
+        invalid = {**self.valid_data, "experience": [123]}
         with self.assertRaises(LLMSchemaValidationError):
             ResumeParserService(FakeLLMService(invalid)).parse("resume")
 
@@ -205,8 +224,25 @@ BS Computer Science, State University (2019)
         result = StandardResumeParserService().parse(self.RESUME_TEXT)
         validated = ResumeParserService._validate(result)
         self.assertEqual(validated["skills"], ["Python", "Django", "PostgreSQL"])
-        self.assertIn("Backend Engineer at Acme Corp (2019-2024)", validated["experience"])
-        self.assertIn("BS Computer Science, State University (2019)", validated["education"])
+        exp_headers = [e["header"] for e in validated["experience"]]
+        self.assertIn("Backend Engineer at Acme Corp (2019-2024)", exp_headers)
+        edu_headers = [e["header"] for e in validated["education"]]
+        self.assertIn("BS Computer Science, State University (2019)", edu_headers)
+
+    def test_bulleted_lines_group_under_the_preceding_role(self):
+        text = (
+            "WORK EXPERIENCE\n"
+            "Senior Engineer at Globex (2021-Present)\n"
+            "- Led the platform team.\n"
+            "- Cut build times by 60%.\n"
+            "- Mentored four engineers.\n"
+        )
+        result = StandardResumeParserService().parse(text)
+        self.assertEqual(len(result["experience"]), 1)
+        entry = result["experience"][0]
+        self.assertEqual(entry["header"], "Senior Engineer at Globex (2021-Present)")
+        self.assertEqual(len(entry["bullets"]), 3)
+        self.assertIn("Cut build times by 60%.", entry["bullets"])
 
 
 class OllamaLLMServiceTests(SimpleTestCase):

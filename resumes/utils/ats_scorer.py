@@ -1,5 +1,7 @@
 import re
 
+from resumes.resume_content import entry_text
+
 # A resume entry "counts" as quantified if it contains a number a recruiter
 # or ATS keyword-scan would treat as an impact metric: a percentage, a
 # currency amount, or a bare count/multiplier (e.g. "50+ clients",
@@ -91,16 +93,30 @@ class ATSScorer:
         if not experience:
             return 0
 
-        entries = [str(entry) for entry in experience if str(entry).strip()]
-        if not entries:
+        # Score against the individual bullet points, not one blob per job:
+        # a role with ten quantified bullets should read very differently
+        # from a role with one vague sentence. Falls back to the flat entry
+        # text for a legacy string entry or an entry with no bullets.
+        units = []
+        for entry in experience:
+            from resumes.resume_content import normalize_entry
+
+            normalized = normalize_entry(entry)
+            if normalized is None:
+                continue
+            if normalized["bullets"]:
+                units.extend(normalized["bullets"])
+            elif normalized["header"]:
+                units.append(normalized["header"])
+        if not units:
             return 0
 
-        quantified_fraction = sum(1 for entry in entries if _METRIC_RE.search(entry)) / len(entries)
-        action_fraction = sum(1 for entry in entries if cls._starts_with_action_verb(entry)) / len(entries)
+        quantified_fraction = sum(1 for unit in units if _METRIC_RE.search(unit)) / len(units)
+        action_fraction = sum(1 for unit in units if cls._starts_with_action_verb(unit)) / len(units)
 
-        # 10 for having real experience content, up to 10 more scaled by
-        # how many entries include a quantified result, up to 5 more scaled
-        # by how many open with a strong action verb.
+        # 10 for having real experience content, up to 10 more scaled by how
+        # many bullets include a quantified result, up to 5 more scaled by
+        # how many open with a strong action verb.
         return 10 + round(quantified_fraction * 10) + round(action_fraction * 5)
 
     @staticmethod

@@ -9,6 +9,8 @@ not a replacement for AI accuracy on unusually formatted resumes.
 
 import re
 
+from resumes.resume_content import ENTRY_SECTIONS, normalize_entry_list
+
 
 class StandardResumeParserService:
     EMAIL_RE = re.compile(r"[\w.+-]+@[\w-]+\.[a-zA-Z]{2,}")
@@ -67,8 +69,38 @@ class StandardResumeParserService:
             items = sections.get(field, [])
             if field in self.SPLIT_ON_COMMA_FIELDS:
                 items = self._split_items(items, field)
+            elif field in ENTRY_SECTIONS:
+                items = normalize_entry_list(self._group_entries(items))
             result[field] = items
         return result
+
+    # A line that opens with one of these is a bullet under the current
+    # entry, not the start of a new one.
+    _BULLET_RE = re.compile(r"^\s*(?:[-*•●▪◦‣·]|o\s|\d+[.)])\s+(.*\S)")
+
+    @classmethod
+    def _group_entries(cls, lines):
+        """Turn a run of raw section lines into header/bullets entries: a
+        bullet-marked line joins the current entry's bullets, any other
+        non-empty line starts a new entry (its header). Bullets seen before
+        any header become a headerless entry, which normalize_entry then
+        repairs by promoting the first bullet."""
+        entries = []
+        current = None
+        for raw in lines:
+            line = raw.strip()
+            if not line:
+                continue
+            bullet_match = cls._BULLET_RE.match(line)
+            if bullet_match:
+                if current is None:
+                    current = {"header": "", "bullets": []}
+                    entries.append(current)
+                current["bullets"].append(bullet_match.group(1).strip())
+            else:
+                current = {"header": line, "bullets": []}
+                entries.append(current)
+        return entries
 
     @classmethod
     def _first_match(cls, pattern, text):

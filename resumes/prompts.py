@@ -1,6 +1,22 @@
 """Prompts kept outside views and persistence code to protect API boundaries."""
 
 
+# One entry in experience / projects / education / certifications: the
+# identifying line, then every distinct responsibility or achievement as its
+# own bullet. This is what stops a role with a dozen bullet points being
+# flattened into a single sentence on upload. `bullets` may be empty for an
+# entry that genuinely has no sub-points (a bare certification name).
+RESUME_ENTRY_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "header": {"type": "string"},
+        "bullets": {"type": "array", "items": {"type": "string"}, "maxItems": 40},
+    },
+    "required": ["header", "bullets"],
+    "additionalProperties": False,
+}
+
+
 RESUME_JSON_SCHEMA = {
     "type": "object",
     "properties": {
@@ -18,12 +34,12 @@ RESUME_JSON_SCHEMA = {
         "email": {"type": ["string", "null"]},
         "phone": {"type": ["string", "null"]},
         "summary": {"type": ["string", "null"]},
-        "skills": {"type": "array", "items": {"type": "string"}, "maxItems": 40},
-        "experience": {"type": "array", "items": {"type": "string"}, "maxItems": 20},
-        "education": {"type": "array", "items": {"type": "string"}, "maxItems": 10},
-        "projects": {"type": "array", "items": {"type": "string"}, "maxItems": 15},
-        "certifications": {"type": "array", "items": {"type": "string"}, "maxItems": 15},
-        "achievements": {"type": "array", "items": {"type": "string"}, "maxItems": 15},
+        "skills": {"type": "array", "items": {"type": "string"}, "maxItems": 60},
+        "experience": {"type": "array", "items": RESUME_ENTRY_SCHEMA, "maxItems": 30},
+        "education": {"type": "array", "items": RESUME_ENTRY_SCHEMA, "maxItems": 15},
+        "projects": {"type": "array", "items": RESUME_ENTRY_SCHEMA, "maxItems": 30},
+        "certifications": {"type": "array", "items": RESUME_ENTRY_SCHEMA, "maxItems": 20},
+        "achievements": {"type": "array", "items": {"type": "string"}, "maxItems": 20},
         "languages": {"type": "array", "items": {"type": "string"}, "maxItems": 15},
     },
     "required": [
@@ -216,8 +232,24 @@ def build_resume_extraction_prompt(resume_text):
     return """You are extracting structured information from a resume.
 Do not invent information. Only extract information supported by the supplied
 resume. Use null for unavailable scalar values and empty arrays for unavailable
-collections. Keep items concise and preserve the original information. Return
-only JSON that conforms exactly to the supplied schema.
+collections. Return only JSON that conforms exactly to the supplied schema.
+
+CAPTURE EVERYTHING — do not summarise or drop content:
+- experience, projects, education and certifications are lists of entries.
+  Each entry has a "header" and a "bullets" array.
+- "header" is the identifying line ONLY: the role/title, the company or
+  institution, and the dates, e.g.
+  "Software Engineer - Keyanna Technology | Mar 2025 - Present".
+  No responsibilities or achievements go in the header.
+- "bullets" is EVERY separate responsibility, achievement or detail listed
+  under that entry, one bullet per line item in the source. If the resume
+  lists twelve bullet points under a job, return twelve bullets. Never
+  merge several bullets into one, never shorten a bullet, and never move a
+  bullet into a different section (an achievement listed under a job stays
+  in that job's bullets, not in "achievements").
+- If an entry genuinely has no sub-points (a bare certification name), put
+  the whole thing in "header" and return an empty "bullets" array.
+- Preserve each bullet's original wording, numbers and metrics exactly.
 
 Resume text follows:
 ---
