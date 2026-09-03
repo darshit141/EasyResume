@@ -34,7 +34,18 @@ class ResumeCurationAIService:
 
     ITEM_FIELDS = ("experience", "projects", "education", "certifications")
     MAX_ATTEMPTS = 2
-    _TOKEN_RE = re.compile(r"[A-Za-z][A-Za-z0-9+#.]*|\d+(?:\.\d+)?%?")
+    # A number keeps an immediately trailing magnitude / percent / multiplier
+    # suffix as part of the same token — "1.2k", "50%", "2x", "3M" — so a
+    # metric written the same way in the candidate's resume and in the
+    # generated text compares equal. Without this the token was split as
+    # "1.2" + "k", and "1.2" was then reported ungrounded because the "1.2k"
+    # in the source has a letter immediately after it (the whole-token
+    # boundary check in `_is_grounded` failed). That surfaced as a spurious
+    # RESUME_CURATION_GROUNDING_FAILED — "we couldn't generate your tailored
+    # resume" — for any candidate whose resume quantifies an achievement
+    # with a k/M/x-style figure.
+    _TOKEN_RE = re.compile(r"[A-Za-z][A-Za-z0-9+#.]*|\d+(?:\.\d+)?(?:[kKmMbBxX]|%)?")
+    _NUMERIC_TOKEN_RE = re.compile(r"^(\d+(?:\.\d+)?)(?:[kmbx%])?$")
 
     def __init__(self, llm_service=None, provider=None):
         self.llm_service = llm_service or get_llm_service(provider)
@@ -222,14 +233,31 @@ class ResumeCurationAIService:
                 )
         return violations
 
-    @staticmethod
-    def _is_grounded(normalised, candidate_text):
+    @classmethod
+    def _is_grounded(cls, normalised, candidate_text):
         """Boundary-aware search: a fact must appear as a whole token, not merely
         as a substring of an unrelated number or word (e.g. '8' inside a phone
         number), while still tolerating adjacent punctuation like a sentence-
         ending period."""
         pattern = r"(?<![a-z0-9])" + re.escape(normalised) + r"(?![a-z0-9])"
-        return re.search(pattern, candidate_text) is not None
+        if re.search(pattern, candidate_text) is not None:
+            return True
+
+        # A numeric fact may be written with or without its magnitude suffix
+        # on either side ("1.2k" in the resume, "1.2" in the generated text,
+        # or vice versa). Match the numeric part and allow one optional
+        # magnitude/percent character right after it in the source, while
+        # still refusing an unrelated longer number ("1.2" must not ground
+        # "1.28", "12" must not ground "128").
+        numeric = cls._NUMERIC_TOKEN_RE.match(normalised)
+        if numeric:
+            loose = (
+                r"(?<![a-z0-9])"
+                + re.escape(numeric.group(1))
+                + r"(?:[kmbx%])?(?![a-z0-9.])"
+            )
+            return re.search(loose, candidate_text) is not None
+        return False
 
     @classmethod
     def _candidate_text_blob(cls, candidate_source_data):

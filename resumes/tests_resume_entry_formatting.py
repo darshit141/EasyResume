@@ -174,3 +174,76 @@ class EntryFormattingGroundingTests(TestCase):
         entry = result["experience"][0]
         self.assertEqual(entry["header"], entry["tailored_text"])
         self.assertEqual(entry["bullets"], [])
+
+
+class NumericMetricGroundingTests(TestCase):
+    """A quantified achievement in the source ("1.2k stars", "3.4M requests",
+    "2x faster") must not be reported as ungrounded just because the tokenizer
+    split the magnitude suffix off the number. This was a real production
+    failure: any resume that quantified an achievement with a k/M/x figure
+    hit RESUME_CURATION_GROUNDING_FAILED and the tailored resume never
+    generated.
+    """
+
+    SOURCE = {
+        "skills": ["Python"],
+        "experience": [
+            "Cut checkout latency 2x and served 3.4M requests/day, improving "
+            "throughput by 38%."
+        ],
+        "projects": ["openresume - open-source resume parser, 1.2k GitHub stars."],
+        "education": [],
+        "certifications": [],
+    }
+
+    def _raw(self, exp_text, proj_text):
+        return {
+            "summary": "Backend engineer focused on performance.",
+            "skills": ["Python"],
+            "experience": [{"source_index": 0, "tailored_text": exp_text}],
+            "projects": [{"source_index": 0, "tailored_text": proj_text}],
+            "education": [],
+            "certifications": [],
+        }
+
+    def test_metric_written_the_same_way_as_the_source_is_accepted(self):
+        result = ResumeCurationAIService.validate_and_ground(
+            self._raw(
+                "Improved throughput 38%, cut latency 2x, handled 3.4M requests/day.",
+                "Built openresume, reaching 1.2k GitHub stars.",
+            ),
+            self.SOURCE,
+        )
+        self.assertEqual(result["experience"][0]["source_index"], 0)
+        self.assertEqual(result["projects"][0]["source_index"], 0)
+
+    def test_metric_with_the_suffix_dropped_is_still_accepted(self):
+        # AI rewrote "1.2k" as "1.2 thousand" / "3.4M" as "3.4 million".
+        result = ResumeCurationAIService.validate_and_ground(
+            self._raw(
+                "Handled 3.4 million requests per day; 2x faster checkout.",
+                "Reached 1.2 thousand GitHub stars on openresume.",
+            ),
+            self.SOURCE,
+        )
+        self.assertEqual(result["projects"][0]["source_index"], 0)
+
+    def test_a_fabricated_metric_is_still_rejected(self):
+        with self.assertRaises(ResumeCurationGroundingError):
+            ResumeCurationAIService.validate_and_ground(
+                self._raw(
+                    "Improved application performance by 40%.",
+                    "Built openresume, reaching 1.2k GitHub stars.",
+                ),
+                self.SOURCE,
+            )
+
+    def test_a_close_but_different_number_is_still_rejected(self):
+        with self.assertRaises(ResumeCurationGroundingError):
+            ResumeCurationAIService.validate_and_ground(
+                self._raw(
+                    "Improved throughput 38%, cut latency 2x, handled 3.4M requests/day.",
+                    "Built openresume, reaching 1.28k GitHub stars.",
+                ),
+                self.SOURCE,
+            )

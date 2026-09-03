@@ -350,8 +350,13 @@ CELERY_RESULT_BACKEND = REDIS_URL
 # requiring a live broker/worker — this is what lets the existing test
 # suite's `self.client.post(...)` still observe the AI job's completed
 # side effects (and any exception it raises) without a real Celery worker.
-CELERY_TASK_ALWAYS_EAGER = RUNNING_TESTS
-CELERY_TASK_EAGER_PROPAGATES = RUNNING_TESTS
+# `CELERY_TASK_ALWAYS_EAGER=true` in the environment forces the same
+# behaviour outside the test runner, so a local `runserver` can exercise
+# the full AI-job flow without also running Redis and a worker. Never set
+# it in production — it would run every generation inside the web request.
+_EAGER_TASKS = RUNNING_TESTS or os.getenv("CELERY_TASK_ALWAYS_EAGER", "").lower() == "true"
+CELERY_TASK_ALWAYS_EAGER = _EAGER_TASKS
+CELERY_TASK_EAGER_PROPAGATES = _EAGER_TASKS
 CELERY_TASK_ACKS_LATE = True
 # A worker that crashes/is killed mid-task must not silently swallow the
 # job — redeliver it to another worker instead of losing it.
