@@ -35,6 +35,12 @@ from resumes.views.tailored_resume_version_view import (
     TailoredResumeVersionDetailAPIView,
     TailoredResumeVersionListAPIView,
 )
+from resumes.views.job_application_view import (
+    JobApplicationDetailAPIView,
+    JobApplicationDraftAPIView,
+    JobApplicationListAPIView,
+    JobApplicationSendAPIView,
+)
 from resumes.views.guided_resume_view import (
     GuidedResumeAcceptAPIView,
     GuidedResumeAnswersAPIView,
@@ -45,6 +51,21 @@ from resumes.views.guided_resume_view import (
 )
 
 urlpatterns = [
+    path(
+        "applications/",
+        JobApplicationListAPIView.as_view(),
+        name="job-application-list",
+    ),
+    path(
+        "applications/<int:application_id>/",
+        JobApplicationDetailAPIView.as_view(),
+        name="job-application-detail",
+    ),
+    path(
+        "applications/<int:application_id>/send/",
+        JobApplicationSendAPIView.as_view(),
+        name="job-application-send",
+    ),
     path("guided/", GuidedResumeSessionAPIView.as_view(), name="guided-resume-session"),
     path("guided/answers/", GuidedResumeAnswersAPIView.as_view(), name="guided-resume-answers"),
     path("guided/draft/", GuidedResumeDraftAPIView.as_view(), name="guided-resume-draft"),
@@ -154,6 +175,11 @@ urlpatterns = [
         "job-curations/<int:curation_id>/application/",
         ApplicationStatusAPIView.as_view(),
         name="job-curation-application-status",
+    ),
+    path(
+        "job-curations/<int:curation_id>/apply/draft/",
+        JobApplicationDraftAPIView.as_view(),
+        name="job-curation-apply-draft",
     ),
     path(
         "job-curations/<int:curation_id>/tailored-resume/versions/",

@@ -14,6 +14,7 @@ from resumes.services.llm_service import (
     LLMTimeoutError,
 )
 from resumes.services.cover_letter_ai_service import CoverLetterGroundingError
+from resumes.services.job_application_ai_service import ApplicationEmailGroundingError
 from resumes.services.resume_curation_ai_service import ResumeCurationGroundingError
 
 
@@ -28,6 +29,7 @@ def llm_error_response(exc):
             # A grounding failure means the model returned unusable content,
             # not that the provider is down — 502, like the resume grounder.
             CoverLetterGroundingError,
+            ApplicationEmailGroundingError,
         ),
     ):
         response_status = status.HTTP_502_BAD_GATEWAY

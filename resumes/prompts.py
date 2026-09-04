@@ -461,6 +461,68 @@ GUIDED_SUMMARY_SCHEMA = {
 }
 
 
+APPLICATION_EMAIL_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "subject": {"type": "string"},
+        "body": {"type": "string"},
+    },
+    "required": ["subject", "body"],
+    "additionalProperties": False,
+}
+
+
+def build_application_email_prompt(job_title, company_name, recipient_name, candidate_name, candidate_evidence, job_requirements_text):
+    """Draft the covering email a candidate sends with their application.
+
+    This email goes to a real employer under the candidate's name, so the
+    invention rules are stricter than anywhere else in the product: a
+    fabricated year of experience or a tool the candidate has never used is
+    not a bad paragraph, it is a lie told on their behalf. Every claim must
+    trace to EVIDENCE, which is the candidate's own verified resume data.
+    """
+    greeting_target = recipient_name.strip() or "the hiring team"
+    company_clause = f" at {company_name.strip()}" if company_name.strip() else ""
+
+    return """You are writing the short covering email a candidate sends when emailing a job application.
+
+ROLE: %s%s
+ADDRESSED TO: %s
+CANDIDATE NAME: %s
+
+STRICT RULES:
+- Every factual claim must come from EVIDENCE below. Never invent years of
+  experience, employers, tools, certifications, degrees or metrics.
+- If EVIDENCE does not support a requirement, say nothing about it. Never
+  claim familiarity the candidate has not demonstrated.
+- 120-180 words. Four short paragraphs at most. This is an email, not a
+  cover letter - the full cover letter and resume are attached separately.
+- Plain text only. No markdown, no bullet characters, no placeholders like
+  [Your Name] or [Company]. Do not include a subject line inside the body.
+- Open by naming the role being applied for. Close with a plain sign-off
+  using the candidate's real name exactly as given above.
+- Professional and direct. No flattery, no "I am thrilled", no superlatives
+  about the company.
+
+Return JSON: {"subject": "...", "body": "..."}.
+The subject must name the role and the candidate, e.g. "Application for %s - %s".
+
+JOB REQUIREMENTS (for emphasis only, never as facts about the candidate):
+%s
+
+EVIDENCE (the candidate's verified resume - the only permitted source of facts):
+%s""" % (
+        job_title,
+        company_clause,
+        greeting_target,
+        candidate_name,
+        job_title,
+        candidate_name,
+        job_requirements_text,
+        candidate_evidence,
+    )
+
+
 def build_guided_section_prompt(section, target_role, answers_text):
     """Turn one section's plain-language interview answers into resume
     content. The answers are the ONLY facts; the model may fix grammar,

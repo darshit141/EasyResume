@@ -15,6 +15,7 @@ codes, dunning notices and outcome nudges all keep calling send_mail() and
 transparently go out over HTTPS instead.
 """
 
+import base64
 import json
 import logging
 
@@ -78,6 +79,10 @@ class ResendAPIEmailBackend(BaseEmailBackend):
         if message.reply_to:
             payload["reply_to"] = list(message.reply_to)
 
+        attachments = _encode_attachments(message)
+        if attachments:
+            payload["attachments"] = attachments
+
         try:
             response = requests.post(
                 RESEND_ENDPOINT,
@@ -107,3 +112,36 @@ class ResendAPIEmailBackend(BaseEmailBackend):
             return False
 
         return True
+
+
+def _encode_attachments(message):
+    """Translate Django's attachments into Resend's base64 form.
+
+    Without this, `EmailMessage.attach(...)` would be accepted by Django and
+    then silently dropped on the way out — an application email would arrive
+    with no resume attached and nothing would look broken. Sending a job
+    application without its attachment is worse than failing to send it, so
+    unreadable attachments raise rather than being skipped.
+    """
+    encoded = []
+    for attachment in getattr(message, "attachments", None) or []:
+        if isinstance(attachment, (list, tuple)):
+            filename, content = attachment[0], attachment[1]
+        else:
+            # A MIMEBase object, as produced by attaching a pre-built part.
+            filename = attachment.get_filename()
+            content = attachment.get_payload(decode=True)
+
+        if not filename:
+            raise ValueError("Cannot send an attachment without a filename.")
+
+        if isinstance(content, str):
+            content = content.encode("utf-8")
+
+        encoded.append(
+            {
+                "filename": filename,
+                "content": base64.b64encode(content).decode("ascii"),
+            }
+        )
+    return encoded

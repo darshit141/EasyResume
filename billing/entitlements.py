@@ -26,10 +26,20 @@ import os
 # capped.
 FREE_AI_CALLS_PER_MONTH = int(os.getenv("FREE_AI_CALLS_PER_MONTH", "30"))
 
+# Direct Apply sends real email to third parties from our own domain, which
+# makes it the one feature in the product that can damage something we can't
+# buy back: our sending reputation. These caps are an abuse control first and
+# a plan differentiator second, which is why even Pro has a finite ceiling —
+# an "unlimited sends" paid tier is an attractive thing for a spammer to buy.
+# Tuned by environment so they can be tightened immediately without a deploy.
+FREE_JOB_APPLICATIONS_PER_MONTH = int(os.getenv("FREE_JOB_APPLICATIONS_PER_MONTH", "10"))
+PRO_JOB_APPLICATIONS_PER_MONTH = int(os.getenv("PRO_JOB_APPLICATIONS_PER_MONTH", "200"))
+
 FREE_ENTITLEMENTS = {
     "plan_id": "free",
     "tailored_resumes_per_month": int(os.getenv("FREE_TAILORED_RESUMES_PER_MONTH", "2")),
     "ai_calls_per_month": FREE_AI_CALLS_PER_MONTH,
+    "job_applications_per_month": FREE_JOB_APPLICATIONS_PER_MONTH,
     # Every provider is available on every plan — Groq and Gemini are no
     # longer Pro-exclusive. Cost is controlled entirely by
     # `ai_calls_per_month` above, not by which provider a request picks.
@@ -54,6 +64,9 @@ PRO_ENTITLEMENTS = {
     "plan_id": "pro",
     "tailored_resumes_per_month": None,
     "ai_calls_per_month": None,
+    # Not None: see the note on the constants above. This is a spam ceiling,
+    # not a paywall — no honest job seeker emails 200 applications a month.
+    "job_applications_per_month": PRO_JOB_APPLICATIONS_PER_MONTH,
     "allowed_ai_providers": ["ollama", "standard", "groq", "gemini", "kira"],
     "docx_export": True,
     "tailored_resume_version_history": True,
@@ -68,6 +81,7 @@ FEATURE_LABELS = {
     "tailored_resume_version_history": "Version history and comparisons",
     "ai_provider": "Choosing an AI provider",
     "resume_template_customization": "Customising the resume layout",
+    "job_applications": "Sending applications from IntelliResume",
 }
 
 

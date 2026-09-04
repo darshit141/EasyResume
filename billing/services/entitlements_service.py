@@ -179,6 +179,54 @@ class EntitlementsService:
             )
 
     @staticmethod
+    def applications_sent_this_month(user):
+        """How many application emails this account has actually delivered
+        this calendar month. Counts sends, not drafts — drafting costs us
+        nothing and reveals nothing about abuse."""
+        from resumes.models import JobApplication
+
+        return JobApplication.objects.filter(
+            user=user,
+            status=JobApplication.STATUS_SENT,
+            sent_at__gte=_month_start(),
+        ).count()
+
+    @staticmethod
+    def check_can_send_application(user):
+        """Gate an outbound application email.
+
+        Unlike the other checks here this one is not really about the paid
+        split — it is the control that stops one account burning the sending
+        domain every other feature's email depends on. Both plans have a
+        ceiling; Pro's is just high enough that no genuine job seeker will
+        ever meet it.
+        """
+        entitlements = EntitlementsService.for_user(user)
+        limit = entitlements.get("job_applications_per_month")
+        if limit is None:
+            return
+
+        used = EntitlementsService.applications_sent_this_month(user)
+        if used >= limit:
+            is_pro = entitlements.get("plan_id") == "pro"
+            message = (
+                f"You've sent all {limit} applications your plan allows this month. "
+                + (
+                    "This is a fair-use limit that protects delivery for everyone; "
+                    "contact support if you genuinely need more."
+                    if is_pro
+                    else "Upgrade to Pro for a much higher monthly allowance."
+                )
+            )
+            raise PlanLimitReachedError(
+                message,
+                feature="job_applications",
+                used=used,
+                limit=limit,
+                resets_at=_next_month_start().isoformat(),
+            )
+
+    @staticmethod
     def check_ai_provider_allowed(user, provider):
         # No explicit provider means "use the server default", which is always
         # permitted — a free user is never blocked from the standard flow.

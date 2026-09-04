@@ -1,0 +1,251 @@
+"""Drafting, reviewing and sending outbound job applications.
+
+The whole module is built around one rule: **nothing is ever sent without an
+explicit, separate act by the user.** Drafting creates a row the user can
+read and rewrite; only `send()` puts anything on the wire, and it is reached
+only from an endpoint the user hits deliberately. There is no scheduler, no
+"send when ready" flag, and no bulk path — one application, one send, one
+recipient. That is a product requirement, not a technical accident: this
+feature writes to strangers under the user's name.
+
+Two things are deliberately *not* automated:
+
+* We never guess the recipient address. Scraping a "careers@" out of a job
+  page and mailing it unattended is how a helpful tool becomes a spam
+  cannon, and a wrong guess sends someone's real application into a void.
+  The user supplies the address.
+* We never mark an application as replied-to on our own. Detecting replies
+  would mean reading the user's mailbox, which under Google's scope rules
+  is a *restricted* scope (`gmail.readonly`) carrying an annual third-party
+  security assessment. Until that is worth paying for, replies go straight
+  to the candidate's own inbox via `Reply-To` and the tracker status stays
+  user-driven, which is honest rather than half-working.
+"""
+
+import logging
+
+from django.core.mail import EmailMessage
+from django.db import DatabaseError, transaction
+from django.utils import timezone
+
+from billing.services.entitlements_service import EntitlementsService
+from resumes.models import JobApplication, JobResumeCuration
+from resumes.services.job_application_ai_service import JobApplicationAIService
+from resumes.services.job_curation_service import JobCurationDatabaseError
+from resumes.services.job_gap_analysis_service import JobGapAnalysisService
+from resumes.services.job_resume_curation_service import JobResumeCurationService
+from resumes.services.resume_template_service import ResumeTemplateService
+from resumes.services.tailored_resume_pdf_service import TailoredResumePdfService
+
+logger = logging.getLogger(__name__)
+
+
+class ApplicationNotSendableError(Exception):
+    """The application exists but is not in a state that can be sent."""
+
+    code = "APPLICATION_NOT_SENDABLE"
+
+    def __init__(self, message, code=None):
+        self.message = message
+        if code:
+            self.code = code
+        super().__init__(message)
+
+
+class ApplicationDeliveryError(Exception):
+    """The mail provider refused or failed to deliver the message."""
+
+    code = "APPLICATION_DELIVERY_FAILED"
+    message = "We couldn't deliver this application. Nothing was sent — please try again."
+
+
+class JobApplicationService:
+    def __init__(self, ai_service=None, provider=None):
+        self.ai_service = ai_service or JobApplicationAIService(provider=provider)
+
+    # -- drafting ---------------------------------------------------------
+
+    def create_draft(
+        self,
+        user,
+        curation_id,
+        recipient_email,
+        recipient_name="",
+        company_name="",
+        include_resume=True,
+        include_cover_letter=False,
+    ):
+        """Draft an application email for a curation. Sends nothing."""
+        curation = JobResumeCuration.objects.get(id=curation_id, user=user)
+
+        if not curation.tailored_resume_data:
+            raise ApplicationNotSendableError(
+                "Generate the tailored resume for this job before applying, so "
+                "there is something to attach.",
+                code="TAILORED_RESUME_REQUIRED",
+            )
+
+        candidate_source_data = JobResumeCurationService.build_candidate_source_data(
+            user, resume_id=curation.resume_id
+        )
+        job_requirements = JobGapAnalysisService.build_job_requirements(curation.analysis_data)
+
+        logger.info(
+            "Application draft started user_id=%s curation_id=%s", user.id, curation_id
+        )
+        drafted = self.ai_service.draft_email(
+            candidate_source_data=candidate_source_data,
+            job_title=curation.job_title,
+            job_description=curation.job_description,
+            job_requirements=job_requirements,
+            company_name=company_name,
+            recipient_name=recipient_name,
+        )
+
+        try:
+            application = JobApplication.objects.create(
+                user=user,
+                curation=curation,
+                recipient_email=recipient_email,
+                recipient_name=recipient_name or "",
+                company_name=company_name or "",
+                subject=drafted["subject"],
+                body=drafted["body"],
+                include_resume=include_resume,
+                include_cover_letter=include_cover_letter and bool(curation.cover_letter_data),
+                status=JobApplication.STATUS_DRAFT,
+            )
+        except DatabaseError as exc:
+            logger.exception("Failed to save application draft.")
+            raise JobCurationDatabaseError() from exc
+
+        logger.info(
+            "Application draft created user_id=%s application_id=%s", user.id, application.id
+        )
+        return application
+
+    # -- sending ----------------------------------------------------------
+
+    @staticmethod
+    def send(user, application_id):
+        """Deliver a reviewed draft. The only method in the product that
+        puts user-authored content in front of a third party."""
+        application = JobApplication.objects.select_related("curation").get(
+            id=application_id, user=user
+        )
+
+        if application.status == JobApplication.STATUS_SENT:
+            # Idempotent rather than an error: a double-clicked Send button
+            # must never mail an employer the same application twice.
+            return application
+
+        EntitlementsService.check_can_send_application(user)
+
+        curation = application.curation
+        if application.include_resume and not curation.tailored_resume_data:
+            raise ApplicationNotSendableError(
+                "The tailored resume for this job is missing, so there is "
+                "nothing to attach.",
+                code="TAILORED_RESUME_REQUIRED",
+            )
+
+        body = application.body
+        if application.include_cover_letter and curation.cover_letter_data:
+            body = f"{body}\n\n---\n\n{_render_cover_letter(curation.cover_letter_data)}"
+
+        message = EmailMessage(
+            subject=application.subject,
+            body=body,
+            to=[application.recipient_email],
+            # The employer must be able to reply to the candidate, not to us.
+            # Without this the entire conversation would dead-end in a
+            # no-reply mailbox and the user would never hear back.
+            reply_to=[user.email],
+        )
+
+        filename = ""
+        if application.include_resume:
+            pdf = TailoredResumePdfService.build_pdf(
+                curation.tailored_resume_data,
+                template_config=ResumeTemplateService.config_for_version(
+                    curation.tailored_resume_versions.order_by("-version").first(),
+                    user=user,
+                ),
+            )
+            filename = TailoredResumePdfService.build_filename(curation.job_title)
+            message.attach(filename, pdf.getvalue(), "application/pdf")
+
+        try:
+            # fail_silently=False on purpose: telling someone their
+            # application was sent when it wasn't is the worst possible
+            # failure mode for this feature.
+            message.send(fail_silently=False)
+        except Exception as exc:
+            logger.exception(
+                "Application delivery failed user_id=%s application_id=%s",
+                user.id, application.id,
+            )
+            JobApplicationService._mark_failed(application)
+            raise ApplicationDeliveryError() from exc
+
+        return JobApplicationService._mark_sent(application, filename)
+
+    @staticmethod
+    def _mark_sent(application, filename):
+        now = timezone.now()
+        try:
+            with transaction.atomic():
+                application.status = JobApplication.STATUS_SENT
+                application.sent_at = now
+                application.error_code = ""
+                application.attachment_filename = filename
+                application.save(
+                    update_fields=[
+                        "status", "sent_at", "error_code", "attachment_filename", "updated_at",
+                    ]
+                )
+
+                # Keep the tracker honest without overwriting the user's own
+                # record: if they had already moved this job past "saved"
+                # themselves, their status wins.
+                curation = application.curation
+                if curation.application_status == JobResumeCuration.APPLICATION_STATUS_SAVED:
+                    curation.application_status = JobResumeCuration.APPLICATION_STATUS_APPLIED
+                    curation.applied_at = now.date()
+                    curation.save(
+                        update_fields=["application_status", "applied_at", "updated_at"]
+                    )
+        except DatabaseError as exc:
+            # The mail is already gone; losing the record of it would be
+            # worse than failing loudly here.
+            logger.exception(
+                "Application was delivered but its record could not be saved "
+                "application_id=%s", application.id,
+            )
+            raise JobCurationDatabaseError() from exc
+
+        logger.info(
+            "Application sent user_id=%s application_id=%s", application.user_id, application.id
+        )
+        return application
+
+    @staticmethod
+    def _mark_failed(application):
+        try:
+            application.status = JobApplication.STATUS_FAILED
+            application.error_code = ApplicationDeliveryError.code
+            application.save(update_fields=["status", "error_code", "updated_at"])
+        except DatabaseError:
+            logger.exception("Failed to persist application failure state.")
+
+
+def _render_cover_letter(cover_letter_data):
+    """Flatten stored cover letter JSON into plain text for the email body."""
+    parts = [
+        cover_letter_data.get("greeting", ""),
+        cover_letter_data.get("opening_paragraph", ""),
+        *(cover_letter_data.get("body_paragraphs") or []),
+        cover_letter_data.get("closing_paragraph", ""),
+        cover_letter_data.get("signature_name", ""),
+    ]
+    return "\n\n".join(part.strip() for part in parts if isinstance(part, str) and part.strip())

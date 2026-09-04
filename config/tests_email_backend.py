@@ -128,3 +128,47 @@ class BackendSelectionTests(TestCase):
             self.assertEqual(
                 reloaded.EMAIL_BACKEND, "django.core.mail.backends.console.EmailBackend"
             )
+
+
+@override_settings(EMAIL_BACKEND=BACKEND, RESEND_API_KEY="re_test_key")
+class ResendBackendAttachmentTests(TestCase):
+    """Direct Apply sends a resume PDF. Before this, Django would accept
+    `attach()` and the backend would quietly drop it — the employer would
+    receive an application with no resume and nothing would look wrong."""
+
+    def _payload(self, post):
+        import json
+
+        return json.loads(post.call_args.kwargs["data"])
+
+    def test_attachment_is_sent_base64_encoded(self):
+        import base64
+
+        message = EmailMessage("S", "B", "from@patrixel.com", ["to@example.com"])
+        message.attach("resume.pdf", b"%PDF-1.4 fake", "application/pdf")
+
+        with patch("config.email_backends.requests.post", return_value=_Response()) as post:
+            message.send()
+
+        attachments = self._payload(post)["attachments"]
+        self.assertEqual(len(attachments), 1)
+        self.assertEqual(attachments[0]["filename"], "resume.pdf")
+        self.assertEqual(base64.b64decode(attachments[0]["content"]), b"%PDF-1.4 fake")
+
+    def test_message_without_attachments_omits_the_field(self):
+        with patch("config.email_backends.requests.post", return_value=_Response()) as post:
+            send_mail("S", "B", "from@patrixel.com", ["to@example.com"])
+
+        self.assertNotIn("attachments", self._payload(post))
+
+    def test_text_attachment_is_encoded_rather_than_rejected(self):
+        import base64
+
+        message = EmailMessage("S", "B", "from@patrixel.com", ["to@example.com"])
+        message.attach("notes.txt", "plain text", "text/plain")
+
+        with patch("config.email_backends.requests.post", return_value=_Response()) as post:
+            message.send()
+
+        attachments = self._payload(post)["attachments"]
+        self.assertEqual(base64.b64decode(attachments[0]["content"]), b"plain text")

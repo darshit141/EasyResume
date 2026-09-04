@@ -388,3 +388,106 @@ class GuidedResumeSession(models.Model):
 
     def __str__(self):
         return f"Guided resume ({self.status}) - {self.user.email}"
+
+
+class JobApplication(models.Model):
+    """One outbound application email, from draft through to sent.
+
+    Deliberately separate from the curation's own `application_status`:
+    that field is the user's self-reported record ("I applied on the 3rd",
+    typed into the tracker), whereas this is what the system *actually
+    delivered* — to which address, with which documents attached, at which
+    timestamp. Conflating the two would make it impossible to tell an
+    application we sent from one the user sent themselves elsewhere, which
+    matters both for support ("did it go out?") and for abuse review.
+
+    Nothing is ever sent automatically. A row is created as a draft, the
+    user reviews and edits it, and only an explicit send request moves it
+    to `sent`. That review gate is a product requirement, not an
+    implementation detail — see JobApplicationService.send.
+    """
+
+    STATUS_DRAFT = "draft"
+    STATUS_SENT = "sent"
+    STATUS_FAILED = "failed"
+    STATUS_CHOICES = [
+        (STATUS_DRAFT, "Draft"),
+        (STATUS_SENT, "Sent"),
+        (STATUS_FAILED, "Failed"),
+    ]
+
+    user = models.ForeignKey(
+        User,
+        on_delete=models.CASCADE,
+        related_name="job_applications",
+    )
+
+    # The curation supplies the job, the tailored resume and the cover
+    # letter. An application without one would have nothing to attach and
+    # no job to be about, so this is required.
+    curation = models.ForeignKey(
+        JobResumeCuration,
+        on_delete=models.CASCADE,
+        related_name="applications",
+    )
+
+    recipient_email = models.EmailField(
+        help_text="The single address this application is addressed to.",
+    )
+
+    recipient_name = models.CharField(
+        max_length=200,
+        blank=True,
+        help_text="Who it is addressed to, e.g. 'Hiring Team' or a recruiter's name.",
+    )
+
+    company_name = models.CharField(max_length=200, blank=True)
+
+    subject = models.CharField(max_length=300)
+
+    body = models.TextField()
+
+    include_resume = models.BooleanField(
+        default=True,
+        help_text="Attach the curation's tailored resume as a PDF.",
+    )
+
+    include_cover_letter = models.BooleanField(
+        default=False,
+        help_text="Append the curation's generated cover letter to the email body.",
+    )
+
+    status = models.CharField(
+        max_length=20,
+        choices=STATUS_CHOICES,
+        default=STATUS_DRAFT,
+    )
+
+    sent_at = models.DateTimeField(null=True, blank=True)
+
+    error_code = models.CharField(
+        max_length=80,
+        blank=True,
+        help_text="Why the last send attempt failed, if it did.",
+    )
+
+    attachment_filename = models.CharField(
+        max_length=255,
+        blank=True,
+        help_text="Filename of the resume PDF as the recipient received it.",
+    )
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+        indexes = [
+            # The two queries this model actually serves: a user's own
+            # review queue, and the monthly send-cap count.
+            models.Index(fields=["user", "-created_at"]),
+            models.Index(fields=["user", "status", "sent_at"]),
+        ]
+
+    def __str__(self):
+        return f"{self.subject} -> {self.recipient_email} ({self.status})"
