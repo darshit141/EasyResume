@@ -436,3 +436,75 @@ CANDIDATE_SOURCE_DATA:
         candidate_match_summary,
         candidate_source_data,
     )
+
+
+# --- Guided resume builder -------------------------------------------------
+
+GUIDED_SECTION_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "entries": {
+            "type": "array",
+            "items": RESUME_ENTRY_SCHEMA,
+            "maxItems": 20,
+        },
+    },
+    "required": ["entries"],
+    "additionalProperties": False,
+}
+
+GUIDED_SUMMARY_SCHEMA = {
+    "type": "object",
+    "properties": {"summary": {"type": "string"}},
+    "required": ["summary"],
+    "additionalProperties": False,
+}
+
+
+def build_guided_section_prompt(section, target_role, answers_text):
+    """Turn one section's plain-language interview answers into resume
+    content. The answers are the ONLY facts; the model may fix grammar,
+    tighten phrasing and standardise terminology, but must not invent an
+    employer, date, tool, metric or achievement that isn't in the answers.
+    Written for people with thin experience (students, first job), so a
+    vague answer must yield a modest, honest bullet — never an inflated one.
+    """
+    if section == "summary":
+        return """You are writing a 2-3 sentence professional summary for the top of a resume.
+Use ONLY facts contained in ANSWERS. Do not invent skills, employers, years of
+experience, or achievements. If the answers are thin, keep the summary short and
+honest rather than padding it. Write in the third person implied style resumes
+use (no "I"). Target role for framing only: %s
+
+Return JSON: {"summary": "..."}.
+
+ANSWERS:
+%s""" % (target_role, answers_text)
+
+    noun = {
+        "experience": "work experience entries (jobs, internships, volunteering)",
+        "projects": "project entries",
+    }.get(section, section + " entries")
+
+    return """You are turning plain interview answers into %s for a resume.
+Target role (for tone and terminology only): %s
+
+STRICT RULES:
+- Use ONLY facts stated in ANSWERS. Never add an employer, job title, date,
+  tool, technology, metric, or accomplishment that is not in the answers.
+- Each entry: "header" is the identifying line only (role / organisation /
+  dates as given), and "bullets" is one concrete point per real thing the
+  person did, in their words, cleaned up.
+- Fix grammar and spelling. Standardise obvious terminology
+  ("react js" -> "React", "ms excel" -> "Microsoft Excel"), but do not
+  upgrade the substance ("helped with" must not become "led").
+- Start each bullet with a plain past-tense verb. Keep numbers exactly as
+  given; if no number was given, do not invent one.
+- The person may have little experience. A short, truthful bullet is better
+  than an impressive false one. 2-5 bullets per entry is typical; fewer is
+  fine.
+
+Return JSON: {"entries": [{"header": "...", "bullets": ["...", "..."]}, ...]}.
+
+ANSWERS:
+%s""" % (noun, target_role, answers_text)

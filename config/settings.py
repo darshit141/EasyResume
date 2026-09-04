@@ -595,10 +595,15 @@ FRONTEND_URL = os.getenv("FRONTEND_URL", "http://localhost:5173")
 # Redis running turned /api/auth/login/ into a 500). Losing rate-limiting
 # during a Redis blip is a far smaller problem than the API going down
 # because of one.
+# `USE_LOCMEM_CACHE=true` lets a local `runserver` skip Redis entirely
+# (throttling becomes per-process, which is fine for one dev). Never set it
+# in a multi-worker deployment — see the note above.
+_LOCMEM_CACHE = RUNNING_TESTS or os.getenv("USE_LOCMEM_CACHE", "").lower() == "true"
+
 CACHES = {
     "default": (
         {"BACKEND": "django.core.cache.backends.locmem.LocMemCache"}
-        if RUNNING_TESTS
+        if _LOCMEM_CACHE
         else {
             "BACKEND": "django_redis.cache.RedisCache",
             "LOCATION": REDIS_URL,

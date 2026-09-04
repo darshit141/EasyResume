@@ -35,8 +35,22 @@ from resumes.views.tailored_resume_version_view import (
     TailoredResumeVersionDetailAPIView,
     TailoredResumeVersionListAPIView,
 )
+from resumes.views.guided_resume_view import (
+    GuidedResumeAcceptAPIView,
+    GuidedResumeAnswersAPIView,
+    GuidedResumeDraftAPIView,
+    GuidedResumeFinalizeAPIView,
+    GuidedResumePolishAPIView,
+    GuidedResumeSessionAPIView,
+)
 
 urlpatterns = [
+    path("guided/", GuidedResumeSessionAPIView.as_view(), name="guided-resume-session"),
+    path("guided/answers/", GuidedResumeAnswersAPIView.as_view(), name="guided-resume-answers"),
+    path("guided/draft/", GuidedResumeDraftAPIView.as_view(), name="guided-resume-draft"),
+    path("guided/accept/", GuidedResumeAcceptAPIView.as_view(), name="guided-resume-accept"),
+    path("guided/polish/", GuidedResumePolishAPIView.as_view(), name="guided-resume-polish"),
+    path("guided/finalize/", GuidedResumeFinalizeAPIView.as_view(), name="guided-resume-finalize"),
     path(
         "outcomes/record/",
         RecordOutcomeAPIView.as_view(),

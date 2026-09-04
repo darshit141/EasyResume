@@ -5,7 +5,9 @@ from authentication.models import User
 
 class Resume(models.Model):
     """
-    Model to store uploaded resumes.
+    Model to store a user's resume — uploaded as a file, or assembled by
+    the guided builder from an interview (see GuidedResumeSession), in which
+    case there is no source file.
     """
 
     STATUS_CHOICES = [
@@ -13,6 +15,13 @@ class Resume(models.Model):
         ("processing", "Processing"),
         ("completed", "Completed"),
         ("failed", "Failed"),
+    ]
+
+    SOURCE_UPLOAD = "upload"
+    SOURCE_GUIDED = "guided"
+    SOURCE_CHOICES = [
+        (SOURCE_UPLOAD, "Uploaded file"),
+        (SOURCE_GUIDED, "Guided builder"),
     ]
 
     user = models.ForeignKey(
@@ -23,6 +32,14 @@ class Resume(models.Model):
 
     file = models.FileField(
         upload_to="resumes/",
+        null=True,
+        blank=True,
+    )
+
+    source = models.CharField(
+        max_length=12,
+        choices=SOURCE_CHOICES,
+        default=SOURCE_UPLOAD,
     )
 
     original_filename = models.CharField(
@@ -308,3 +325,66 @@ class JobResumeCurationVersion(models.Model):
 
     def __str__(self):
         return f"{self.curation.job_title} - Tailored Resume v{self.version}"
+
+
+class GuidedResumeSession(models.Model):
+    """
+    A short interview that assembles a resume for someone who does not have
+    one to upload — a fresher, a career changer, a first-timer.
+
+    The user answers questions (see resumes.guided_questions); their answers
+    are the only source of truth. AI turns each section's answers into
+    grounded {header, bullets} entries the user reviews and edits. On
+    finalize, `draft_data` becomes a real Resume (source="guided").
+    """
+
+    STATUS_IN_PROGRESS = "in_progress"
+    STATUS_FINALIZED = "finalized"
+    STATUS_CHOICES = [
+        (STATUS_IN_PROGRESS, "In progress"),
+        (STATUS_FINALIZED, "Finalized"),
+    ]
+
+    # Branching situations that change which questions are asked.
+    SITUATIONS = ["student", "recent_graduate", "career_changer", "first_job", "experienced"]
+
+    user = models.ForeignKey(
+        User,
+        on_delete=models.CASCADE,
+        related_name="guided_resume_sessions",
+    )
+
+    status = models.CharField(
+        max_length=20,
+        choices=STATUS_CHOICES,
+        default=STATUS_IN_PROGRESS,
+    )
+
+    target_role = models.CharField(max_length=120, blank=True)
+    situation = models.CharField(max_length=30, blank=True)
+
+    # Every raw answer the user gave, keyed by question id. Repeatable
+    # sections (experience/projects/education) store a list of answer dicts.
+    answers = models.JSONField(default=dict, blank=True)
+
+    # The assembled resume so far, in the same shape as Resume.parsed_data:
+    # personal_information, summary, skills[], experience[], projects[],
+    # education[], certifications[]. Entry sections hold {header, bullets}.
+    draft_data = models.JSONField(default=dict, blank=True)
+
+    resume = models.ForeignKey(
+        Resume,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="guided_session",
+    )
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-updated_at"]
+
+    def __str__(self):
+        return f"Guided resume ({self.status}) - {self.user.email}"
