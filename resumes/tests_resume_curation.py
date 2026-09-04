@@ -23,9 +23,13 @@ class QueuedLLMService(LLMService):
         self.results = list(results or [])
         self.exc = exc
         self.call_count = 0
+        # Every prompt this fake was asked, in order — lets a test assert on
+        # what the model was actually told, not just what it returned.
+        self.prompts = []
 
     def generate_structured(self, prompt, schema):
         self.call_count += 1
+        self.prompts.append(prompt)
         if self.exc:
             raise self.exc
         if not self.results:

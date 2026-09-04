@@ -102,6 +102,30 @@ class ApplicationEmailGroundingTests(TestCase):
 
         self.assertTrue(any("12" in violation for violation in ctx.exception.violations))
 
+    def test_sentence_opening_common_word_is_not_a_violation(self):
+        # "As" is capitalised for grammar, not because it names anything.
+        # Before this was handled, roughly one draft in three failed here.
+        result = self.ground(
+            valid_email(
+                body=(
+                    "Dear Hiring Team,\n\nAs an engineer at Acme Corp I worked with "
+                    "Java and Kafka.\n\nKind regards,\nJane Doe"
+                )
+            )
+        )
+
+        self.assertTrue(result["body"].startswith("Dear Hiring Team"))
+
+    def test_invented_proper_noun_at_sentence_start_is_still_rejected(self):
+        # The exemption must not become a hole: a made-up employer is caught
+        # wherever it appears, including as the first word of a sentence.
+        with self.assertRaises(ApplicationEmailGroundingError):
+            self.ground(
+                valid_email(
+                    body="Dear Hiring Team,\n\nGlobex trained me well.\n\nKind regards,\nJane Doe"
+                )
+            )
+
     def test_invented_certification_is_rejected(self):
         with self.assertRaises(ApplicationEmailGroundingError):
             self.ground(
@@ -109,6 +133,74 @@ class ApplicationEmailGroundingTests(TestCase):
                     body="Dear Hiring Team,\n\nI am a Kubernetes Certified Administrator.\n\nKind regards,\nJane Doe"
                 )
             )
+
+    def test_retry_is_told_what_was_rejected(self):
+        """A blind retry reruns the same prompt and fails the same way. The
+        second attempt must name the rejected claims."""
+        bad = valid_email(
+            body="Dear Hiring Team,\n\nI led engineering at Globex.\n\nKind regards,\nJane Doe"
+        )
+        llm = QueuedLLMService([bad, valid_email()])
+
+        service = JobApplicationAIService(llm_service=llm)
+        result = service.draft_email(
+            candidate_source_data=CANDIDATE_PARSED_DATA,
+            job_title="Senior Java Backend Engineer",
+            job_description=VALID_REQUEST["job_description"],
+            job_requirements=VALID_JOB_ANALYSIS,
+        )
+
+        self.assertEqual(llm.call_count, 2)
+        self.assertNotIn("Globex", result["body"])
+        second_prompt = llm.prompts[1]
+        self.assertIn("PREVIOUS ATTEMPT WAS REJECTED", second_prompt)
+        self.assertIn("Globex", second_prompt)
+
+    def test_prompt_states_what_is_actually_attached(self):
+        """Otherwise the model writes 'my resume and cover letter are
+        attached' regardless of what is really being sent."""
+        llm = QueuedLLMService([valid_email()])
+
+        JobApplicationAIService(llm_service=llm).draft_email(
+            candidate_source_data=CANDIDATE_PARSED_DATA,
+            job_title="Senior Java Backend Engineer",
+            job_description=VALID_REQUEST["job_description"],
+            job_requirements=VALID_JOB_ANALYSIS,
+            include_resume=True,
+            include_cover_letter=False,
+        )
+
+        prompt = llm.prompts[0]
+        self.assertIn("resume (PDF attachment)", prompt)
+        self.assertNotIn("cover letter appended", prompt)
+
+    def test_prompt_demands_paragraph_breaks(self):
+        """Without this the model returns one run-on block and the employer
+        receives a wall of text."""
+        llm = QueuedLLMService([valid_email()])
+
+        JobApplicationAIService(llm_service=llm).draft_email(
+            candidate_source_data=CANDIDATE_PARSED_DATA,
+            job_title="Senior Java Backend Engineer",
+            job_description=VALID_REQUEST["job_description"],
+            job_requirements=VALID_JOB_ANALYSIS,
+        )
+
+        self.assertIn("separate every paragraph with a blank line", llm.prompts[0])
+
+    def test_prompt_forbids_claiming_attachments_when_there_are_none(self):
+        llm = QueuedLLMService([valid_email()])
+
+        JobApplicationAIService(llm_service=llm).draft_email(
+            candidate_source_data=CANDIDATE_PARSED_DATA,
+            job_title="Senior Java Backend Engineer",
+            job_description=VALID_REQUEST["job_description"],
+            job_requirements=VALID_JOB_ANALYSIS,
+            include_resume=False,
+            include_cover_letter=False,
+        )
+
+        self.assertIn("Do not claim anything is attached", llm.prompts[0])
 
     def test_malformed_payload_is_a_schema_error(self):
         with self.assertRaises(LLMSchemaValidationError):
@@ -265,6 +357,17 @@ class JobApplicationAPITests(TestCase):
         self.assertTrue(filename.endswith(".pdf"))
         self.assertEqual(mimetype, "application/pdf")
         self.assertTrue(content.startswith(b"%PDF"))
+
+    @override_settings(APPLICATION_FROM_EMAIL="IntelliResume <apply@apply.example.com>")
+    def test_applications_send_from_their_own_sender_identity(self):
+        """Kept off the transactional sender so a spam complaint about an
+        application can't take login codes down with it."""
+        curation = self.create_curation()
+        application_id = self.draft(curation).data["id"]
+
+        self.send(application_id)
+
+        self.assertEqual(mail.outbox[0].from_email, "IntelliResume <apply@apply.example.com>")
 
     def test_send_moves_the_job_to_applied_in_the_tracker(self):
         curation = self.create_curation()

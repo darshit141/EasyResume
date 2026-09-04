@@ -31,6 +31,19 @@ from resumes.services.llm_service import (
 from resumes.services.resume_curation_ai_service import ResumeCurationAIService
 
 
+def _attachments_note(include_resume, include_cover_letter):
+    """Describe what will really be sent, so the email can't promise a
+    document that isn't there."""
+    items = []
+    if include_resume:
+        items.append("the candidate's resume (PDF attachment)")
+    if include_cover_letter:
+        items.append("a full cover letter appended below the message")
+    if not items:
+        return ""
+    return "This email will include " + " and ".join(items) + "."
+
+
 class ApplicationEmailGroundingError(LLMServiceError):
     code = "APPLICATION_EMAIL_GROUNDING_FAILED"
     message = "The drafted application email made claims that could not be verified against your resume."
@@ -64,6 +77,33 @@ class JobApplicationAIService:
         "i", "my", "am", "the", "a", "an", "and", "for", "with", "this", "that",
     })
 
+    # Ordinary English words that are capitalised only because they start a
+    # sentence. The grounding heuristic treats any capitalised word as a
+    # candidate proper noun, so "As a backend engineer..." gets flagged for
+    # "As" — a grammatical artefact, not a claim about anybody.
+    #
+    # This does not weaken the check that matters. What grounding actually
+    # protects against is invented proper nouns ("Globex") and invented
+    # numbers ("12 years"), and no word below is either. Lower-cased claims
+    # were never caught by this heuristic in the first place.
+    SENTENCE_OPENERS = frozenset({
+        "as", "at", "in", "on", "of", "by", "from", "during", "while", "after",
+        "before", "since", "having", "over", "under", "across", "throughout",
+        "alongside", "beyond", "within", "these", "those", "they", "their",
+        "there", "its", "we", "our", "you", "your", "if", "when", "where",
+        "what", "which", "who", "whom", "why", "how", "both", "each", "either",
+        "neither", "not", "all", "any", "some", "many", "more", "most", "less",
+        "other", "another", "such", "than", "then", "though", "although",
+        "because", "but", "or", "so", "yet", "also", "however", "moreover",
+        "therefore", "thus", "here", "now", "once", "only", "own", "same",
+        "very", "just", "even", "still", "again", "further", "additionally",
+        "furthermore", "currently", "previously", "recently", "throughout",
+        "beyond", "between", "through", "along", "about", "above", "below",
+        "it", "he", "she", "his", "her", "them", "was", "were", "been", "being",
+        "have", "has", "had", "do", "does", "did", "can", "could", "would",
+        "should", "will", "shall", "may", "might", "must", "is", "are", "be",
+    })
+
     def __init__(self, llm_service=None, provider=None):
         self.llm_service = llm_service or get_llm_service(provider)
 
@@ -75,12 +115,16 @@ class JobApplicationAIService:
         job_requirements,
         company_name="",
         recipient_name="",
+        include_resume=True,
+        include_cover_letter=False,
     ):
         """Return `{"subject": str, "body": str}`, grounded or raising."""
         candidate_name = (
             (candidate_source_data.get("personal_information") or {}).get("name") or ""
         ).strip()
+        attachments_note = _attachments_note(include_resume, include_cover_letter)
 
+        retry_feedback = None
         last_error = None
         for _ in range(self.MAX_ATTEMPTS):
             prompt = build_application_email_prompt(
@@ -90,6 +134,8 @@ class JobApplicationAIService:
                 candidate_name=candidate_name,
                 candidate_evidence=json.dumps(candidate_source_data, sort_keys=True),
                 job_requirements_text=json.dumps(job_requirements or {}, sort_keys=True),
+                attachments_note=attachments_note,
+                retry_feedback=retry_feedback,
             )
             raw = self.llm_service.generate_structured(prompt, APPLICATION_EMAIL_SCHEMA)
             try:
@@ -104,6 +150,7 @@ class JobApplicationAIService:
                 )
             except ApplicationEmailGroundingError as exc:
                 last_error = exc
+                retry_feedback = exc.violations
 
         raise last_error
 
@@ -160,7 +207,8 @@ class JobApplicationAIService:
         token = cls._violation_token(violation)
         if not token or any(char.isdigit() for char in token):
             return False
-        return token.lower() in cls.BOILERPLATE_ALLOWLIST
+        lowered = token.lower()
+        return lowered in cls.BOILERPLATE_ALLOWLIST or lowered in cls.SENTENCE_OPENERS
 
     @staticmethod
     def _violation_token(violation):

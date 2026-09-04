@@ -472,7 +472,16 @@ APPLICATION_EMAIL_SCHEMA = {
 }
 
 
-def build_application_email_prompt(job_title, company_name, recipient_name, candidate_name, candidate_evidence, job_requirements_text):
+def build_application_email_prompt(
+    job_title,
+    company_name,
+    recipient_name,
+    candidate_name,
+    candidate_evidence,
+    job_requirements_text,
+    attachments_note="",
+    retry_feedback=None,
+):
     """Draft the covering email a candidate sends with their application.
 
     This email goes to a real employer under the candidate's name, so the
@@ -483,6 +492,29 @@ def build_application_email_prompt(job_title, company_name, recipient_name, cand
     """
     greeting_target = recipient_name.strip() or "the hiring team"
     company_clause = f" at {company_name.strip()}" if company_name.strip() else ""
+
+    # Without this the model reliably writes "my resume and cover letter are
+    # attached" whether or not either one is, which is a false statement in
+    # the candidate's own voice about their own application.
+    attachments_rule = (
+        f"- ATTACHMENTS: {attachments_note} Refer only to what is actually "
+        f"being sent, and never promise a document that is not listed here."
+        if attachments_note
+        else "- Do not claim anything is attached to this email."
+    )
+
+    feedback_block = ""
+    if retry_feedback:
+        # A blind retry reruns the same prompt and tends to fail the same
+        # way. Naming the rejected claims is what makes attempt two differ.
+        joined = "\n".join(f"  - {item}" for item in retry_feedback)
+        feedback_block = (
+            "\n\nYOUR PREVIOUS ATTEMPT WAS REJECTED. These statements could not "
+            "be verified against the candidate's resume:\n"
+            f"{joined}\n"
+            "Rewrite without them. Do not restate them in different words - "
+            "if the evidence does not contain a fact, leave it out entirely.\n"
+        )
 
     return """You are writing the short covering email a candidate sends when emailing a job application.
 
@@ -499,11 +531,17 @@ STRICT RULES:
   cover letter - the full cover letter and resume are attached separately.
 - Plain text only. No markdown, no bullet characters, no placeholders like
   [Your Name] or [Company]. Do not include a subject line inside the body.
+- FORMATTING: separate every paragraph with a blank line, written as two
+  newline characters (\\n\\n) in the JSON string. The greeting is its own
+  line, and the sign-off is its own line with the name on the line below
+  it. A single run-on block of text is unacceptable - a human has to read
+  this.
 - Open by naming the role being applied for. Close with a plain sign-off
   using the candidate's real name exactly as given above.
 - Professional and direct. No flattery, no "I am thrilled", no superlatives
   about the company.
-
+%s
+%s
 Return JSON: {"subject": "...", "body": "..."}.
 The subject must name the role and the candidate, e.g. "Application for %s - %s".
 
@@ -516,6 +554,8 @@ EVIDENCE (the candidate's verified resume - the only permitted source of facts):
         company_clause,
         greeting_target,
         candidate_name,
+        attachments_rule,
+        feedback_block,
         job_title,
         candidate_name,
         job_requirements_text,

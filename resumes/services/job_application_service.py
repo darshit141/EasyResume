@@ -24,6 +24,7 @@ Two things are deliberately *not* automated:
 
 import logging
 
+from django.conf import settings
 from django.core.mail import EmailMessage
 from django.db import DatabaseError, transaction
 from django.utils import timezone
@@ -90,6 +91,10 @@ class JobApplicationService:
         )
         job_requirements = JobGapAnalysisService.build_job_requirements(curation.analysis_data)
 
+        # Resolved before drafting so the email can describe what is really
+        # being sent rather than guessing.
+        will_include_cover_letter = include_cover_letter and bool(curation.cover_letter_data)
+
         logger.info(
             "Application draft started user_id=%s curation_id=%s", user.id, curation_id
         )
@@ -100,6 +105,8 @@ class JobApplicationService:
             job_requirements=job_requirements,
             company_name=company_name,
             recipient_name=recipient_name,
+            include_resume=include_resume,
+            include_cover_letter=will_include_cover_letter,
         )
 
         try:
@@ -112,7 +119,7 @@ class JobApplicationService:
                 subject=drafted["subject"],
                 body=drafted["body"],
                 include_resume=include_resume,
-                include_cover_letter=include_cover_letter and bool(curation.cover_letter_data),
+                include_cover_letter=will_include_cover_letter,
                 status=JobApplication.STATUS_DRAFT,
             )
         except DatabaseError as exc:
@@ -156,6 +163,10 @@ class JobApplicationService:
         message = EmailMessage(
             subject=application.subject,
             body=body,
+            # Its own sender identity, so a spam complaint about an
+            # application can't take login codes down with it. See
+            # APPLICATION_FROM_EMAIL in settings.
+            from_email=settings.APPLICATION_FROM_EMAIL,
             to=[application.recipient_email],
             # The employer must be able to reply to the candidate, not to us.
             # Without this the entire conversation would dead-end in a

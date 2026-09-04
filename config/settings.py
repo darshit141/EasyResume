@@ -550,6 +550,18 @@ else:
 
 DEFAULT_FROM_EMAIL = os.getenv("DEFAULT_FROM_EMAIL", "IntelliResume <no-reply@intelliresume.local>")
 
+# Direct Apply mails strangers on a user's behalf, which carries a spam-
+# complaint risk that OTP and billing mail do not. Sending it from its own
+# subdomain (e.g. "apply.intelliresume.eu") keeps a reputation hit on that
+# domain from taking login codes down with it — the two share nothing but
+# the provider. Falls back to the normal sender so the feature still works
+# before that DNS exists, but production should set it.
+#
+# Deliberately not a "no-reply" address even in the fallback case: every
+# application sets Reply-To to the candidate, and a From nobody can write
+# to is a well-known spam signal.
+APPLICATION_FROM_EMAIL = os.getenv("APPLICATION_FROM_EMAIL", "") or DEFAULT_FROM_EMAIL
+
 # Bump these when the actual legal text changes (after counsel review) so
 # existing PolicyAcceptance rows correctly reflect what a user agreed to
 # under the *old* text, and new acceptances are recorded against the new
