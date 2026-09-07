@@ -145,6 +145,48 @@ DEFAULT_CONFIGS = [
         "description": "Days an earned credit stays usable before it expires.",
     },
     {
+        "key": "DISPLAY_ADS_ENABLED",
+        "category": "ads",
+        "value_type": "boolean",
+        "description": "Show banner ads to free-tier visitors on marketing and blog pages. Pro subscribers never see them.",
+    },
+    {
+        "key": "DISPLAY_AD_PROVIDER",
+        "category": "ads",
+        "value_type": "string",
+        "description": "Which network serves the banners: adsense (Google AdSense), admanager (Google Ad Manager), or none. Anything unrecognised serves no ads rather than guessing.",
+    },
+    {
+        "key": "ADSENSE_CLIENT_ID",
+        "category": "ads",
+        "value_type": "string",
+        "description": "AdSense publisher id (ca-pub-…), used when DISPLAY_AD_PROVIDER is adsense. Public — it appears in the page HTML.",
+    },
+    {
+        "key": "GAM_NETWORK_CODE",
+        "category": "ads",
+        "value_type": "string",
+        "description": "Google Ad Manager network code, used when DISPLAY_AD_PROVIDER is admanager. Also used by the rewarded-video provider.",
+    },
+    {
+        "key": "DISPLAY_AD_UNIT_ARTICLE_TOP",
+        "category": "ads",
+        "value_type": "string",
+        "description": "Ad id for the top-of-article placement: an AdSense slot id, or an Ad Manager ad unit path (/network/unit).",
+    },
+    {
+        "key": "DISPLAY_AD_UNIT_ARTICLE_BOTTOM",
+        "category": "ads",
+        "value_type": "string",
+        "description": "Ad id for the end-of-article placement.",
+    },
+    {
+        "key": "DISPLAY_AD_UNIT_BLOG_INDEX",
+        "category": "ads",
+        "value_type": "string",
+        "description": "Ad id for the blog index placement.",
+    },
+    {
         "key": "FREE_AI_CALLS_PER_MONTH",
         "category": "limits",
         "value_type": "integer",

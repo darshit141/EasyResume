@@ -11,6 +11,7 @@ from billing.views.coupon_admin_view import (
     AdminCouponListCreateAPIView,
     AdminCouponToggleActiveAPIView,
 )
+from billing.views.display_ads_view import DisplayAdConfigAPIView
 from billing.views.credits_view import (
     CreditsStatusAPIView,
     RewardedAdCallbackAPIView,
@@ -28,6 +29,7 @@ __all__ = [
     "AdminCouponListCreateAPIView",
     "AdminCouponToggleActiveAPIView",
     "CreditsStatusAPIView",
+    "DisplayAdConfigAPIView",
     "RewardedAdCallbackAPIView",
     "RewardedAdTicketAPIView",
 ]

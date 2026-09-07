@@ -7,6 +7,7 @@ from billing.views import (
     CreateCheckoutSessionAPIView,
     CreatePortalSessionAPIView,
     CreditsStatusAPIView,
+    DisplayAdConfigAPIView,
     EntitlementsAPIView,
     PlanListAPIView,
     RewardedAdCallbackAPIView,
@@ -20,6 +21,7 @@ urlpatterns = [
     path("subscription/", SubscriptionStatusAPIView.as_view(), name="billing-subscription"),
     path("entitlements/", EntitlementsAPIView.as_view(), name="billing-entitlements"),
     path("credits/", CreditsStatusAPIView.as_view(), name="billing-credits"),
+    path("ads/config/", DisplayAdConfigAPIView.as_view(), name="billing-display-ads-config"),
     path(
         "credits/rewarded-ad/ticket/",
         RewardedAdTicketAPIView.as_view(),

@@ -533,6 +533,27 @@ GAM_REWARDED_AD_UNIT_PATH = os.getenv("GAM_REWARDED_AD_UNIT_PATH", "")
 PARTNER_REWARDED_SCRIPT_URL = os.getenv("PARTNER_REWARDED_SCRIPT_URL", "")
 PARTNER_REWARDED_PLACEMENT_ID = os.getenv("PARTNER_REWARDED_PLACEMENT_ID", "")
 PARTNER_REWARDED_SHOW_FN = os.getenv("PARTNER_REWARDED_SHOW_FN", "")
+
+# --- Display (banner) ads -------------------------------------------------
+# The ordinary banner placements on marketing and blog pages, as opposed to
+# the rewarded video above. Provider and ids are admin-tunable
+# (SystemConfiguration keys DISPLAY_ADS_ENABLED / DISPLAY_AD_PROVIDER /
+# ADSENSE_CLIENT_ID / DISPLAY_AD_UNIT_*), with these as the fallback.
+#
+# These used to be VITE_* variables compiled into the frontend bundle, which
+# made "let the admin pick the network" impossible by construction: changing
+# it meant editing an env file and rebuilding. They are served from the API
+# now. None of them is a secret — every one appears in the page's own HTML
+# for the ad network to read.
+DISPLAY_ADS_ENABLED = os.getenv("DISPLAY_ADS_ENABLED", "False")
+# adsense | admanager | none
+DISPLAY_AD_PROVIDER = os.getenv("DISPLAY_AD_PROVIDER", "adsense")
+ADSENSE_CLIENT_ID = os.getenv("ADSENSE_CLIENT_ID", "")
+# One id per placement, holding whatever the selected provider needs: an
+# AdSense slot id, or an Ad Manager ad unit path.
+DISPLAY_AD_UNIT_ARTICLE_TOP = os.getenv("DISPLAY_AD_UNIT_ARTICLE_TOP", "")
+DISPLAY_AD_UNIT_ARTICLE_BOTTOM = os.getenv("DISPLAY_AD_UNIT_ARTICLE_BOTTOM", "")
+DISPLAY_AD_UNIT_BLOG_INDEX = os.getenv("DISPLAY_AD_UNIT_BLOG_INDEX", "")
 PARTNER_REWARDED_S2S_SECRET = os.getenv("PARTNER_REWARDED_S2S_SECRET", "")
 
 # Email. Defaults to Django's console backend (prints the full email to
