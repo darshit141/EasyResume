@@ -2,6 +2,7 @@ from django.urls import path
 from authentication.views import (
     RegisterAPIView,
     LoginAPIView,
+    GoogleSignInAPIView,
     ForgotPasswordAPIView,
     VerifyOTPAPIView,
     ResetPasswordAPIView,
@@ -26,6 +27,11 @@ urlpatterns = [
         "login/",
         LoginAPIView.as_view(),
         name="login",
+    ),
+    path(
+        "google/",
+        GoogleSignInAPIView.as_view(),
+        name="google-sign-in",
     ),
     path(
         "login/verify-otp/",

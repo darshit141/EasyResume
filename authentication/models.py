@@ -25,6 +25,22 @@ class User(AbstractBaseUser, PermissionsMixin):
         blank=True,
     )
 
+    # Google's `sub` claim: the stable, immutable identifier for a Google
+    # account. Deliberately the key we match on rather than the email —
+    # a Google user can change the email on their account, and matching on
+    # email alone would then either lock them out or, worse, hand their
+    # IntelliResume account to whoever inherits the old address.
+    #
+    # Nullable because password accounts have no Google identity, and unique
+    # so one Google account can never be linked to two users.
+    google_sub = models.CharField(
+        max_length=255,
+        unique=True,
+        null=True,
+        blank=True,
+        db_index=True,
+    )
+
     is_active = models.BooleanField(
         default=True,
     )

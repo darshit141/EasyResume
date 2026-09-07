@@ -258,6 +258,26 @@ REST_FRAMEWORK = {
 # actual trade being made, and it is why the default is on.
 LOGIN_OTP_REQUIRED = os.getenv("LOGIN_OTP_REQUIRED", "True") == "True"
 
+# "Sign in with Google". The client id is the audience every incoming Google
+# ID token is checked against, and that check is the whole security of this
+# feature: an ID token is just a signed assertion from Google, and Google
+# signs one for *every* application. Without pinning the audience, a token
+# issued for any other Google app could be replayed here to sign in as its
+# owner. Never relax this to "verify the signature and trust the email".
+#
+# Empty means the feature is off; the endpoint then reports that plainly
+# instead of failing in a way that looks like a broken login.
+GOOGLE_OAUTH_CLIENT_ID = os.getenv("GOOGLE_OAUTH_CLIENT_ID", "")
+
+# Additional audiences allowed alongside the primary client id — used when
+# the Chrome extension is registered as its own OAuth client. Comma
+# separated; each entry is still checked exactly, never by prefix.
+GOOGLE_OAUTH_EXTRA_CLIENT_IDS = [
+    value.strip()
+    for value in os.getenv("GOOGLE_OAUTH_EXTRA_CLIENT_IDS", "").split(",")
+    if value.strip()
+]
+
 # How long after an application is marked "applied" to send the single
 # "did you hear back?" follow-up. A week is late enough that something has
 # usually happened, early enough that the candidate still remembers the

@@ -1,5 +1,6 @@
 from .register_view import RegisterAPIView
 from .login_view import LoginAPIView
+from .google_auth_view import GoogleSignInAPIView
 from .forgot_password_view import ForgotPasswordAPIView
 from .verify_otp_view import VerifyOTPAPIView
 from .reset_password_view import ResetPasswordAPIView

@@ -130,6 +130,31 @@ Set every one of these on your hosting platform (not committed to git —
 | `SENTRY_ENVIRONMENT` | `production` |
 | `EMAIL_HOST` + `EMAIL_HOST_USER` + `EMAIL_HOST_PASSWORD` | A real SMTP provider — without this, OTP codes only ever print to the server log, which means **no one can actually log in in production**. This one is easy to miss because everything looks fine until the first real user tries to sign in. |
 
+### Sign in with Google (optional, but it removes the OTP problem)
+
+Unset, the Google button simply doesn't render and password login is
+unaffected. Set, it becomes the fastest way in — and the only route that
+skips the emailed OTP, because Google has already applied whatever second
+factor is on the user's own account.
+
+1. In the [Google Cloud console](https://console.cloud.google.com/apis/credentials),
+   create an **OAuth 2.0 Client ID** of type **Web application**.
+2. Add your frontend origin (e.g. `https://intelliresume.com`) under
+   *Authorised JavaScript origins*.
+3. Configure the OAuth consent screen. Only the `openid`, `email` and
+   `profile` scopes are used — all three are non-sensitive, so this needs
+   no Google verification review and no security assessment.
+
+| Variable | Where | Value |
+|---|---|---|
+| `GOOGLE_OAUTH_CLIENT_ID` | API | The client ID from step 1. Every incoming Google token's `aud` is checked against it — that check is the whole security of the feature, so it must be the real value, never a wildcard. |
+| `VITE_GOOGLE_CLIENT_ID` | Frontend build | The same client ID. Baked in at build time, so rebuild the frontend after changing it. |
+| `GOOGLE_OAUTH_EXTRA_CLIENT_IDS` | API | Optional, comma separated. Only needed for the Chrome extension, which registers as its own OAuth client and therefore sends a different `aud`. Each entry is still matched exactly. |
+
+Accounts are matched on Google's immutable `sub`, then by **verified**
+email — so an existing password account signing in with Google is linked,
+not duplicated, and keeps its password.
+
 ### Rewarded ads → credits (optional)
 
 Off unless `REWARDED_ADS_ENABLED=true` is set in the admin Configuration tab. The **provider is chosen there too** (`REWARDED_AD_PROVIDER` = `admanager` or `partner`); credit value, daily cap, and expiry are the other `REWARDED_AD_*` keys on that screen. Only the network ids and the S2S secret are env vars:
