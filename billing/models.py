@@ -304,3 +304,119 @@ class StripeWebhookEvent(models.Model):
 
     def __str__(self):
         return f"{self.event_type} ({self.stripe_event_id})"
+
+
+class PlanPrice(models.Model):
+    """An editable price for one (plan, currency, billing period).
+
+    Prices used to live only in `billing.plans` as literals with env-var
+    overrides, which meant changing one needed a code edit or at minimum an
+    env change and a restart. This table takes precedence over those, so a
+    price can be corrected from the admin without a deploy. The literals
+    stay as the fallback: an empty table must leave the product working
+    exactly as it did before.
+
+    `stripe_price_id` sits beside the amount on purpose. Stripe, not this
+    row, decides what a customer is actually charged - the amount here is
+    only what we *display*. Storing them together makes it obvious that
+    changing one without the other means showing a price we won't charge,
+    which is misleading pricing, not a cosmetic bug.
+    """
+
+    plan_id = models.CharField(max_length=50)
+    currency = models.CharField(max_length=3)
+    billing_period = models.CharField(max_length=10)
+
+    amount_cents = models.PositiveIntegerField(
+        help_text="Displayed amount, in minor units. Must match what the Stripe price below actually charges."
+    )
+    stripe_price_id = models.CharField(
+        max_length=255,
+        blank=True,
+        help_text="Leave blank to make this combination unpurchasable rather than charge the wrong amount.",
+    )
+
+    is_active = models.BooleanField(
+        default=True,
+        help_text="Turn off to fall back to the built-in catalog price for this combination.",
+    )
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        unique_together = ("plan_id", "currency", "billing_period")
+        ordering = ["plan_id", "currency", "billing_period"]
+
+    def __str__(self):
+        return f"{self.plan_id} {self.currency} {self.billing_period} = {self.amount_cents}"
+
+
+class PricingOffer(models.Model):
+    """A time-boxed promotional price - a festival sale, a launch discount.
+
+    Deliberately carries its own `stripe_price_id` rather than a percentage
+    off. A discount that only exists in our display would show one number
+    and charge another, which is misleading pricing rather than a bug to
+    fix later. So an offer is a real, separate Stripe Price you create for
+    the campaign, and **an offer with no Stripe price never activates** -
+    the same rule the base prices already follow.
+
+    Offers are per (plan, currency, period), the same grain as the price
+    they replace, because each one needs its own Stripe Price. Group them
+    with `campaign` so one festival reads as a single thing in the admin.
+    """
+
+    campaign = models.CharField(
+        max_length=80,
+        help_text='Groups the rows of one sale, e.g. "Diwali 2026". Internal.',
+    )
+    label = models.CharField(
+        max_length=60,
+        help_text='Shown to customers on the pricing card, e.g. "Diwali Offer".',
+    )
+    badge = models.CharField(
+        max_length=24,
+        blank=True,
+        help_text='Short flash on the card, e.g. "33% OFF". Optional.',
+    )
+
+    plan_id = models.CharField(max_length=50)
+    currency = models.CharField(max_length=3)
+    billing_period = models.CharField(max_length=10)
+
+    amount_cents = models.PositiveIntegerField(help_text="The promotional amount, in minor units.")
+    stripe_price_id = models.CharField(
+        max_length=255,
+        blank=True,
+        help_text="The Stripe Price for the discounted amount. Blank means this offer stays dormant - we never advertise a discount we cannot actually charge.",
+    )
+
+    starts_at = models.DateTimeField()
+    ends_at = models.DateTimeField()
+    is_active = models.BooleanField(
+        default=True, help_text="Turn off to end a sale early without deleting its record."
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-starts_at"]
+        indexes = [
+            models.Index(fields=["plan_id", "currency", "billing_period", "starts_at", "ends_at"]),
+        ]
+
+    def __str__(self):
+        return f"{self.campaign}: {self.plan_id} {self.currency} {self.billing_period}"
+
+    def is_live(self, now=None):
+        """Whether this offer should be applied right now.
+
+        A missing Stripe price makes it dormant however correct the dates
+        are - showing a sale we cannot charge is worse than showing none.
+        """
+        from django.utils import timezone
+
+        now = now or timezone.now()
+        return bool(
+            self.is_active
+            and self.stripe_price_id
+            and self.starts_at <= now <= self.ends_at
+        )

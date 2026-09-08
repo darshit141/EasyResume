@@ -29,6 +29,7 @@ currency/period combination simply can't be checked out — a clear, safe
 failure rather than silently charging the wrong amount.
 """
 
+import logging
 import os
 
 from billing.entitlements import FREE_AI_CALLS_PER_MONTH
@@ -37,6 +38,8 @@ SUPPORTED_CURRENCIES = ("EUR", "GBP")
 DEFAULT_CURRENCY = "EUR"
 BILLING_PERIODS = ("monthly", "annual")
 CURRENCY_SYMBOLS = {"EUR": "€", "GBP": "£"}
+
+logger = logging.getLogger(__name__)
 
 
 def _price(plan_id, currency, period, default_cents, env_price_id):
@@ -149,6 +152,22 @@ def find_plan_by_stripe_price_id(stripe_price_id):
     frozen at whatever it was at initial checkout."""
     if not stripe_price_id:
         return None
+
+    # Admin-set prices and promotional prices first. A subscription bought
+    # during a sale carries the *offer's* Stripe Price, so a catalog-only
+    # lookup would fail to recognise it and leave that subscriber's plan
+    # unset — they would pay and get nothing.
+    for model_name in ("PlanPrice", "PricingOffer"):
+        try:
+            from django.apps import apps
+
+            model = apps.get_model("billing", model_name)
+            row = model.objects.filter(stripe_price_id=stripe_price_id).first()
+            if row is not None:
+                return row.plan_id, row.currency, row.billing_period
+        except Exception:
+            logger.exception("Could not search %s for a Stripe price.", model_name)
+
     for plan in PLANS:
         for currency, periods in plan.get("prices", {}).items():
             for billing_period, price in periods.items():
@@ -157,14 +176,128 @@ def find_plan_by_stripe_price_id(stripe_price_id):
     return None
 
 
-def get_price(plan_id, currency, billing_period):
-    """Returns the {amount_cents, stripe_price_id} dict for a plan/currency/
-    period combination, or None if the plan has no prices (free) or that
-    combination isn't configured."""
+def catalog_price(plan_id, currency, billing_period):
+    """The built-in price, before any admin override or offer. The fallback
+    that keeps the product working with an empty database."""
     plan = get_plan(plan_id)
     if not plan or not plan.get("prices"):
         return None
     return plan["prices"].get(normalize_currency(currency), {}).get(billing_period)
+
+
+def get_price(plan_id, currency, billing_period, now=None):
+    """The price to display *and* to charge, for one plan/currency/period.
+
+    Resolution order: a live promotional offer, then an admin-set base
+    price, then the built-in catalog. Returns None when the plan has no
+    prices at all (free) or the combination isn't configured.
+
+    Both the pricing page and Stripe Checkout call this one function. That
+    is the point: display and charge cannot disagree, because there is no
+    second place for either to read a number from. A discount that existed
+    only on the pricing page would show one amount and take another, which
+    is misleading pricing rather than a cosmetic bug.
+
+    Shape is a superset of what it used to return, so existing callers
+    reading `amount_cents` / `stripe_price_id` are unaffected:
+
+        amount_cents           what will actually be charged
+        stripe_price_id        the Stripe Price checkout will use
+        original_amount_cents  the pre-offer amount, or None
+        offer                  {label, badge, ends_at} while a sale runs
+    """
+    currency = normalize_currency(currency)
+    base = _base_price(plan_id, currency, billing_period)
+    if base is None:
+        return None
+
+    resolved = {
+        "amount_cents": base["amount_cents"],
+        "stripe_price_id": base["stripe_price_id"],
+        "original_amount_cents": None,
+        "offer": None,
+    }
+
+    offer = _live_offer(plan_id, currency, billing_period, now)
+    if offer is None:
+        return resolved
+
+    # Only ever a *discount*. An "offer" priced above the standard price is
+    # a misconfiguration, and quietly charging more than the normal rate
+    # because a row said so is the one outcome worth hard-coding against.
+    if offer.amount_cents >= base["amount_cents"]:
+        logger.warning(
+            "Ignoring offer %s: %s is not below the standard price %s.",
+            offer.campaign, offer.amount_cents, base["amount_cents"],
+        )
+        return resolved
+
+    resolved.update(
+        amount_cents=offer.amount_cents,
+        stripe_price_id=offer.stripe_price_id,
+        original_amount_cents=base["amount_cents"],
+        offer={
+            "label": offer.label,
+            "badge": offer.badge,
+            "ends_at": offer.ends_at.isoformat(),
+        },
+    )
+    return resolved
+
+
+def _base_price(plan_id, currency, billing_period):
+    """Admin-set price if there is one, otherwise the built-in catalog."""
+    catalog = catalog_price(plan_id, currency, billing_period)
+    if catalog is None:
+        # Nothing to override — a plan with no prices stays free.
+        return None
+
+    row = _price_row(plan_id, currency, billing_period)
+    if row is None:
+        return catalog
+    return {"amount_cents": row.amount_cents, "stripe_price_id": row.stripe_price_id}
+
+
+def _price_row(plan_id, currency, billing_period):
+    # Imported lazily: this module is imported at app-load time, before the
+    # app registry is ready to answer model queries.
+    try:
+        from billing.models import PlanPrice
+
+        return PlanPrice.objects.filter(
+            plan_id=plan_id,
+            currency=currency,
+            billing_period=billing_period,
+            is_active=True,
+        ).first()
+    except Exception:
+        # A missing table (fresh checkout, mid-migration) must degrade to
+        # the built-in catalog, not take the pricing page down.
+        logger.exception("Could not read PlanPrice; falling back to the catalog.")
+        return None
+
+
+def _live_offer(plan_id, currency, billing_period, now=None):
+    from django.utils import timezone
+
+    now = now or timezone.now()
+    try:
+        from billing.models import PricingOffer
+
+        offers = PricingOffer.objects.filter(
+            plan_id=plan_id,
+            currency=currency,
+            billing_period=billing_period,
+            is_active=True,
+            starts_at__lte=now,
+            ends_at__gte=now,
+        ).exclude(stripe_price_id="")
+        # Overlapping campaigns are an operator mistake, not a crash: take
+        # the cheapest, which is the one a customer would expect to get.
+        return offers.order_by("amount_cents").first()
+    except Exception:
+        logger.exception("Could not read PricingOffer; serving standard pricing.")
+        return None
 
 
 def format_price_display(amount_cents, currency, billing_period):

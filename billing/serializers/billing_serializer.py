@@ -3,10 +3,24 @@ from rest_framework import serializers
 from billing.plans import BILLING_PERIODS, PLANS_BY_ID, SUPPORTED_CURRENCIES
 
 
+class OfferSerializer(serializers.Serializer):
+    """The running promotion, if any. Null outside a sale window."""
+
+    label = serializers.CharField()
+    badge = serializers.CharField(allow_blank=True)
+    ends_at = serializers.DateTimeField()
+
+
 class PriceOptionSerializer(serializers.Serializer):
     amount_cents = serializers.IntegerField()
     display = serializers.CharField()
     purchasable = serializers.BooleanField()
+    # `amount_cents` is always what will be charged. During a promotion
+    # these carry the standard price so the card can strike it through;
+    # outside one they are null.
+    original_amount_cents = serializers.IntegerField(allow_null=True, required=False)
+    original_display = serializers.CharField(allow_null=True, required=False)
+    offer = OfferSerializer(allow_null=True, required=False)
 
 
 class PlanSerializer(serializers.Serializer):

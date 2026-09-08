@@ -1,6 +1,14 @@
 from django.contrib import admin
 
-from billing.models import AIUsageLog, Coupon, CouponRedemption, StripeWebhookEvent, Subscription
+from billing.models import (
+    AIUsageLog,
+    Coupon,
+    CouponRedemption,
+    PlanPrice,
+    PricingOffer,
+    StripeWebhookEvent,
+    Subscription,
+)
 
 
 @admin.register(Subscription)
@@ -58,3 +66,34 @@ class StripeWebhookEventAdmin(admin.ModelAdmin):
 
     def has_add_permission(self, request):
         return False
+
+
+@admin.register(PlanPrice)
+class PlanPriceAdmin(admin.ModelAdmin):
+    list_display = ("plan_id", "currency", "billing_period", "amount_cents", "purchasable", "is_active", "updated_at")
+    list_filter = ("plan_id", "currency", "billing_period", "is_active")
+    readonly_fields = ("updated_at",)
+
+    @admin.display(boolean=True, description="Purchasable")
+    def purchasable(self, price):
+        # A price with no Stripe id displays but cannot be bought - worth
+        # seeing at a glance rather than discovering at checkout.
+        return bool(price.stripe_price_id)
+
+
+@admin.register(PricingOffer)
+class PricingOfferAdmin(admin.ModelAdmin):
+    list_display = (
+        "campaign", "label", "plan_id", "currency", "billing_period",
+        "amount_cents", "starts_at", "ends_at", "live_now",
+    )
+    list_filter = ("campaign", "plan_id", "currency", "billing_period", "is_active")
+    search_fields = ("campaign", "label")
+    readonly_fields = ("created_at",)
+
+    @admin.display(boolean=True, description="Live now")
+    def live_now(self, offer):
+        """Whether customers are actually seeing this right now - which is
+        not the same as is_active, because the dates and the Stripe price
+        both have to line up too."""
+        return offer.is_live()

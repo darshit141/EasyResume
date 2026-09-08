@@ -60,10 +60,19 @@ def _price_option(plan_id, currency, period):
     price = get_price(plan_id, currency, period)
     if price is None:
         return None
+    original = price.get("original_amount_cents")
     return {
         "amount_cents": price["amount_cents"],
         "display": format_price_display(price["amount_cents"], currency, period),
         "purchasable": bool(price["stripe_price_id"]),
+        # Present only while a promotion is running, so the card can show
+        # the standard price struck through next to what is actually being
+        # charged. Both numbers come from the same resolver as checkout.
+        "original_amount_cents": original,
+        "original_display": (
+            format_price_display(original, currency, period) if original else None
+        ),
+        "offer": price.get("offer"),
     }
 
 
