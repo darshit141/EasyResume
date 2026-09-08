@@ -21,6 +21,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from authentication.models import User
+from billing.entitlements import is_paid_plan
 from billing.services.credit_service import CreditService, RewardedAdCapReachedError
 from billing.services.entitlements_service import EntitlementsService
 from billing.services.rewarded_ad_providers import (
@@ -36,13 +37,16 @@ logger = logging.getLogger(__name__)
 def _rewarded_ad_state(user, provider):
     """The shared block describing whether this user can earn a credit by
     watching an ad, plus what the browser needs to show one."""
-    is_pro = EntitlementsService.for_user(user)["plan_id"] == "pro"
+    # Any paying tier, not just Pro: a hardcoded == "pro" here would have
+    # started offering ad-for-credit deals to Max subscribers, who pay the
+    # most precisely so they don't see ads.
+    is_paid = is_paid_plan(EntitlementsService.for_user(user)["plan_id"])
     configured = provider.is_configured()
     watched_today = CreditService.rewarded_ads_watched_today(user)
     cap = CreditService.rewarded_ads_daily_cap()
-    can_watch = configured and not is_pro and CreditService.can_watch_rewarded_ad(user)
+    can_watch = configured and not is_paid and CreditService.can_watch_rewarded_ad(user)
     return {
-        "enabled": configured and not is_pro,
+        "enabled": configured and not is_paid,
         "provider": provider.name if configured else None,
         "client_config": provider.client_config() if can_watch else {},
         "credits_per_view": CreditService.credits_per_rewarded_ad(),

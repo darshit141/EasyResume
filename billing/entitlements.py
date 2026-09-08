@@ -34,6 +34,35 @@ FREE_AI_CALLS_PER_MONTH = int(os.getenv("FREE_AI_CALLS_PER_MONTH", "30"))
 # Tuned by environment so they can be tightened immediately without a deploy.
 FREE_JOB_APPLICATIONS_PER_MONTH = int(os.getenv("FREE_JOB_APPLICATIONS_PER_MONTH", "10"))
 PRO_JOB_APPLICATIONS_PER_MONTH = int(os.getenv("PRO_JOB_APPLICATIONS_PER_MONTH", "200"))
+MAX_JOB_APPLICATIONS_PER_MONTH = int(os.getenv("MAX_JOB_APPLICATIONS_PER_MONTH", "500"))
+
+# The paid tiers, cheapest first. Everything that used to ask "is this user
+# on pro?" must ask "is this user on a paid plan?" instead — the day a
+# second paid tier exists, a hardcoded == "pro" silently starts showing ads
+# to your most expensive subscribers.
+PAID_PLAN_IDS = ("pro", "max")
+
+# How we find out an employer replied. Two real strategies, plus off:
+#
+#   "alias"  Each application is sent with its own Reply-To address we own,
+#            so the reply lands on our server. Costs inbound mail
+#            infrastructure. Cannot see replies to applications submitted
+#            through a company's own portal, because we never sent those.
+#   "gmail"  Read the user's mailbox with their consent, which catches
+#            portal applications too. Needs Google's *restricted*
+#            gmail.readonly scope and therefore an annual third-party
+#            security assessment (CASA) - a recurring bill.
+#
+# Which plan gets which is deliberately NOT hardcoded. It is resolved per
+# request from the admin Configuration tab (REPLY_TRACKING_<PLAN>), so the
+# ladder can be re-cut - give Pro the Gmail route, hand the alias route to
+# free users, switch it all off while the CASA assessment is pending -
+# without a code change or a redeploy. The values below are only defaults.
+REPLY_TRACKING_STRATEGIES = ("none", "alias", "gmail")
+REPLY_TRACKING_ENABLED = os.getenv("REPLY_TRACKING_ENABLED", "True") == "True"
+REPLY_TRACKING_FREE = os.getenv("REPLY_TRACKING_FREE", "none")
+REPLY_TRACKING_PRO = os.getenv("REPLY_TRACKING_PRO", "alias")
+REPLY_TRACKING_MAX = os.getenv("REPLY_TRACKING_MAX", "gmail")
 
 FREE_ENTITLEMENTS = {
     "plan_id": "free",
@@ -50,6 +79,9 @@ FREE_ENTITLEMENTS = {
     # the individual knobs (section order, accent colour, font, spacing) is
     # the Pro feature. Enforced in ResumeTemplateService.set_preference.
     "resume_template_customization": False,
+    # Resolved per request from admin config; this is only the fallback.
+    # See REPLY_TRACKING_* above.
+    "reply_tracking": REPLY_TRACKING_FREE,
     # Adopted, not a placeholder: free-tier ads offset AI compute cost for
     # the non-paying cohort without touching paying users (Pro is ads:
     # False below) and without hiding the free tier's actual usefulness
@@ -71,7 +103,22 @@ PRO_ENTITLEMENTS = {
     "docx_export": True,
     "tailored_resume_version_history": True,
     "resume_template_customization": True,
+    "reply_tracking": REPLY_TRACKING_PRO,
     "ads": False,
+}
+
+# The tier that exists to fund third-party services we pay for per-account.
+# Right now that means Gmail reply tracking, which needs Google's
+# *restricted* gmail.readonly scope and therefore an annual third-party
+# security assessment (CASA) — a real, recurring bill that the Pro price
+# does not cover. Anything added here in future should meet the same test:
+# it costs us money per subscriber, rather than merely being withheld from
+# cheaper tiers.
+MAX_ENTITLEMENTS = {
+    **PRO_ENTITLEMENTS,
+    "plan_id": "max",
+    "job_applications_per_month": MAX_JOB_APPLICATIONS_PER_MONTH,
+    "reply_tracking": REPLY_TRACKING_MAX,
 }
 
 # Human-readable names used in upgrade messages, so the error a user sees
@@ -82,7 +129,27 @@ FEATURE_LABELS = {
     "ai_provider": "Choosing an AI provider",
     "resume_template_customization": "Customising the resume layout",
     "job_applications": "Sending applications from IntelliResume",
+    "reply_tracking": "Tracking employer replies",
 }
+
+# Every paid tier, keyed by the plan id stored on Subscription. Resolving
+# through this rather than an if/elif chain means adding a tier is one dict
+# entry, and an unknown id can only ever fall through to free.
+PAID_ENTITLEMENTS = {
+    PRO_ENTITLEMENTS["plan_id"]: PRO_ENTITLEMENTS,
+    MAX_ENTITLEMENTS["plan_id"]: MAX_ENTITLEMENTS,
+}
+
+
+def is_paid_plan(plan_id):
+    """Whether a plan id is a paying tier.
+
+    Use this instead of comparing to "pro". Ads, rewarded-ad offers and
+    "upgrade to remove this" prompts all keyed off == "pro", which would
+    have started showing ads to Max subscribers the moment that tier
+    existed.
+    """
+    return plan_id in PAID_ENTITLEMENTS
 
 
 def entitlements_for(plan_id, is_active):
@@ -101,8 +168,16 @@ def entitlements_for(plan_id, is_active):
     # and api.utils.config reaches into the ORM.
     from api.utils.config import get_config_value
 
-    if is_active and plan_id == "pro":
-        return PRO_ENTITLEMENTS
+    if is_active and plan_id in PAID_ENTITLEMENTS:
+        entitlements = PAID_ENTITLEMENTS[plan_id]
+        return {
+            **entitlements,
+            "job_applications_per_month": get_config_value(
+                f"{plan_id.upper()}_JOB_APPLICATIONS_PER_MONTH",
+                entitlements["job_applications_per_month"],
+            ),
+            "reply_tracking": resolve_reply_tracking(plan_id, entitlements["reply_tracking"]),
+        }
 
     return {
         **FREE_ENTITLEMENTS,
@@ -113,4 +188,33 @@ def entitlements_for(plan_id, is_active):
         "ai_calls_per_month": get_config_value(
             "FREE_AI_CALLS_PER_MONTH", FREE_ENTITLEMENTS["ai_calls_per_month"]
         ),
+        "job_applications_per_month": get_config_value(
+            "FREE_JOB_APPLICATIONS_PER_MONTH",
+            FREE_ENTITLEMENTS["job_applications_per_month"],
+        ),
+        "reply_tracking": resolve_reply_tracking("free", FREE_ENTITLEMENTS["reply_tracking"]),
     }
+
+
+def resolve_reply_tracking(plan_id, default):
+    """Which reply-tracking strategy a plan gets, right now.
+
+    Read through the admin Configuration tab rather than baked in, so the
+    ladder can be re-cut without a deploy — the point of that being that
+    the Gmail route depends on a compliance assessment that may lapse,
+    arrive late, or turn out not to be worth paying for. When it is not
+    available, an operator turns it off and Max subscribers fall back to
+    the alias route rather than seeing a feature that quietly does nothing.
+
+    An unrecognised value resolves to "none". Guessing wrong here would
+    mean either promising tracking we don't perform, or reading a mailbox
+    under a setting nobody deliberately chose.
+    """
+    from api.utils.config import get_config_value
+
+    if not get_config_value("REPLY_TRACKING_ENABLED", REPLY_TRACKING_ENABLED):
+        return "none"
+
+    value = get_config_value(f"REPLY_TRACKING_{plan_id.upper()}", default)
+    value = (value or "none").strip().lower()
+    return value if value in REPLY_TRACKING_STRATEGIES else "none"

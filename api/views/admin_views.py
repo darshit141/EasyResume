@@ -145,6 +145,42 @@ DEFAULT_CONFIGS = [
         "description": "Days an earned credit stays usable before it expires.",
     },
     {
+        "key": "REPLY_TRACKING_ENABLED",
+        "category": "limits",
+        "value_type": "boolean",
+        "description": "Master switch for detecting employer replies to applications. Off means no plan gets it, whatever the per-plan settings say - use this if the Gmail security assessment lapses.",
+    },
+    {
+        "key": "REPLY_TRACKING_FREE",
+        "category": "limits",
+        "value_type": "string",
+        "description": "Reply tracking on the Free plan: none | alias | gmail. Anything unrecognised means none.",
+    },
+    {
+        "key": "REPLY_TRACKING_PRO",
+        "category": "limits",
+        "value_type": "string",
+        "description": "Reply tracking on Pro: alias (a Reply-To address we own - no mailbox access, misses portal applications), gmail (reads the user's inbox, needs the restricted scope + CASA assessment), or none.",
+    },
+    {
+        "key": "REPLY_TRACKING_MAX",
+        "category": "limits",
+        "value_type": "string",
+        "description": "Reply tracking on Max: none | alias | gmail. Set to alias while the Gmail CASA assessment is pending so Max still gets something real.",
+    },
+    {
+        "key": "PRO_JOB_APPLICATIONS_PER_MONTH",
+        "category": "limits",
+        "value_type": "integer",
+        "description": "Applications a Pro account may send per month. An abuse ceiling on our sending reputation before it is a plan feature.",
+    },
+    {
+        "key": "MAX_JOB_APPLICATIONS_PER_MONTH",
+        "category": "limits",
+        "value_type": "integer",
+        "description": "Applications a Max account may send per month.",
+    },
+    {
         "key": "DISPLAY_ADS_ENABLED",
         "category": "ads",
         "value_type": "boolean",

@@ -39,10 +39,15 @@ BILLING_PERIODS = ("monthly", "annual")
 CURRENCY_SYMBOLS = {"EUR": "€", "GBP": "£"}
 
 
-def _price(currency, period, default_cents, env_price_id):
+def _price(plan_id, currency, period, default_cents, env_price_id):
+    # The plan id is part of the amount's env key: it used to be hardcoded
+    # to PRO_, so a second tier would silently have read Pro's override.
     return {
         "amount_cents": int(
-            os.getenv(f"PRO_PRICE_{currency}_{period.upper()}_CENTS", str(default_cents))
+            os.getenv(
+                f"{plan_id.upper()}_PRICE_{currency}_{period.upper()}_CENTS",
+                str(default_cents),
+            )
         ),
         "stripe_price_id": os.getenv(env_price_id, ""),
     }
@@ -76,17 +81,52 @@ PRO_PLAN = {
     ],
     "prices": {
         "EUR": {
-            "monthly": _price("EUR", "monthly", 1499, "STRIPE_PRICE_ID_PRO_EUR_MONTHLY"),
-            "annual": _price("EUR", "annual", 11900, "STRIPE_PRICE_ID_PRO_EUR_ANNUAL"),
+            "monthly": _price("pro", "EUR", "monthly", 1499, "STRIPE_PRICE_ID_PRO_EUR_MONTHLY"),
+            "annual": _price("pro", "EUR", "annual", 11900, "STRIPE_PRICE_ID_PRO_EUR_ANNUAL"),
         },
         "GBP": {
-            "monthly": _price("GBP", "monthly", 1299, "STRIPE_PRICE_ID_PRO_GBP_MONTHLY"),
-            "annual": _price("GBP", "annual", 9900, "STRIPE_PRICE_ID_PRO_GBP_ANNUAL"),
+            "monthly": _price("pro", "GBP", "monthly", 1299, "STRIPE_PRICE_ID_PRO_GBP_MONTHLY"),
+            "annual": _price("pro", "GBP", "annual", 9900, "STRIPE_PRICE_ID_PRO_GBP_ANNUAL"),
         },
     },
 }
 
-PLANS = [FREE_PLAN, PRO_PLAN]
+# The tier that exists to fund third-party services billed to us per
+# account, rather than to withhold something cheap from cheaper plans.
+# Today that is Gmail reply tracking, which needs Google's restricted
+# gmail.readonly scope and so an annual third-party security assessment
+# (CASA) - a few thousand a year, fixed. Priced so a modest number of
+# subscribers covers that bill rather than eating the Pro margin.
+#
+# Roughly 2x Pro. The annual discount (~31%) is kept in line with Pro's,
+# for the same reason: cash up front and lower early churn are worth more
+# than the margin given up while the product has no track record.
+#
+# Deliberately NOT listed here: anything not yet enforced in
+# billing.entitlements. The header of that file is the rule - if it is a
+# bullet on the pricing page it has to be a real check on the server.
+MAX_PLAN = {
+    "id": "max",
+    "name": "Max",
+    "features": [
+        "Everything in Pro",
+        "Employer reply tracking on your applications",
+        "500 applications sent / month",
+        "Priority support",
+    ],
+    "prices": {
+        "EUR": {
+            "monthly": _price("max", "EUR", "monthly", 2999, "STRIPE_PRICE_ID_MAX_EUR_MONTHLY"),
+            "annual": _price("max", "EUR", "annual", 24900, "STRIPE_PRICE_ID_MAX_EUR_ANNUAL"),
+        },
+        "GBP": {
+            "monthly": _price("max", "GBP", "monthly", 2499, "STRIPE_PRICE_ID_MAX_GBP_MONTHLY"),
+            "annual": _price("max", "GBP", "annual", 20900, "STRIPE_PRICE_ID_MAX_GBP_ANNUAL"),
+        },
+    },
+}
+
+PLANS = [FREE_PLAN, PRO_PLAN, MAX_PLAN]
 PLANS_BY_ID = {plan["id"]: plan for plan in PLANS}
 
 

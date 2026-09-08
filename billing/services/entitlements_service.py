@@ -7,7 +7,7 @@ prevent a free account from using paid features.
 
 from django.utils import timezone
 
-from billing.entitlements import FEATURE_LABELS, entitlements_for
+from billing.entitlements import FEATURE_LABELS, entitlements_for, is_paid_plan
 from billing.models import AIUsageLog, Subscription
 from billing.services.credit_service import CreditService
 
@@ -154,6 +154,12 @@ class EntitlementsService:
             "tailored_resume_version_history": entitlements["tailored_resume_version_history"],
             "resume_template_customization": entitlements["resume_template_customization"],
             "shows_ads": entitlements["ads"],
+            "job_applications_limit": entitlements["job_applications_per_month"],
+            "job_applications_used": EntitlementsService.applications_sent_this_month(user),
+            # "none" | "alias" | "gmail" — the UI uses this to say whether
+            # we are watching for a reply on this account, and how, rather
+            # than implying a capability the plan doesn't have.
+            "reply_tracking": entitlements["reply_tracking"],
         }
 
     @staticmethod
@@ -208,14 +214,14 @@ class EntitlementsService:
 
         used = EntitlementsService.applications_sent_this_month(user)
         if used >= limit:
-            is_pro = entitlements.get("plan_id") == "pro"
+            is_paid = is_paid_plan(entitlements.get("plan_id"))
             message = (
                 f"You've sent all {limit} applications your plan allows this month. "
                 + (
                     "This is a fair-use limit that protects delivery for everyone; "
                     "contact support if you genuinely need more."
-                    if is_pro
-                    else "Upgrade to Pro for a much higher monthly allowance."
+                    if is_paid
+                    else "Upgrade for a much higher monthly allowance."
                 )
             )
             raise PlanLimitReachedError(

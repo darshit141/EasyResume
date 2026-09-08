@@ -118,6 +118,7 @@ Set every one of these on your hosting platform (not committed to git —
 | `STRIPE_SECRET_KEY` | Live secret key from step 4 |
 | `STRIPE_WEBHOOK_SECRET` | Live webhook signing secret from step 4 |
 | `STRIPE_PRICE_ID_PRO_EUR_MONTHLY` etc. | Live Price IDs from step 4 (whichever currency/period combos you're launching with) |
+| `STRIPE_PRICE_ID_MAX_EUR_MONTHLY` etc. | Same, for the **Max** tier. Until these are set, Max still appears on the pricing page but shows "Payments coming soon" and cannot be checked out - a deliberate safe failure rather than charging the wrong amount. |
 | `STRIPE_AUTOMATIC_TAX_ENABLED` | `True` (already the case if you copied `.env` forward — leave it; Stripe Tax must already be active from step 4) |
 | `GROQ_API_KEY` and/or `GEMINI_API_KEY` and/or `KIRA_API_KEY` | Production-tier keys, not a personal free-tier key that'll rate-limit under real traffic. `KIRA_API_KEY` (kiraai.vn) is an OpenAI-compatible provider with a large context window and high rate limits — a good choice for one key serving many users; set `LLM_PROVIDER=kira` to make it the default. API keys are env-var-only (never the admin Configuration tab); `KIRA_MODEL` / `KIRA_BASE_URL` can be tuned from that tab. |
 
@@ -129,6 +130,36 @@ Set every one of these on your hosting platform (not committed to git —
 | `SENTRY_DSN` | From your Sentry project — error tracking is a silent no-op until this is set |
 | `SENTRY_ENVIRONMENT` | `production` |
 | `EMAIL_HOST` + `EMAIL_HOST_USER` + `EMAIL_HOST_PASSWORD` | A real SMTP provider — without this, OTP codes only ever print to the server log, which means **no one can actually log in in production**. This one is easy to miss because everything looks fine until the first real user tries to sign in. |
+
+### The Max tier and reply tracking
+
+Free -> Pro -> **Max**. Max exists to fund third-party services billed to us
+per account, rather than to withhold something cheap from cheaper plans.
+Today that means employer **reply tracking**.
+
+Two strategies ship, and **which plan gets which is set in the admin
+Configuration tab**, not in code - so the ladder can be re-cut without a
+deploy:
+
+| Strategy | What it does | What it costs |
+|---|---|---|
+| `alias` | Each application is sent with its own `Reply-To` address we own, so the reply lands on our server. No access to anyone's mailbox. | Inbound email infrastructure. Cannot see replies to applications submitted through a company's own portal, because we never sent those. |
+| `gmail` | Reads the user's mailbox with their consent, so portal applications are covered too. | Google's **restricted** `gmail.readonly` scope, which requires an annual third-party security assessment (CASA) - a few thousand a year, fixed. |
+| `none` | Off. | - |
+
+| Variable / config key | Default | Notes |
+|---|---|---|
+| `REPLY_TRACKING_ENABLED` | `True` | Master switch. Off means no plan gets it, whatever the per-plan keys say - use this if the CASA assessment lapses. |
+| `REPLY_TRACKING_FREE` | `none` | |
+| `REPLY_TRACKING_PRO` | `alias` | |
+| `REPLY_TRACKING_MAX` | `gmail` | Set to `alias` while the assessment is pending, so Max still gets something real. |
+| `PRO_JOB_APPLICATIONS_PER_MONTH` | `200` | Abuse ceiling on our sending reputation before it is a plan feature. |
+| `MAX_JOB_APPLICATIONS_PER_MONTH` | `500` | |
+| `MAX_PRICE_EUR_MONTHLY_CENTS` etc. | `2999` / `24900` (EUR), `2499` / `20900` (GBP) | Amount overrides, per plan. |
+
+Anything unrecognised in a `REPLY_TRACKING_*` key resolves to `none`.
+Guessing would mean either promising tracking we do not perform, or reading
+a mailbox under a setting nobody deliberately chose.
 
 ### Sign in with Google (optional, but it removes the OTP problem)
 
