@@ -59,6 +59,7 @@ def _price(plan_id, currency, period, default_cents, env_price_id):
 FREE_PLAN = {
     "id": "free",
     "name": "Free",
+    "published": True,
     "features": [
         "Up to 5 resumes",
         "2 job-specific tailored resumes / month",
@@ -74,6 +75,7 @@ FREE_PLAN = {
 PRO_PLAN = {
     "id": "pro",
     "name": "Pro",
+    "published": True,
     "features": [
         "Unlimited resumes, unlimited versions",
         "Unlimited job-specific tailored resumes",
@@ -111,6 +113,17 @@ PRO_PLAN = {
 MAX_PLAN = {
     "id": "max",
     "name": "Max",
+    # Off until the tier can honestly be sold. Two of the bullets below
+    # describe work that does not exist yet: reply tracking has an
+    # entitlement but no machinery behind it, and there is no support
+    # system to prioritise. Publishing it would advertise things we cannot
+    # deliver - the rule at the top of billing/entitlements.py, applied to
+    # a whole plan instead of a single flag.
+    #
+    # Flip PUBLISH_MAX_PLAN=True once reply tracking actually works and
+    # Stripe prices exist. The tier is fully built and tested behind this;
+    # only the shopfront is closed.
+    "published": os.getenv("PUBLISH_MAX_PLAN", "False") == "True",
     "features": [
         "Everything in Pro",
         "Employer reply tracking on your applications",
@@ -131,6 +144,16 @@ MAX_PLAN = {
 
 PLANS = [FREE_PLAN, PRO_PLAN, MAX_PLAN]
 PLANS_BY_ID = {plan["id"]: plan for plan in PLANS}
+
+
+def published_plans():
+    """The plans a customer may see and buy.
+
+    Separate from PLANS so a tier can be finished, tested and deployed
+    before it is advertised - which is what lets an unfinished plan ship
+    dark instead of sitting on a branch.
+    """
+    return [plan for plan in PLANS if plan.get("published")]
 
 
 def get_plan(plan_id):

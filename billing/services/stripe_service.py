@@ -68,6 +68,12 @@ class StripeService:
         plan = get_plan(plan_id)
         if plan is None:
             raise PlanNotFoundError()
+        # Hiding a plan from the pricing page while still letting anyone
+        # check out by posting its id would be theatre, not a safeguard.
+        plan = get_plan(plan_id)
+        if plan is not None and not plan.get("published"):
+            raise BillingError("That plan isn't available.")
+
         price = get_price(plan_id, currency, billing_period)
         if not price or not price["stripe_price_id"]:
             raise PlanNotPurchasableError()

@@ -199,3 +199,45 @@ class MaxSubscriberBehaviourTests(TestCase):
             EntitlementsService, "applications_sent_this_month", return_value=250
         ):
             EntitlementsService.check_can_send_application(self.user)
+
+
+class UnpublishedPlanTests(TestCase):
+    """A tier can be finished, tested and deployed before it is advertised.
+
+    Max is deliberately unpublished: two of its marketing bullets describe
+    work that does not exist yet, and putting those on a public pricing
+    page would advertise what we cannot deliver.
+    """
+
+    def test_max_is_not_published_by_default(self):
+        from billing.plans import published_plans
+
+        self.assertNotIn("max", {plan["id"] for plan in published_plans()})
+
+    def test_public_pricing_page_does_not_show_max(self):
+        from rest_framework.test import APIClient
+
+        response = APIClient().get("/api/billing/plans/")
+        ids = {plan["id"] for plan in response.data}
+
+        self.assertEqual(ids, {"free", "pro"})
+
+    def test_checkout_refuses_an_unpublished_plan(self):
+        """Hiding it from the page while still allowing checkout by posting
+        the id would be theatre."""
+        from billing.services.stripe_service import BillingError, StripeService
+
+        with self.assertRaises(BillingError):
+            StripeService.create_checkout_session(
+                user=User.objects.create_user(
+                    name="Buyer", email="buyer@example.com", phone="9", password="pw"
+                ),
+                plan_id="max",
+                currency="EUR",
+                billing_period="monthly",
+            )
+
+    def test_max_entitlements_still_work_for_an_existing_subscriber(self):
+        """Unpublishing closes the shopfront; it must not strip anyone who
+        already has the plan."""
+        self.assertEqual(entitlements_for("max", True)["plan_id"], "max")

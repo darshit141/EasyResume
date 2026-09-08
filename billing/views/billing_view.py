@@ -12,6 +12,7 @@ from billing.models import Subscription, StripeWebhookEvent
 from billing.plans import (
     PLANS,
     SUPPORTED_CURRENCIES,
+    published_plans,
     format_price_display,
     get_price,
     normalize_currency,
@@ -117,7 +118,7 @@ class PlanListAPIView(APIView):
 
     def get(self, request):
         currency = normalize_currency(request.query_params.get("currency"))
-        resolved = [_resolve_plan(plan, currency) for plan in PLANS]
+        resolved = [_resolve_plan(plan, currency) for plan in published_plans()]
         return Response(PlanSerializer(resolved, many=True).data)
 
 

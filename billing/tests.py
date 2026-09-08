@@ -6,21 +6,21 @@ from rest_framework.test import APIClient
 
 from authentication.models import User
 from billing.models import Subscription
-from billing.plans import PLANS_BY_ID
+from billing.plans import PLANS_BY_ID, published_plans
 from billing.services.subscription_sync_service import SubscriptionSyncService
 
 
 class PlanListAPITests(TestCase):
-    def test_plans_are_public_and_list_every_tier(self):
+    def test_plans_are_public_and_list_every_published_tier(self):
         client = APIClient()
         response = client.get("/api/billing/plans/")
 
         self.assertEqual(response.status_code, 200)
         ids = {plan["id"] for plan in response.data}
-        # Asserted against the catalog rather than a hardcoded set, so
-        # adding a tier does not silently need this test edited to keep
-        # passing — it only fails if a plan stops being *published*.
-        self.assertEqual(ids, set(PLANS_BY_ID))
+        # Asserted against the published catalog, not a hardcoded set: a
+        # tier can be built and deployed before it is advertised, so this
+        # should track what customers can actually see and buy.
+        self.assertEqual(ids, {plan["id"] for plan in published_plans()})
         self.assertIn("free", ids)
 
     def test_plan_without_a_configured_price_is_not_purchasable(self):
