@@ -206,6 +206,12 @@ class JobResumeCurationSerializer(serializers.ModelSerializer):
             "error_code",
             "application_status",
             "applied_at",
+            # Provenance: lets the tracker say why a job the user never
+            # typed in is in their list, and distinguish an application we
+            # watched being submitted from one they told us about.
+            "source",
+            "autofilled_at",
+            "submit_detected_at",
             "has_gap_analysis",
             "has_tailored_resume",
             "has_cover_letter",

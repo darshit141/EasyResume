@@ -121,11 +121,26 @@ class JobResumeCuration(models.Model):
     Stores a user's job-specific resume curation intake and AI job analysis.
     """
 
+    # "saved" is not a stage of the AI pipeline — it means the row exists
+    # purely as a tracked application and no analysis was ever asked for.
+    # The browser extension creates these when it fills an application form
+    # on a posting the user never captured: we know the job and that they
+    # applied to it, which is worth tracking, but running an analysis nobody
+    # requested would spend a credit without being asked.
+    STATUS_SAVED = "saved"
     STATUS_CHOICES = [
+        (STATUS_SAVED, "Saved"),
         ("queued", "Queued"),
         ("processing", "Processing"),
         ("completed", "Completed"),
         ("failed", "Failed"),
+    ]
+
+    SOURCE_WEB = "web"
+    SOURCE_EXTENSION = "extension"
+    SOURCE_CHOICES = [
+        (SOURCE_WEB, "Web app"),
+        (SOURCE_EXTENSION, "Browser extension"),
     ]
 
     user = models.ForeignKey(
@@ -245,6 +260,46 @@ class JobResumeCuration(models.Model):
     application_notes = models.TextField(
         blank=True,
         help_text="The user's own private notes about this application.",
+    )
+
+    source = models.CharField(
+        max_length=20,
+        choices=SOURCE_CHOICES,
+        default=SOURCE_WEB,
+        help_text="Where this row came from. Shown in the tracker so the user knows why a job they never typed in is listed.",
+    )
+
+    # The next two are observations, not the user's word for it, and are
+    # kept apart from `application_status`/`applied_at` for the same reason
+    # JobApplication is kept apart from both: what we saw happen and what
+    # the user says happened must stay distinguishable. If our detection is
+    # ever wrong, the user can correct the status without erasing the
+    # evidence of what we actually observed.
+    autofilled_at = models.DateTimeField(
+        null=True,
+        blank=True,
+        help_text="When the browser extension last filled an application form for this job.",
+    )
+
+    submit_detected_at = models.DateTimeField(
+        null=True,
+        blank=True,
+        help_text=(
+            "When the extension saw the filled form actually submitted. Set "
+            "only from a real submit event in the page - never inferred from "
+            "the fact that we filled it."
+        ),
+    )
+
+    autofill_prompt_dismissed_at = models.DateTimeField(
+        null=True,
+        blank=True,
+        help_text=(
+            "When the user answered 'no, I didn't apply' to the extension's "
+            "prompt. Recorded rather than acted on: it takes the job out of "
+            "the ask-again list without deleting it or claiming an outcome "
+            "that did not happen."
+        ),
     )
 
     outcome_nudge_sent_at = models.DateTimeField(

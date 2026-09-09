@@ -239,6 +239,14 @@ REST_FRAMEWORK = {
         # email. Generous enough for a real person clicking once, capped so
         # the endpoint cannot be hammered to brute-force tokens.
         "outcome_record": os.getenv("THROTTLE_OUTCOME_RECORD", "20/min"),
+        # Browser-extension writes: recording a fill creates a tracker row,
+        # so an unthrottled caller could grow the table without limit. A
+        # real user clicks "fill" a handful of times an hour.
+        "application_tracking": os.getenv("THROTTLE_APPLICATION_TRACKING", "30/min"),
+        # Browser-extension reads. Tighter than the writes because the
+        # resume-file endpoint returns the whole file base64-encoded - up
+        # to 5MB a call, which is bandwidth worth capping.
+        "autofill": os.getenv("THROTTLE_AUTOFILL", "20/min"),
     },
 }
 

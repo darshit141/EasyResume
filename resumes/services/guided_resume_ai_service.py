@@ -8,6 +8,8 @@ line is **dropped**, not a reason to fail the whole draft — the user is
 building from scratch and a partial draft they can edit beats an error.
 """
 
+import re
+
 from resumes.prompts import (
     GUIDED_SECTION_SCHEMA,
     GUIDED_SUMMARY_SCHEMA,
@@ -72,12 +74,35 @@ class GuidedResumeAIService:
 
     # -- inline polish (the "improve this line" action) -----------------
 
+    # Each instruction has to push the model to genuinely REWRITE. The
+    # earlier wording ("add nothing", "invent nothing") was so defensive
+    # that the model handed back the original with the punctuation tidied,
+    # which reads to a user as "the AI does nothing". The fact boundary is
+    # enforced separately by `_new_facts` below, so these are free to ask
+    # for a real change in register.
     OPERATIONS = {
-        "grammar": "Fix only spelling, grammar and punctuation. Do not change the meaning or the wording beyond what grammar requires.",
-        "stronger": "Rewrite as a single crisp resume bullet: start with a strong past-tense verb, keep it concrete. Add nothing that isn't already stated.",
-        "shorten": "Make it noticeably shorter while keeping every fact.",
-        "expand": "Add a little specificity, but ONLY using detail already implied by the text — invent nothing.",
-        "professional": "Make the tone professional and resume-appropriate. Keep every fact; no inflation.",
+        "grammar": (
+            "Fix spelling, grammar, punctuation and awkward phrasing. Keep the "
+            "author's wording where it is already correct."
+        ),
+        "stronger": (
+            "Rewrite as one crisp resume bullet. Open with a specific, strong "
+            "past-tense verb and make the contribution and its result read "
+            "clearly. Change the sentence structure and word choice as much as "
+            "you need to."
+        ),
+        "shorten": "Cut it to the shortest form that still carries every fact and reads naturally.",
+        "expand": (
+            "Rewrite it more fully, drawing out what is already implied — the "
+            "context, the action and the outcome the author has described. Do "
+            "not introduce anything they did not say."
+        ),
+        "professional": (
+            "Rewrite in polished professional resume register. Replace casual "
+            "or vague wording with precise, workplace-appropriate language, and "
+            "restructure the sentence if that reads better. This should look "
+            "clearly rewritten, not lightly edited."
+        ),
     }
 
     def polish(self, text, operation, target_role=None):
@@ -88,11 +113,28 @@ class GuidedResumeAIService:
             return {"suggestion": "", "changed": False}
         instruction = self.OPERATIONS.get(operation, self.OPERATIONS["grammar"])
         prompt = (
-            "You are editing one line of resume text.\n"
-            f"{instruction}\n"
-            "You must not add any skill, tool, employer, date, metric or achievement "
-            "that is not already in the ORIGINAL. Return JSON: {\"text\": \"...\"}.\n"
-            + (f"Target role for tone: {target_role}\n" if target_role else "")
+            "You are rewriting one line of a resume for someone who is not a "
+            "confident writer. Make it sound like a professional wrote it, "
+            "while keeping it completely true.\n\n"
+            f"WHAT TO DO: {instruction}\n\n"
+            "REWRITE FREELY:\n"
+            "- Change vocabulary, verbs and sentence structure. Casual or vague "
+            "phrasing should become precise and workplace-appropriate.\n"
+            "- Handing back the original with only punctuation changed is a "
+            "failure. If it already reads well, still sharpen the word choice.\n\n"
+            "NEVER ADD A FACT:\n"
+            "- No number, percentage, duration, team size or date that is not "
+            "already in the ORIGINAL.\n"
+            "- No employer, product, tool, technology or certification that is "
+            "not already in the ORIGINAL.\n\n"
+            "NEVER INFLATE SENIORITY OR SCOPE - this matters as much as the facts:\n"
+            "- 'helped with' must not become 'led' or 'owned'.\n"
+            "- 'was part of a team that built' must not become 'built'.\n"
+            "- 'learned' must not become 'mastered'; 'used' must not become "
+            "'architected'.\n"
+            "Describe exactly the contribution they described, in better words.\n\n"
+            'Return JSON: {"text": "..."}.\n'
+            + (f"\nTarget role, for tone only: {target_role}\n" if target_role else "")
             + f"\nORIGINAL:\n{text}"
         )
         schema = {
@@ -108,8 +150,71 @@ class GuidedResumeAIService:
         suggestion = ((raw.get("text") if isinstance(raw, dict) else "") or "").strip()
         if not suggestion:
             return {"suggestion": text, "changed": False}
-        blob = _ground._normalise_text(text)
-        if _ground._grounding_violations("polish", suggestion, blob):
-            # The rewrite drifted — hand back the original untouched.
+        if self._new_facts(suggestion, text):
+            # The rewrite asserted something the author didn't — hand back
+            # the original untouched rather than put words in their mouth.
             return {"suggestion": text, "changed": False}
         return {"suggestion": suggestion, "changed": suggestion != text}
+
+    # -- what counts as a new fact when *rephrasing* ---------------------
+    #
+    # Polish is not generation, and grounding it like generation is what
+    # made this feature feel broken. `_significant_tokens` treats every
+    # capitalised word as a candidate fact, which is right when the model
+    # is producing claims out of a whole resume — but here the author wrote
+    # the line and is asking for it to read better. Under that rule a
+    # perfectly honest rewrite like
+    #
+    #     "Resolved customer issues. Improved satisfaction."
+    #
+    # was rejected because "Improved" is capitalised — it just happens to
+    # start the second sentence. Any two-sentence rewrite died that way,
+    # and so did every ordinary vocabulary upgrade.
+    #
+    # So a rephrase may say anything it likes in ordinary words, and is
+    # blocked only where it *asserts* something new:
+    #
+    #   * a number      — metrics, percentages, durations, years
+    #   * an acronym    — AWS, SQL, KPI: named things, not register
+    #   * a proper noun — capitalised MID-sentence, so employers, tools
+    #                     and products are caught while a sentence-opening
+    #                     verb is not
+    #
+    # Scope inflation ("helped with" -> "led") is a real risk this cannot
+    # see, since both are ordinary lowercase words. That is carried by the
+    # prompt instead, which forbids it explicitly.
+
+    _WORD_RE = re.compile(r"[A-Za-z][A-Za-z0-9+#.\-]*|\d[\d.,]*%?")
+    _SENTENCE_BREAKS = set(".!?;:\n\r\t\u2022-\u2013\u2014|/(")
+
+    @classmethod
+    def _starts_a_sentence(cls, text, index):
+        cursor = index - 1
+        while cursor >= 0 and text[cursor].isspace():
+            cursor -= 1
+        return cursor < 0 or text[cursor] in cls._SENTENCE_BREAKS
+
+    @classmethod
+    def _new_facts(cls, suggestion, original):
+        """Assertions in `suggestion` that `original` never made."""
+        source = _ground._normalise_text(original)
+        found = []
+        for match in cls._WORD_RE.finditer(suggestion):
+            token = match.group(0).strip(".,;:")
+            if len(token) < 2:
+                continue
+
+            has_digit = any(character.isdigit() for character in token)
+            is_acronym = token.isupper()
+            is_proper_noun = (
+                token[0].isupper()
+                and not token.isupper()
+                and not cls._starts_a_sentence(suggestion, match.start())
+            )
+            if not (has_digit or is_acronym or is_proper_noun):
+                continue
+
+            normalised = _ground._normalise_text(token)
+            if normalised and not _ground._is_grounded(normalised, source):
+                found.append(token)
+        return found

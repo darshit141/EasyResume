@@ -149,3 +149,87 @@ class GuidedResumeAPITests(TestCase):
         # not committed
         session = GuidedResumeSession.objects.get(user=self.user)
         self.assertNotIn("experience", session.draft_data)
+
+
+class PolishRephrasingTests(TestCase):
+    """Polish is rephrasing, not generation, and must be judged that way.
+
+    Grounding a rewrite the way a *generated* bullet is grounded treats
+    every capitalised word as a claim. That rejected ordinary two-sentence
+    rewrites because the second sentence's first word is capitalised, which
+    is grammar, not a fact. These pin the line between "said it better" and
+    "said something new".
+    """
+
+    def facts(self, original, suggestion):
+        from resumes.services.guided_resume_ai_service import GuidedResumeAIService
+
+        return GuidedResumeAIService._new_facts(suggestion, original)
+
+    # -- a rephrase may say anything in ordinary words -------------------
+
+    def test_multi_sentence_rewrite_is_not_a_fabrication(self):
+        """The regression that made this feature feel broken: 'Improved'
+        only starts sentence two."""
+        self.assertEqual(
+            self.facts(
+                "did customer support and solved issues",
+                "Resolved customer issues efficiently. Improved satisfaction across accounts.",
+            ),
+            [],
+        )
+
+    def test_professional_vocabulary_upgrade_is_allowed(self):
+        self.assertEqual(
+            self.facts(
+                "i talked to clients about their problems",
+                "Liaised with clients to understand and resolve their concerns",
+            ),
+            [],
+        )
+
+    def test_a_proper_noun_already_in_the_original_may_be_capitalised(self):
+        """The author wrote 'react'; writing it properly as 'React' is
+        formatting, not invention."""
+        self.assertEqual(
+            self.facts("worked on frontend using react", "Developed interfaces using React"),
+            [],
+        )
+
+    # -- but it may not assert anything new ------------------------------
+
+    def test_an_invented_metric_is_blocked(self):
+        self.assertIn(
+            "40%",
+            self.facts("managed social media pages", "Grew following by 40% in 6 months"),
+        )
+
+    def test_an_invented_employer_is_blocked(self):
+        self.assertIn(
+            "Deloitte",
+            self.facts("worked as an intern", "Interned at Deloitte on the audit team"),
+        )
+
+    def test_an_invented_tool_is_blocked(self):
+        self.assertIn(
+            "Selenium",
+            self.facts("helped with testing", "Automated regression testing using Selenium"),
+        )
+
+    def test_an_invented_acronym_is_blocked(self):
+        self.assertIn("SQL", self.facts("did some data work", "Analysed datasets in SQL"))
+
+    def test_an_invented_team_size_is_blocked(self):
+        self.assertIn("12", self.facts("supported the team", "Supported a team of 12 engineers"))
+
+    # -- the operation instructions must ask for a real rewrite ----------
+
+    def test_operations_do_not_tell_the_model_to_leave_the_text_alone(self):
+        """The old wording ("Add nothing that isn't already stated") made
+        the model return the original with the punctuation tidied, which
+        reads to a user as the AI doing nothing."""
+        from resumes.services.guided_resume_ai_service import GuidedResumeAIService
+
+        combined = " ".join(GuidedResumeAIService.OPERATIONS.values()).lower()
+        self.assertIn("rewrite", combined)
+        self.assertNotIn("invent nothing", combined)
