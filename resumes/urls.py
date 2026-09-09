@@ -35,7 +35,16 @@ from resumes.views.tailored_resume_version_view import (
     TailoredResumeVersionDetailAPIView,
     TailoredResumeVersionListAPIView,
 )
-from resumes.views.autofill_profile_view import AutofillProfileAPIView
+from resumes.views.autofill_profile_view import (
+    AutofillProfileAPIView,
+    AutofillResumeFileAPIView,
+)
+from resumes.views.application_tracking_view import (
+    AutofillDismissAPIView,
+    AutofillSubmittedAPIView,
+    AutofillTrackAPIView,
+    PendingApplicationsAPIView,
+)
 from resumes.views.job_application_view import (
     JobApplicationDetailAPIView,
     JobApplicationDraftAPIView,
@@ -56,6 +65,31 @@ urlpatterns = [
         "autofill-profile/",
         AutofillProfileAPIView.as_view(),
         name="autofill-profile",
+    ),
+    path(
+        "autofill-resume-file/",
+        AutofillResumeFileAPIView.as_view(),
+        name="autofill-resume-file",
+    ),
+    path(
+        "tracking/autofill/",
+        AutofillTrackAPIView.as_view(),
+        name="tracking-autofill",
+    ),
+    path(
+        "tracking/pending/",
+        PendingApplicationsAPIView.as_view(),
+        name="tracking-pending",
+    ),
+    path(
+        "tracking/<int:curation_id>/submitted/",
+        AutofillSubmittedAPIView.as_view(),
+        name="tracking-submitted",
+    ),
+    path(
+        "tracking/<int:curation_id>/dismiss/",
+        AutofillDismissAPIView.as_view(),
+        name="tracking-dismiss",
     ),
     path(
         "applications/",
