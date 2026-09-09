@@ -41,6 +41,7 @@ from resumes.services.application_tracking_service import ApplicationTrackingSer
 )
 class AutofillTrackAPIView(APIView):
     permission_classes = [IsAuthenticated]
+    throttle_scope = "application_tracking"
 
     def post(self, request):
         serializer = AutofillTrackRequestSerializer(data=request.data)
@@ -87,6 +88,7 @@ class AutofillTrackAPIView(APIView):
 )
 class AutofillSubmittedAPIView(APIView):
     permission_classes = [IsAuthenticated]
+    throttle_scope = "application_tracking"
 
     def post(self, request, curation_id):
         curation = JobResumeCuration.objects.filter(id=curation_id, user=request.user).first()
@@ -115,6 +117,7 @@ class AutofillSubmittedAPIView(APIView):
 )
 class AutofillDismissAPIView(APIView):
     permission_classes = [IsAuthenticated]
+    throttle_scope = "application_tracking"
 
     def post(self, request, curation_id):
         curation = JobResumeCuration.objects.filter(id=curation_id, user=request.user).first()
@@ -142,6 +145,7 @@ class AutofillDismissAPIView(APIView):
 )
 class PendingApplicationsAPIView(APIView):
     permission_classes = [IsAuthenticated]
+    throttle_scope = "application_tracking"
 
     def get(self, request):
         pending = ApplicationTrackingService.pending_confirmations(request.user)

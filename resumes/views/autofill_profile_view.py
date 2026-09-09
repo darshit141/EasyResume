@@ -38,6 +38,7 @@ from resumes.services.autofill_resume_file_service import AutofillResumeFileServ
 )
 class AutofillProfileAPIView(APIView):
     permission_classes = [IsAuthenticated]
+    throttle_scope = "autofill"
 
     def get(self, request):
         resume = (
@@ -76,6 +77,7 @@ class AutofillProfileAPIView(APIView):
 )
 class AutofillResumeFileAPIView(APIView):
     permission_classes = [IsAuthenticated]
+    throttle_scope = "autofill"
 
     def get(self, request):
         # Deliberately a different query from the profile above: that one

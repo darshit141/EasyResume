@@ -326,6 +326,49 @@ class PendingConfirmationTests(APITestCase):
         self.assertIsNone(job.submit_detected_at)
 
 
+class ThrottleScopeTests(APITestCase):
+    """Every extension endpoint must declare a throttle scope.
+
+    The project's only throttle class is ScopedRateThrottle, so a view
+    without `throttle_scope` is not rate-limited at all — it is silently
+    unlimited rather than covered by a default. The tracking endpoints
+    create a row per call, so an unscoped one is a way to grow the table
+    without limit. Enforcement itself can't be asserted here (throttling is
+    switched off under tests); that the scope exists can be.
+    """
+
+    def test_every_extension_view_declares_a_scope(self):
+        from resumes.views.application_tracking_view import (
+            AutofillDismissAPIView,
+            AutofillSubmittedAPIView,
+            AutofillTrackAPIView,
+            PendingApplicationsAPIView,
+        )
+        from resumes.views.autofill_profile_view import (
+            AutofillProfileAPIView,
+            AutofillResumeFileAPIView,
+        )
+
+        for view in (
+            AutofillTrackAPIView,
+            AutofillSubmittedAPIView,
+            AutofillDismissAPIView,
+            PendingApplicationsAPIView,
+            AutofillProfileAPIView,
+            AutofillResumeFileAPIView,
+        ):
+            with self.subTest(view=view.__name__):
+                self.assertTrue(getattr(view, "throttle_scope", None), view.__name__)
+
+    def test_the_declared_scopes_have_configured_rates(self):
+        """A scope with no matching rate raises at request time, not here."""
+        from django.conf import settings
+
+        rates = settings.REST_FRAMEWORK["DEFAULT_THROTTLE_RATES"]
+        self.assertIn("application_tracking", rates)
+        self.assertIn("autofill", rates)
+
+
 class ServiceGuardTests(APITestCase):
     def setUp(self):
         self.user = User.objects.create_user(email="a@example.com", password="pw", name="A")
