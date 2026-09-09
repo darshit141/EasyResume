@@ -35,6 +35,7 @@ from resumes.views.tailored_resume_version_view import (
     TailoredResumeVersionDetailAPIView,
     TailoredResumeVersionListAPIView,
 )
+from resumes.views.autofill_profile_view import AutofillProfileAPIView
 from resumes.views.job_application_view import (
     JobApplicationDetailAPIView,
     JobApplicationDraftAPIView,
@@ -51,6 +52,11 @@ from resumes.views.guided_resume_view import (
 )
 
 urlpatterns = [
+    path(
+        "autofill-profile/",
+        AutofillProfileAPIView.as_view(),
+        name="autofill-profile",
+    ),
     path(
         "applications/",
         JobApplicationListAPIView.as_view(),
