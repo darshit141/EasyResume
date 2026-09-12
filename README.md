@@ -119,7 +119,7 @@ Get a key at https://aistudio.google.com/apikey.
 ```env
 LLM_PROVIDER=gemini
 GEMINI_API_KEY=your-key-here
-GEMINI_MODEL=gemini-2.0-flash
+GEMINI_MODEL=gemini-3.8-flash
 ```
 
 ### Shared settings
