@@ -4,6 +4,7 @@ from abc import ABC, abstractmethod
 import json
 import logging
 import socket
+import time
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
@@ -341,9 +342,17 @@ class GeminiLLMService(LLMService):
     """Client for Google Gemini's generateContent API, using its native
     ``responseSchema`` support for real schema-constrained JSON output."""
 
+    DEFAULT_FALLBACK_MODELS = (
+        "gemini-3.8-flash",
+        "gemini-3.6-flash",
+        "gemini-flash-latest",
+        "gemini-3.5-flash",
+        "gemini-3.7-flash",
+    )
+
     def __init__(self, api_key, model, timeout, max_retries, temperature, base_url, max_output_tokens=8192):
         self.api_key = api_key
-        self.model = model
+        self.model = model or "gemini-3.8-flash"
         self.timeout = timeout
         self.max_retries = max_retries
         self.temperature = temperature
@@ -354,88 +363,130 @@ class GeminiLLMService(LLMService):
         if not self.model or not self.api_key:
             raise LLMModelUnavailableError()
 
-        generation_config = {
-            "temperature": self.temperature,
-            "responseMimeType": "application/json",
-            "responseSchema": _to_gemini_schema(schema),
-            "maxOutputTokens": self.max_output_tokens,
-        }
+        candidates = [self.model]
+        for fb in self.DEFAULT_FALLBACK_MODELS:
+            if fb not in candidates:
+                candidates.append(fb)
 
-        # Only add thinkingConfig for models that support/require it (e.g. gemini-3.x/2.5 flash/pro models, excluding -lite and 1.5)
-        model_lower = self.model.lower()
-        if "lite" not in model_lower and "1.5" not in model_lower:
-            generation_config["thinkingConfig"] = {
-                "thinkingBudget": 0
+        last_exc = None
+
+        for model_idx, model in enumerate(candidates):
+            generation_config = {
+                "temperature": self.temperature,
+                "responseMimeType": "application/json",
+                "responseSchema": _to_gemini_schema(schema),
+                "maxOutputTokens": self.max_output_tokens,
             }
 
-        payload = json.dumps({
-            "contents": [{"role": "user", "parts": [{"text": prompt}]}],
-            "generationConfig": generation_config,
-        }).encode("utf-8")
-        request = Request(
-            f"{self.base_url}/models/{self.model}:generateContent",
-            data=payload,
-            headers={
-                "Content-Type": "application/json",
-                "x-goog-api-key": self.api_key,
-                "User-Agent": "IntelliResume/1.0",
-            },
-            method="POST",
-        )
+            model_lower = model.lower()
+            if "lite" not in model_lower and "1.5" not in model_lower:
+                generation_config["thinkingConfig"] = {
+                    "thinkingBudget": 0
+                }
 
-        for attempt in range(self.max_retries + 1):
-            try:
-                with urlopen(request, timeout=self.timeout) as response:
-                    body = json.loads(response.read().decode("utf-8"))
-                candidates = body.get("candidates")
-                if not isinstance(candidates, list) or not candidates:
-                    raise LLMEmptyResponseError()
-                parts = (candidates[0].get("content") or {}).get("parts") or []
-                content = "".join(
-                    part.get("text", "") for part in parts if isinstance(part, dict)
-                )
-                if not content.strip():
-                    raise LLMEmptyResponseError()
+            payload = json.dumps({
+                "contents": [{"role": "user", "parts": [{"text": prompt}]}],
+                "generationConfig": generation_config,
+            }).encode("utf-8")
+            request = Request(
+                f"{self.base_url}/models/{model}:generateContent",
+                data=payload,
+                headers={
+                    "Content-Type": "application/json",
+                    "x-goog-api-key": self.api_key,
+                    "User-Agent": "IntelliResume/1.0",
+                },
+                method="POST",
+            )
+
+            attempts = self.max_retries + 1 if model_idx == 0 else 1
+            for attempt in range(attempts):
                 try:
-                    return json.loads(content)
-                except json.JSONDecodeError as exc:
-                    raise LLMInvalidResponseError() from exc
-            except HTTPError as exc:
-                if exc.code in (401, 403, 404):
-                    raise LLMModelUnavailableError() from exc
-                raise LLMServiceError() from exc
-            except (socket.timeout, TimeoutError) as exc:
-                if attempt == self.max_retries:
-                    raise LLMTimeoutError() from exc
-            except (URLError, ConnectionError) as exc:
-                if attempt == self.max_retries:
+                    with urlopen(request, timeout=self.timeout) as response:
+                        body = json.loads(response.read().decode("utf-8"))
+                    candidates_data = body.get("candidates")
+                    if not isinstance(candidates_data, list) or not candidates_data:
+                        raise LLMEmptyResponseError()
+                    parts = (candidates_data[0].get("content") or {}).get("parts") or []
+                    content = "".join(
+                        part.get("text", "") for part in parts if isinstance(part, dict) and not part.get("thought", False)
+                    )
+                    if not content.strip():
+                        raise LLMEmptyResponseError()
+                    try:
+                        return json.loads(content)
+                    except json.JSONDecodeError as exc:
+                        raise LLMInvalidResponseError() from exc
+                except HTTPError as exc:
+                    if exc.code in (401, 403):
+                        raise LLMModelUnavailableError() from exc
+                    if exc.code == 404:
+                        logger.warning("Gemini model %s returned 404 (model retired/unavailable), trying fallback model.", model)
+                        last_exc = LLMModelUnavailableError()
+                        break
+                    if exc.code in (503, 429):
+                        logger.warning("Gemini model %s returned HTTP %s (busy/rate limit), retrying...", model, exc.code)
+                        last_exc = LLMServiceError()
+                        if attempt < attempts - 1:
+                            time.sleep(1)
+                            continue
+                        break
                     raise LLMServiceError() from exc
+                except (socket.timeout, TimeoutError) as exc:
+                    last_exc = LLMTimeoutError()
+                    if attempt < attempts - 1:
+                        time.sleep(1)
+                        continue
+                    break
+                except (URLError, ConnectionError) as exc:
+                    last_exc = LLMServiceError(f"Network error: {exc}")
+                    if attempt < attempts - 1:
+                        time.sleep(1)
+                        continue
+                    break
 
+        if last_exc:
+            raise last_exc
         raise LLMServiceError()
 
     def check_model_available(self):
         if not self.model or not self.api_key:
             raise LLMModelUnavailableError()
-        request = Request(
-            f"{self.base_url}/models/{self.model}",
-            headers={
-                "x-goog-api-key": self.api_key,
-                "User-Agent": "IntelliResume/1.0",
-            },
-            method="GET",
-        )
-        try:
-            with urlopen(request, timeout=min(self.timeout, 10)) as response:
-                response.read()
-        except HTTPError as exc:
-            if exc.code in (401, 403, 404):
-                raise LLMModelUnavailableError() from exc
-            raise LLMServiceError() from exc
-        except (socket.timeout, TimeoutError) as exc:
-            raise LLMTimeoutError() from exc
-        except (URLError, ConnectionError) as exc:
-            raise LLMServiceError() from exc
-        return True
+
+        candidates = [self.model]
+        for fb in self.DEFAULT_FALLBACK_MODELS:
+            if fb not in candidates:
+                candidates.append(fb)
+
+        last_exc = None
+        for model in candidates:
+            request = Request(
+                f"{self.base_url}/models/{model}",
+                headers={
+                    "x-goog-api-key": self.api_key,
+                    "User-Agent": "IntelliResume/1.0",
+                },
+                method="GET",
+            )
+            try:
+                with urlopen(request, timeout=min(self.timeout, 10)) as response:
+                    response.read()
+                return True
+            except HTTPError as exc:
+                if exc.code in (401, 403):
+                    raise LLMModelUnavailableError() from exc
+                if exc.code == 404:
+                    last_exc = LLMModelUnavailableError()
+                    continue
+                raise LLMServiceError() from exc
+            except (socket.timeout, TimeoutError) as exc:
+                raise LLMTimeoutError() from exc
+            except (URLError, ConnectionError) as exc:
+                raise LLMServiceError() from exc
+
+        if last_exc:
+            raise last_exc
+        return False
 
 
 class FallbackLLMService(LLMService):

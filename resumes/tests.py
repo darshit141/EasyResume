@@ -506,7 +506,7 @@ class KiraLLMServiceTests(SimpleTestCase):
 
 
 class GeminiLLMServiceTests(SimpleTestCase):
-    def make_service(self, api_key="test-key", model="gemini-2.0-flash"):
+    def make_service(self, api_key="test-key", model="gemini-3.8-flash"):
         return GeminiLLMService(
             api_key=api_key,
             model=model,
@@ -587,6 +587,26 @@ class GeminiLLMServiceTests(SimpleTestCase):
         body = b"{}"
         with patch("resumes.services.llm_service.urlopen", return_value=_fake_response(body)):
             self.assertTrue(service.check_model_available())
+
+    def test_404_retired_model_fails_over_to_next_candidate_and_succeeds(self):
+        service = self.make_service(model="gemini-retired-model")
+        error_404 = HTTPError("url", 404, "Not Found", {}, None)
+        success_body = json.dumps({
+            "candidates": [{"content": {"parts": [{"text": json.dumps({"skills": ["Python"]})}]}}]
+        }).encode("utf-8")
+        with patch("resumes.services.llm_service.urlopen", side_effect=[error_404, _fake_response(success_body)]):
+            result = service.generate_structured("prompt", {"type": "object"})
+        self.assertEqual(result, {"skills": ["Python"]})
+
+    def test_503_busy_model_fails_over_to_next_candidate_and_succeeds(self):
+        service = self.make_service(model="gemini-3.7-flash")
+        error_503 = HTTPError("url", 503, "High Demand", {}, None)
+        success_body = json.dumps({
+            "candidates": [{"content": {"parts": [{"text": json.dumps({"skills": ["Django"]})}]}}]
+        }).encode("utf-8")
+        with patch("resumes.services.llm_service.urlopen", side_effect=[error_503, _fake_response(success_body)]):
+            result = service.generate_structured("prompt", {"type": "object"})
+        self.assertEqual(result, {"skills": ["Django"]})
 
 
 class GeminiSchemaConversionTests(SimpleTestCase):
