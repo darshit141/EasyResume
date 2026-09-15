@@ -119,8 +119,35 @@ Get a key at https://aistudio.google.com/apikey.
 ```env
 LLM_PROVIDER=gemini
 GEMINI_API_KEY=your-key-here
-GEMINI_MODEL=gemini-3.8-flash
+# optional - empty picks a model from Google's live model list
+GEMINI_MODEL=
 ```
+
+These `.env` values are only the first-boot fallback. **Once the app is
+running, AI configuration lives in the admin Configuration tab** (the
+`SystemConfiguration` table): provider, fallback provider, models, fallback
+models and the provider API keys. A change there takes effect on the next
+request - no deploy, no restart. API keys are stored encrypted
+(`CONFIG_ENCRYPTION_KEY`), masked in every response, and kept by Reset to
+Defaults.
+
+No model id is hardcoded. When a model is overloaded (503), out of quota
+(429) or discontinued (404), a request moves down a chain: `GEMINI_MODEL`,
+then `GEMINI_FALLBACK_MODELS`, then models picked from Google's live model
+list using `GEMINI_AUTO_FALLBACK_FAMILIES` / `GEMINI_AUTO_EXCLUDE` (all
+editable in the admin tab). A discontinued model is skipped before any
+request is made. A rejected key is never retried against other models - it
+fails at once as `LLM_AUTH_FAILED`.
+
+After changing a key or model, check the real thing:
+
+```bash
+python manage.py check_ai
+```
+
+It shows where each setting comes from (admin panel or `.env`), whether the
+key is accepted, which models it is offered, and makes one real generation
+call per model in the chain. It exits non-zero if nothing works.
 
 ### Shared settings
 

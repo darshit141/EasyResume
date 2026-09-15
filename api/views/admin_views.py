@@ -8,23 +8,29 @@ from rest_framework.pagination import PageNumberPagination
 
 from authentication.models import User
 from api.models import SystemConfiguration
+from api.utils.secrets import encrypt_value, is_secret_key
 from api.serializers.admin_serializers import AdminUserSerializer
 
-# GROQ_API_KEY / GEMINI_API_KEY are deliberately NOT in this list. The
-# masking below (is_sensitive_key) only hides a value in the API response —
-# it does nothing to protect what's actually sitting in the database, so
-# routing live provider keys through SystemConfiguration meant a DB leak
-# (backup, dump, SQL injection) exposed real credentials in plaintext.
-# Every other genuine secret in this app (STRIPE_SECRET_KEY, SECRET_KEY, DB
-# credentials) is env-var-only for the same reason; these two now match.
-# Rotating a key requires an env change + redeploy instead of a UI click —
-# a deliberate trade against live plaintext key storage.
+# Every AI setting - provider, models, fallbacks and the provider API keys - is
+# editable here and takes effect on the next request, so a discontinued model
+# or a revoked token is fixed from the admin panel instead of by a deploy.
+#
+# API keys were once kept out of this list because the table stored them in
+# plaintext, so a database dump exposed working credentials. They are back,
+# encrypted at rest (api/utils/secrets.py), masked in every response, and
+# never cleared by Reset to Defaults.
 DEFAULT_CONFIGS = [
     {
         "key": "LLM_PROVIDER",
         "category": "llm",
         "value_type": "string",
         "description": "Default LLM provider (ollama, groq, gemini, kira)",
+    },
+    {
+        "key": "LLM_FALLBACK_PROVIDER",
+        "category": "llm",
+        "value_type": "string",
+        "description": "Provider to retry once with when the default provider fails. Empty = no fallback.",
     },
     {
         "key": "LLM_TIMEOUT",
@@ -81,10 +87,62 @@ DEFAULT_CONFIGS = [
         "description": "Base URL for Groq API",
     },
     {
+        "key": "GROQ_API_KEY",
+        "category": "llm",
+        "value_type": "string",
+        "description": "Groq API key. Stored encrypted; never shown again after saving.",
+    },
+    {
+        "key": "GEMINI_API_KEY",
+        "category": "llm",
+        "value_type": "string",
+        "description": "Google Gemini API key (aistudio.google.com/apikey). Stored encrypted; never shown again after saving.",
+    },
+    {
         "key": "GEMINI_MODEL",
         "category": "llm",
         "value_type": "string",
-        "description": "Google Gemini model name",
+        "description": (
+            "First-choice Gemini model id. If it is discontinued it is skipped automatically. "
+            "Leave empty to pick from the live model list. Run `python manage.py check_ai` "
+            "to see which models the key is offered."
+        ),
+    },
+    {
+        "key": "GEMINI_FALLBACK_MODELS",
+        "category": "llm",
+        "value_type": "list",
+        "description": "Comma-separated Gemini models to try, in order, when the first choice is overloaded, out of quota or discontinued.",
+    },
+    {
+        "key": "GEMINI_MODEL_DISCOVERY",
+        "category": "llm",
+        "value_type": "boolean",
+        "description": "Read Google's live model list to skip discontinued models and find further fallbacks automatically.",
+    },
+    {
+        "key": "GEMINI_AUTO_FALLBACK_FAMILIES",
+        "category": "llm",
+        "value_type": "list",
+        "description": "Automatic fallbacks must have one of these words in their id (e.g. flash). Empty turns automatic fallback off.",
+    },
+    {
+        "key": "GEMINI_AUTO_EXCLUDE",
+        "category": "llm",
+        "value_type": "list",
+        "description": "Automatic fallbacks must have none of these words in their id (e.g. image, tts, preview).",
+    },
+    {
+        "key": "GEMINI_MAX_MODEL_ATTEMPTS",
+        "category": "llm",
+        "value_type": "integer",
+        "description": "Most Gemini models a single request may try before failing.",
+    },
+    {
+        "key": "GEMINI_MODEL_LIST_TTL",
+        "category": "llm",
+        "value_type": "integer",
+        "description": "Seconds Google's model list is cached for (a new key always gets a fresh list).",
     },
     {
         "key": "GEMINI_BASE_URL",
@@ -96,17 +154,19 @@ DEFAULT_CONFIGS = [
         "key": "KIRA_MODEL",
         "category": "llm",
         "value_type": "string",
-        "description": (
-            "Kira (kiraai.vn) chat model id: kira-mini-1.0 (free, very high "
-            "limits), kira-3.5-flash, kira-3.5-pro, kira-2.5-flash, "
-            "kira-2.5-pro"
-        ),
+        "description": "Kira (kiraai.vn) chat model id, as listed in your Kira account. Text models only.",
     },
     {
         "key": "KIRA_BASE_URL",
         "category": "llm",
         "value_type": "string",
         "description": "Base URL for the Kira API",
+    },
+    {
+        "key": "KIRA_API_KEY",
+        "category": "llm",
+        "value_type": "string",
+        "description": "Kira API key. Stored encrypted; never shown again after saving.",
     },
     {
         "key": "MAX_RESUMES_PER_USER",
@@ -264,7 +324,7 @@ def serialize_setting_value(value, value_type):
 
 
 def is_sensitive_key(key):
-    return key.endswith("_API_KEY") or "SECRET" in key
+    return is_secret_key(key)
 
 
 class SystemConfigurationListUpdateAPIView(APIView):
@@ -288,6 +348,7 @@ class SystemConfigurationListUpdateAPIView(APIView):
                     "value_type": config.value_type or default["value_type"],
                     "updated_at": config.updated_at,
                     "is_custom": True,
+                    "is_secret": is_sensitive_key(key),
                 })
             else:
                 setting_val = getattr(settings, key, None)
@@ -302,6 +363,7 @@ class SystemConfigurationListUpdateAPIView(APIView):
                     "value_type": default["value_type"],
                     "updated_at": None,
                     "is_custom": False,
+                    "is_secret": is_sensitive_key(key),
                 })
         return Response(data, status=status.HTTP_200_OK)
 
@@ -357,11 +419,20 @@ class SystemConfigurationListUpdateAPIView(APIView):
                 continue
                 
             meta = next(d for d in DEFAULT_CONFIGS if d["key"] == key)
-            value_str = str(value) if value is not None else ""
+            value_str = (str(value) if value is not None else "").strip()
+            if is_sensitive_key(key):
+                if not value_str:
+                    # Clearing a key removes the stored one; the server
+                    # environment's key (if any) is used again.
+                    SystemConfiguration.objects.filter(key=key).delete()
+                    continue
+                # Encrypted at rest: a database dump or backup must not be a
+                # list of working provider credentials.
+                value_str = encrypt_value(value_str)
             SystemConfiguration.objects.update_or_create(
                 key=key,
                 defaults={
-                    "value": value_str.strip(),
+                    "value": value_str,
                     "description": meta["description"],
                     "category": meta["category"],
                     "value_type": meta["value_type"],
@@ -375,8 +446,15 @@ class SystemConfigurationResetAPIView(APIView):
     permission_classes = [permissions.IsAdminUser]
 
     def post(self, request):
-        SystemConfiguration.objects.all().delete()
-        return Response({"detail": "All configurations reset to defaults."}, status=status.HTTP_200_OK)
+        # Stored API keys are credentials, not tunables: wiping them would take
+        # the AI down on a click meant to undo a bad setting.
+        rows = SystemConfiguration.objects.all()
+        secret_ids = [row.pk for row in rows if is_sensitive_key(row.key)]
+        rows.exclude(pk__in=secret_ids).delete()
+        return Response(
+            {"detail": "Settings reset to defaults. Stored API keys were kept."},
+            status=status.HTTP_200_OK,
+        )
 
 
 class AdminUserPagination(PageNumberPagination):

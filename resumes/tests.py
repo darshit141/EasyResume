@@ -506,7 +506,7 @@ class KiraLLMServiceTests(SimpleTestCase):
 
 
 class GeminiLLMServiceTests(SimpleTestCase):
-    def make_service(self, api_key="test-key", model="gemini-3.8-flash"):
+    def make_service(self, api_key="test-key", model="gemini-3.8-flash", fallback_models=()):
         return GeminiLLMService(
             api_key=api_key,
             model=model,
@@ -514,6 +514,11 @@ class GeminiLLMServiceTests(SimpleTestCase):
             max_retries=0,
             temperature=0,
             base_url="https://generativelanguage.googleapis.com/v1beta",
+            fallback_models=fallback_models,
+            # These tests script urlopen one call at a time; model discovery
+            # would consume the first scripted response. Discovery has its
+            # own tests in tests_gemini_resilience.py.
+            discover_models=False,
         )
 
     def test_missing_api_key_is_rejected_without_a_network_call(self):
@@ -589,7 +594,7 @@ class GeminiLLMServiceTests(SimpleTestCase):
             self.assertTrue(service.check_model_available())
 
     def test_404_retired_model_fails_over_to_next_candidate_and_succeeds(self):
-        service = self.make_service(model="gemini-retired-model")
+        service = self.make_service(model="gemini-retired-model", fallback_models=["gemini-3.8-flash"])
         error_404 = HTTPError("url", 404, "Not Found", {}, None)
         success_body = json.dumps({
             "candidates": [{"content": {"parts": [{"text": json.dumps({"skills": ["Python"]})}]}}]
@@ -599,7 +604,7 @@ class GeminiLLMServiceTests(SimpleTestCase):
         self.assertEqual(result, {"skills": ["Python"]})
 
     def test_503_busy_model_fails_over_to_next_candidate_and_succeeds(self):
-        service = self.make_service(model="gemini-3.7-flash")
+        service = self.make_service(model="gemini-3.7-flash", fallback_models=["gemini-3.8-flash"])
         error_503 = HTTPError("url", 503, "High Demand", {}, None)
         success_body = json.dumps({
             "candidates": [{"content": {"parts": [{"text": json.dumps({"skills": ["Django"]})}]}}]

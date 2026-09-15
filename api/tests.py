@@ -145,25 +145,28 @@ class AdminPanelAPITests(APITestCase):
         # Verify helper uses DB value
         self.assertEqual(get_config_value("LLM_TIMEOUT"), 120)
 
-    def test_provider_api_keys_are_not_admin_configurable(self):
-        # These must never be settable through SystemConfiguration — that
-        # table's masking only hides the value in API responses, not what's
-        # actually stored in the database, so routing a real provider key
-        # through it means a DB leak exposes plaintext credentials.
+    def test_provider_api_keys_are_admin_configurable_masked_and_encrypted(self):
+        # Keys are editable in the admin panel so a revoked or expired token
+        # can be replaced without a redeploy. They are never returned, and
+        # never stored as plain text: a database dump must not be a list of
+        # working credentials.
         self.client.force_authenticate(user=self.admin_user)
-
-        response = self.client.get(reverse("admin-config"))
-        keys = {item["key"] for item in response.json()}
-        self.assertNotIn("GROQ_API_KEY", keys)
-        self.assertNotIn("GEMINI_API_KEY", keys)
 
         response = self.client.put(
             reverse("admin-config"),
-            [{"key": "GROQ_API_KEY", "value": "gsk_should_not_be_settable"}],
+            [{"key": "GROQ_API_KEY", "value": "gsk_live_example"}],
             format="json",
         )
-        self.assertEqual(response.status_code, 400)
-        self.assertFalse(SystemConfiguration.objects.filter(key="GROQ_API_KEY").exists())
+        self.assertEqual(response.status_code, 200)
+
+        stored = SystemConfiguration.objects.get(key="GROQ_API_KEY").value
+        self.assertNotIn("gsk_live_example", stored)
+        self.assertEqual(get_config_value("GROQ_API_KEY"), "gsk_live_example")
+
+        item = next(x for x in response.json() if x["key"] == "GROQ_API_KEY")
+        self.assertEqual(item["value"], "********")
+        self.assertTrue(item["is_secret"])
+        self.assertNotIn("gsk_live_example", str(response.json()))
 
     def test_free_tier_limits_are_admin_configurable(self):
         # billing.entitlements.entitlements_for() reads these two keys via
