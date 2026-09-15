@@ -33,6 +33,16 @@ DEFAULT_CONFIGS = [
         "description": "Provider to retry once with when the default provider fails. Empty = no fallback.",
     },
     {
+        "key": "AI_PROVIDER_SELECTION_ENABLED",
+        "category": "llm",
+        "value_type": "boolean",
+        "description": (
+            "Let users pick the AI provider on each request. Off hides the picker everywhere "
+            "and every request uses LLM_PROVIDER (and its fallback); a provider a client "
+            "still sends is ignored."
+        ),
+    },
+    {
         "key": "LLM_TIMEOUT",
         "category": "llm",
         "value_type": "integer",

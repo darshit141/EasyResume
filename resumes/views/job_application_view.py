@@ -25,6 +25,7 @@ from resumes.services.job_application_service import (
 from resumes.services.llm_service import LLMServiceError
 from resumes.views.error_responses import llm_error_response
 from resumes.views.job_curation_view import CURATION_ID_PARAMETER
+from resumes.services.llm_service import requested_provider
 
 
 def _not_sendable_response(exc):
@@ -74,7 +75,7 @@ class JobApplicationDraftAPIView(APIView):
             return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
         data = serializer.validated_data
-        provider = data.get("provider") or None
+        provider = requested_provider(data.get("provider") or None)
 
         if not JobResumeCuration.objects.filter(id=curation_id, user=request.user).exists():
             raise Http404("Job curation analysis not found.")

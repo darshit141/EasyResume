@@ -31,6 +31,7 @@ from resumes.services.missing_information_review_service import (
 )
 from resumes.views.error_responses import llm_error_response
 from resumes.views.job_curation_view import AI_PROVIDER_PARAMETER, CURATION_ID_PARAMETER
+from resumes.services.llm_service import requested_provider
 
 
 MISSING_INFORMATION_EXAMPLE = {
@@ -189,7 +190,7 @@ class MissingInformationReviewAPIView(APIView):
         if not query.is_valid():
             return Response(query.errors, status=status.HTTP_400_BAD_REQUEST)
 
-        provider = query.validated_data.get("ai_provider")
+        provider = requested_provider(query.validated_data.get("ai_provider"))
         regenerate = query.validated_data["regenerate"]
         # This view delegates to the same gap-analysis service the dedicated
         # gap-analysis endpoint uses, so it makes an AI call under the exact

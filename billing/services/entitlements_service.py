@@ -132,6 +132,8 @@ class EntitlementsService:
     @staticmethod
     def usage_summary(user):
         """Everything the UI needs to show plan state without extra requests."""
+        from resumes.services.llm_service import provider_selection_enabled
+
         entitlements = EntitlementsService.for_user(user)
         limit = entitlements["tailored_resumes_per_month"]
         used = EntitlementsService.tailored_resumes_used_this_month(user)
@@ -150,6 +152,9 @@ class EntitlementsService:
             "ai_calls_remaining": None if eff_ai_limit is None else max(0, eff_ai_limit - ai_used),
             "bonus_credits": bonus,
             "allowed_ai_providers": entitlements["allowed_ai_providers"],
+            # Whether to show the AI provider picker at all. The server enforces
+            # the same switch (resumes.services.llm_service.requested_provider).
+            "ai_provider_selection_enabled": provider_selection_enabled(),
             "docx_export": entitlements["docx_export"],
             "tailored_resume_version_history": entitlements["tailored_resume_version_history"],
             "resume_template_customization": entitlements["resume_template_customization"],

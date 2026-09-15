@@ -911,6 +911,28 @@ def resolve_provider(provider=None):
     return (provider or provider_default or "ollama").lower()
 
 
+def provider_selection_enabled():
+    """Whether users may choose the AI provider per request
+    (AI_PROVIDER_SELECTION_ENABLED in the admin Configuration tab)."""
+    return bool(get_config_value("AI_PROVIDER_SELECTION_ENABLED", settings.AI_PROVIDER_SELECTION_ENABLED))
+
+
+def requested_provider(value):
+    """The provider a request asked for, or None to use the configured default.
+
+    Enforced here, on the server, not only by hiding the picker: with
+    selection switched off, a provider sent by an old browser tab, a cached
+    page or a hand-written request is ignored rather than honoured.
+
+    Returning None instead of the default provider's name also keeps the
+    configured fallback provider in play: get_llm_service only wraps a
+    request in the fallback when the request did not name a provider.
+    """
+    if not value or not provider_selection_enabled():
+        return None
+    return value
+
+
 def _provider_api_key(setting_name):
     """A provider API key: the admin Configuration tab first (stored
     encrypted; get_config_value decrypts it), then the server environment.

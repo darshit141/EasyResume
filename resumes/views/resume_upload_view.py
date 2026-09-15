@@ -22,6 +22,7 @@ from billing.services.entitlements_service import (
     PlanRestrictionError,
 )
 from billing.views.plan_limit_response import plan_restriction_response
+from resumes.services.llm_service import requested_provider
 
 @extend_schema(
     tags=["Resume"],
@@ -98,7 +99,7 @@ class ResumeUploadAPIView(APIView):
         except ResumeLimitReachedError as exc:
             return Response({"detail": exc.message, "code": exc.code}, status=status.HTTP_400_BAD_REQUEST)
 
-        provider = serializer.validated_data.get("ai_provider")
+        provider = requested_provider(serializer.validated_data.get("ai_provider"))
         is_ai_call = provider != "standard"
         try:
             EntitlementsService.check_ai_provider_allowed(request.user, provider)

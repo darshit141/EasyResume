@@ -435,6 +435,11 @@ CELERY_BEAT_SCHEDULE = {
 # for self-hosted/privacy-sensitive deployments or local development — it
 # is just no longer what a fresh production deployment gets by default.
 LLM_PROVIDER = os.getenv("LLM_PROVIDER", "groq")
+# Whether users may pick the AI provider per request. Off (the default) hides
+# the picker in the app and makes the server ignore any provider a client
+# sends, so every request uses LLM_PROVIDER and LLM_FALLBACK_PROVIDER.
+# Switch it in the admin Configuration tab.
+AI_PROVIDER_SELECTION_ENABLED = os.getenv("AI_PROVIDER_SELECTION_ENABLED", "False") == "True"
 # Sized for the slowest supported provider, not the fastest. A local
 # CPU-only Ollama run has to load the model (~60s cold) and then generate a
 # full structured resume document, which routinely exceeds two minutes;

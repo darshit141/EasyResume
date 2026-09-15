@@ -67,6 +67,7 @@ class EntitlementsSerializer(serializers.Serializer):
     ai_calls_limit = serializers.IntegerField(allow_null=True)
     ai_calls_remaining = serializers.IntegerField(allow_null=True)
     allowed_ai_providers = serializers.ListField(child=serializers.CharField())
+    ai_provider_selection_enabled = serializers.BooleanField()
     docx_export = serializers.BooleanField()
     tailored_resume_version_history = serializers.BooleanField()
     shows_ads = serializers.BooleanField()
