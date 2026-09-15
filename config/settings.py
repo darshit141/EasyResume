@@ -35,6 +35,12 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 
 # SECURITY WARNING: keep the secret key used in production secret!
 SECRET_KEY = os.getenv("SECRET_KEY")
+# Encrypts secrets stored in SystemConfiguration (provider API keys entered
+# in the admin Configuration tab) - see api/utils/secrets.py. Falls back to
+# a key derived from SECRET_KEY. Set it explicitly in production: otherwise
+# rotating SECRET_KEY makes every stored API key unreadable, and they would
+# have to be re-entered (the app falls back to .env keys meanwhile).
+CONFIG_ENCRYPTION_KEY = os.getenv("CONFIG_ENCRYPTION_KEY", "")
 # SECURITY WARNING: don't run with debug turned on in production! Real
 # deployments must set DEBUG=False explicitly via environment — this
 # defaults to True only for local-dev convenience.
@@ -429,6 +435,11 @@ CELERY_BEAT_SCHEDULE = {
 # for self-hosted/privacy-sensitive deployments or local development — it
 # is just no longer what a fresh production deployment gets by default.
 LLM_PROVIDER = os.getenv("LLM_PROVIDER", "groq")
+# Whether users may pick the AI provider per request. Off (the default) hides
+# the picker in the app and makes the server ignore any provider a client
+# sends, so every request uses LLM_PROVIDER and LLM_FALLBACK_PROVIDER.
+# Switch it in the admin Configuration tab.
+AI_PROVIDER_SELECTION_ENABLED = os.getenv("AI_PROVIDER_SELECTION_ENABLED", "False") == "True"
 # Sized for the slowest supported provider, not the fastest. A local
 # CPU-only Ollama run has to load the model (~60s cold) and then generate a
 # full structured resume document, which routinely exceeds two minutes;
@@ -493,8 +504,43 @@ GROQ_MODEL = os.getenv("GROQ_MODEL", "")
 GROQ_BASE_URL = os.getenv("GROQ_BASE_URL", "https://api.groq.com/openai/v1")
 
 # Gemini: free-tier API. Get a key at https://aistudio.google.com/apikey
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
-GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.8-flash")
+#
+# Everything below is only the first-boot fallback. The admin Configuration
+# tab (SystemConfiguration) wins over it and takes effect on the next
+# request, so a discontinued model or a replaced key never needs a deploy.
+# No model id is assumed in code: leave GEMINI_MODEL empty and a model is
+# picked from Google's live model list.
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "").strip()
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "").strip()
+# Tried in order when GEMINI_MODEL is overloaded (503), out of quota (429)
+# or discontinued (404). Comma-separated.
+GEMINI_FALLBACK_MODELS = [
+    model.strip() for model in os.getenv("GEMINI_FALLBACK_MODELS", "").split(",") if model.strip()
+]
+# Ask Google which models the key can call (cached) before trying any, so a
+# discontinued model is skipped instead of failing every request, and further
+# fallbacks are picked from what actually exists.
+GEMINI_MODEL_DISCOVERY = os.getenv("GEMINI_MODEL_DISCOVERY", "True") == "True"
+# Automatic fallbacks must contain one of these words in their id...
+GEMINI_AUTO_FALLBACK_FAMILIES = [
+    item.strip() for item in os.getenv("GEMINI_AUTO_FALLBACK_FAMILIES", "flash").split(",") if item.strip()
+]
+# ...and none of these: kinds of model that are not general text models, or
+# are too unstable to fail over to. Not model ids, so they do not go stale
+# when a model is discontinued - and editable in the admin tab regardless.
+GEMINI_AUTO_EXCLUDE = [
+    item.strip()
+    for item in os.getenv(
+        "GEMINI_AUTO_EXCLUDE",
+        "image,tts,audio,transcribe,live,embedding,computer-use,robotics,customtools,"
+        "research,antigravity,omni,preview,exp",
+    ).split(",")
+    if item.strip()
+]
+# Most models one request may try before giving up.
+GEMINI_MAX_MODEL_ATTEMPTS = int(os.getenv("GEMINI_MAX_MODEL_ATTEMPTS", "4"))
+# Seconds the live model list is cached per key.
+GEMINI_MODEL_LIST_TTL = int(os.getenv("GEMINI_MODEL_LIST_TTL", "3600"))
 GEMINI_BASE_URL = os.getenv(
     "GEMINI_BASE_URL", "https://generativelanguage.googleapis.com/v1beta"
 )
@@ -505,11 +551,11 @@ GEMINI_BASE_URL = os.getenv(
 # window and rate limits are far larger than the other providers' free
 # tiers, so one key can serve many concurrent users. Set LLM_PROVIDER=kira
 # (env or the admin Configuration tab) to make it the server-wide default.
-# Chat model ids: kira-mini-1.0 (free, very high limits), kira-3.5-flash,
-# kira-3.5-pro, kira-2.5-flash, kira-2.5-pro. The image/video/tts model ids
+# Pick the chat model in the admin Configuration tab (KIRA_MODEL); Kira's
+# model list changes, so none is assumed here. The image/video/tts model ids
 # Kira also lists are not usable here — this integration is text-only.
 KIRA_API_KEY = os.getenv("KIRA_API_KEY", "")
-KIRA_MODEL = os.getenv("KIRA_MODEL", "kira-3.5-flash")
+KIRA_MODEL = os.getenv("KIRA_MODEL", "")
 KIRA_BASE_URL = os.getenv("KIRA_BASE_URL", "https://kiraai.vn/api/v1")
 
 # --- Rewarded ads -> earned credits ---------------------------------------

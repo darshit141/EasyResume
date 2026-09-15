@@ -1,6 +1,6 @@
 from unittest.mock import patch
 
-from django.test import TestCase
+from django.test import TestCase, override_settings
 from django.utils import timezone
 from rest_framework.test import APIClient
 
@@ -230,6 +230,7 @@ class EnforcementEndpointTests(TestCase):
         self.assertEqual(response.status_code, 402)
         self.assertEqual(response.data["code"], "UPGRADE_REQUIRED")
 
+    @override_settings(AI_PROVIDER_SELECTION_ENABLED=True)
     def test_free_user_may_upload_with_a_hosted_ai_provider(self):
         # Provider choice is NOT a paid feature. FREE_ENTITLEMENTS lists all
         # four providers deliberately — free-tier AI cost is capped by
@@ -300,6 +301,7 @@ class EnforcementEndpointTests(TestCase):
         self.assertNotEqual(response.status_code, 402)
         mock_service.return_value.generate.assert_called_once()
 
+    @override_settings(AI_PROVIDER_SELECTION_ENABLED=True)
     def test_free_user_may_use_a_hosted_provider_for_job_analysis(self):
         # Same intent as the upload gate above: FREE_ENTITLEMENTS lists all
         # four providers deliberately, so choosing Gemini must not itself be
@@ -319,6 +321,7 @@ class EnforcementEndpointTests(TestCase):
         job_status = poll_job(self.client, response)
         self.assertEqual(job_status.data["status"], "completed")
 
+    @override_settings(AI_PROVIDER_SELECTION_ENABLED=True)
     def test_free_user_may_use_a_hosted_provider_for_gap_analysis(self):
         curation = _generate_versions(self.user, 0)
         curation.status = "completed"
@@ -332,6 +335,7 @@ class EnforcementEndpointTests(TestCase):
         self.assertNotEqual(response.status_code, 402)
         self.assertEqual(response.status_code, 202)
 
+    @override_settings(AI_PROVIDER_SELECTION_ENABLED=True)
     def test_free_user_may_use_a_hosted_ai_provider_for_missing_information(self):
         # Same intent as the upload gate above: choosing Gemini is not itself
         # a paid action, so the provider check must let this through.
@@ -347,6 +351,7 @@ class EnforcementEndpointTests(TestCase):
         self.assertNotEqual(response.status_code, 402)
         self.assertEqual(response.status_code, 202)
 
+    @override_settings(AI_PROVIDER_SELECTION_ENABLED=True)
     def test_free_user_may_use_local_provider_at_every_ai_provider_gate(self):
         # "ollama" (a free-tier provider) must never itself be blocked — only
         # the choice of a paid provider should trip these gates.
@@ -493,6 +498,7 @@ class AIUsageEndpointGatingTests(TestCase):
         self.client = APIClient()
         self.client.force_authenticate(user=self.user)
 
+    @override_settings(AI_PROVIDER_SELECTION_ENABLED=True)
     def test_standard_resume_parse_bypasses_the_ai_quota_entirely(self):
         from django.core.files.uploadedfile import SimpleUploadedFile
 

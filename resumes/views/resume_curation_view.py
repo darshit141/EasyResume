@@ -41,6 +41,7 @@ from billing.services.entitlements_service import (
 )
 from billing.views.plan_limit_response import plan_restriction_response
 from resumes.views.job_curation_view import CURATION_ID_PARAMETER
+from resumes.services.llm_service import requested_provider
 
 
 TAILORED_RESUME_EXAMPLE = {
@@ -270,7 +271,7 @@ class JobResumeCurationGenerateAPIView(APIView):
             return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
         regenerate = serializer.validated_data["regenerate"]
-        provider = serializer.validated_data.get("ai_provider")
+        provider = requested_provider(serializer.validated_data.get("ai_provider"))
 
         # Plan gates run before any AI call, so a user who is over quota gets
         # an instant, clear answer instead of waiting out a generation we

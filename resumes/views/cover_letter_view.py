@@ -25,6 +25,7 @@ from resumes.services.job_gap_analysis_service import JobRequirementsUnavailable
 from resumes.services.llm_service import resolve_provider
 from resumes.views.error_responses import llm_error_response
 from resumes.views.job_curation_view import CURATION_ID_PARAMETER
+from resumes.services.llm_service import requested_provider
 
 
 @extend_schema(
@@ -75,7 +76,7 @@ class CoverLetterGenerateAPIView(APIView):
             return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
         regenerate = serializer.validated_data["regenerate"]
-        provider = serializer.validated_data.get("ai_provider")
+        provider = requested_provider(serializer.validated_data.get("ai_provider"))
 
         curation = JobResumeCuration.objects.filter(id=curation_id, user=request.user).first()
         if curation is None:
