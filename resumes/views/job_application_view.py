@@ -99,6 +99,7 @@ class JobApplicationDraftAPIView(APIView):
                 company_name=data.get("company_name", ""),
                 include_resume=data.get("include_resume", True),
                 include_cover_letter=data.get("include_cover_letter", False),
+                resume_source=data.get("resume_source") or None,
             )
         except ApplicationNotSendableError as exc:
             return _not_sendable_response(exc)

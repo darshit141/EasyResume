@@ -30,15 +30,33 @@ from django.db import DatabaseError, transaction
 from django.utils import timezone
 
 from billing.services.entitlements_service import EntitlementsService
-from resumes.models import JobApplication, JobResumeCuration
+from resumes.models import JobApplication, JobResumeCuration, Resume
+from resumes.services.autofill_resume_file_service import content_type_for
 from resumes.services.job_application_ai_service import JobApplicationAIService
 from resumes.services.job_curation_service import JobCurationDatabaseError
-from resumes.services.job_gap_analysis_service import JobGapAnalysisService
+from resumes.services.job_gap_analysis_service import (
+    JobGapAnalysisService,
+    JobRequirementsUnavailableError,
+)
 from resumes.services.job_resume_curation_service import JobResumeCurationService
 from resumes.services.resume_template_service import ResumeTemplateService
 from resumes.services.tailored_resume_pdf_service import TailoredResumePdfService
 
 logger = logging.getLogger(__name__)
+
+
+def _master_resume(user, resume_id=None):
+    """The account's verified master resume: the one this job was curated
+    against when there is one, otherwise the most recent."""
+    if resume_id:
+        chosen = Resume.objects.filter(id=resume_id, user=user, status="completed").first()
+        if chosen:
+            return chosen
+    return (
+        Resume.objects.filter(user=user, status="completed")
+        .order_by("-updated_at", "-id")
+        .first()
+    )
 
 
 class ApplicationNotSendableError(Exception):
@@ -75,21 +93,22 @@ class JobApplicationService:
         company_name="",
         include_resume=True,
         include_cover_letter=False,
+        resume_source=None,
     ):
         """Draft an application email for a curation. Sends nothing."""
         curation = JobResumeCuration.objects.get(id=curation_id, user=user)
-
-        if not curation.tailored_resume_data:
-            raise ApplicationNotSendableError(
-                "Generate the tailored resume for this job before applying, so "
-                "there is something to attach.",
-                code="TAILORED_RESUME_REQUIRED",
-            )
+        resume_source = self._resolve_resume_source(user, curation, resume_source, include_resume)
 
         candidate_source_data = JobResumeCurationService.build_candidate_source_data(
             user, resume_id=curation.resume_id
         )
-        job_requirements = JobGapAnalysisService.build_job_requirements(curation.analysis_data)
+        try:
+            job_requirements = JobGapAnalysisService.build_job_requirements(curation.analysis_data)
+        except JobRequirementsUnavailableError:
+            # A job can be applied to without ever being analysed. The
+            # requirements only help the draft decide what to lead with;
+            # every claim in it is grounded in the resume either way.
+            job_requirements = []
 
         # Resolved before drafting so the email can describe what is really
         # being sent rather than guessing.
@@ -120,6 +139,7 @@ class JobApplicationService:
                 body=drafted["body"],
                 include_resume=include_resume,
                 include_cover_letter=will_include_cover_letter,
+                resume_source=resume_source,
                 status=JobApplication.STATUS_DRAFT,
             )
         except DatabaseError as exc:
@@ -130,6 +150,37 @@ class JobApplicationService:
             "Application draft created user_id=%s application_id=%s", user.id, application.id
         )
         return application
+
+    @staticmethod
+    def _resolve_resume_source(user, curation, requested, include_resume):
+        """Which resume to attach, defaulting to whichever actually exists.
+
+        Tailoring is optional, so a missing tailored resume is only an error
+        when the user explicitly asked to send that one.
+        """
+        has_tailored = bool(curation.tailored_resume_data)
+        source = requested or (
+            JobApplication.RESUME_SOURCE_TAILORED
+            if has_tailored
+            else JobApplication.RESUME_SOURCE_MASTER
+        )
+
+        if source == JobApplication.RESUME_SOURCE_TAILORED and not has_tailored:
+            raise ApplicationNotSendableError(
+                "There is no tailored resume for this job yet. Generate one, or apply "
+                "with your master resume instead.",
+                code="TAILORED_RESUME_REQUIRED",
+            )
+        if (
+            source == JobApplication.RESUME_SOURCE_MASTER
+            and include_resume
+            and _master_resume(user, curation.resume_id) is None
+        ):
+            raise ApplicationNotSendableError(
+                "Upload or build a resume before applying, so there is something to attach.",
+                code="MASTER_RESUME_REQUIRED",
+            )
+        return source
 
     # -- sending ----------------------------------------------------------
 
@@ -149,12 +200,6 @@ class JobApplicationService:
         EntitlementsService.check_can_send_application(user)
 
         curation = application.curation
-        if application.include_resume and not curation.tailored_resume_data:
-            raise ApplicationNotSendableError(
-                "The tailored resume for this job is missing, so there is "
-                "nothing to attach.",
-                code="TAILORED_RESUME_REQUIRED",
-            )
 
         body = application.body
         if application.include_cover_letter and curation.cover_letter_data:
@@ -176,15 +221,10 @@ class JobApplicationService:
 
         filename = ""
         if application.include_resume:
-            pdf = TailoredResumePdfService.build_pdf(
-                curation.tailored_resume_data,
-                template_config=ResumeTemplateService.config_for_version(
-                    curation.tailored_resume_versions.order_by("-version").first(),
-                    user=user,
-                ),
+            filename, content, content_type = JobApplicationService._build_attachment(
+                user, application, curation
             )
-            filename = TailoredResumePdfService.build_filename(curation.job_title)
-            message.attach(filename, pdf.getvalue(), "application/pdf")
+            message.attach(filename, content, content_type)
 
         try:
             # fail_silently=False on purpose: telling someone their
@@ -200,6 +240,63 @@ class JobApplicationService:
             raise ApplicationDeliveryError() from exc
 
         return JobApplicationService._mark_sent(application, filename)
+
+    @staticmethod
+    def _build_attachment(user, application, curation):
+        """``(filename, bytes, content_type)`` for the resume being sent."""
+        if application.resume_source == JobApplication.RESUME_SOURCE_TAILORED:
+            if not curation.tailored_resume_data:
+                raise ApplicationNotSendableError(
+                    "The tailored resume for this job is missing, so there is "
+                    "nothing to attach.",
+                    code="TAILORED_RESUME_REQUIRED",
+                )
+            pdf = TailoredResumePdfService.build_pdf(
+                curation.tailored_resume_data,
+                template_config=ResumeTemplateService.config_for_version(
+                    curation.tailored_resume_versions.order_by("-version").first(),
+                    user=user,
+                ),
+            )
+            return (
+                TailoredResumePdfService.build_filename(curation.job_title),
+                pdf.getvalue(),
+                "application/pdf",
+            )
+
+        resume = _master_resume(user, curation.resume_id)
+        if resume is None:
+            raise ApplicationNotSendableError(
+                "There is no resume on this account to attach.",
+                code="MASTER_RESUME_REQUIRED",
+            )
+
+        # The uploaded file is what the candidate actually wrote and what an
+        # employer expects to receive, so it wins. A resume built in the
+        # guided builder has no file, so its verified profile is rendered
+        # instead - through the same renderer the tailored PDF uses.
+        if resume.file:
+            try:
+                with resume.file.open("rb") as handle:
+                    content = handle.read()
+                name = (resume.original_filename or "").strip() or "resume.pdf"
+                return name, content, content_type_for(name)
+            except (OSError, ValueError):
+                logger.warning(
+                    "Master resume file unreadable for user_id=%s; sending the rendered profile.",
+                    user.id,
+                )
+
+        if not resume.parsed_data:
+            raise ApplicationNotSendableError(
+                "There is no resume on this account to attach.",
+                code="MASTER_RESUME_REQUIRED",
+            )
+        pdf = TailoredResumePdfService.build_pdf(
+            resume.parsed_data,
+            template_config=ResumeTemplateService.config_for_version(None, user=user),
+        )
+        return "resume.pdf", pdf.getvalue(), "application/pdf"
 
     @staticmethod
     def _mark_sent(application, filename):

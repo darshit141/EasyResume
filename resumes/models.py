@@ -512,6 +512,23 @@ class JobApplication(models.Model):
         help_text="Append the curation's generated cover letter to the email body.",
     )
 
+    # Which resume the employer receives. Tailoring is optional: a user may
+    # apply with the resume they already have, without spending an AI credit,
+    # and a job whose analysis failed must not become impossible to apply to.
+    RESUME_SOURCE_TAILORED = "tailored"
+    RESUME_SOURCE_MASTER = "master"
+    RESUME_SOURCE_CHOICES = [
+        (RESUME_SOURCE_TAILORED, "Tailored resume"),
+        (RESUME_SOURCE_MASTER, "Master resume"),
+    ]
+
+    resume_source = models.CharField(
+        max_length=20,
+        choices=RESUME_SOURCE_CHOICES,
+        default=RESUME_SOURCE_TAILORED,
+        help_text="Which resume was attached: the job-tailored one, or the account's master resume.",
+    )
+
     status = models.CharField(
         max_length=20,
         choices=STATUS_CHOICES,

@@ -271,10 +271,25 @@ class JobApplicationAPITests(TestCase):
         # The whole point of the review gate.
         self.assertEqual(len(mail.outbox), 0)
 
-    def test_draft_requires_a_tailored_resume_to_attach(self):
+    def test_draft_without_a_tailored_resume_uses_the_master_resume(self):
+        """Tailoring costs a credit and is optional, so it cannot be a
+        precondition for applying."""
         curation = self.create_curation(tailored_resume_data={})
 
         response = self.draft(curation)
+
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(response.data["resume_source"], "master")
+
+    def test_draft_still_refuses_a_tailored_resume_that_was_asked_for_by_name(self):
+        """Defaulting is a convenience; an explicit request must never be
+        quietly swapped for something else."""
+        curation = self.create_curation(tailored_resume_data={})
+
+        response = self.draft(
+            curation,
+            payload={"recipient_email": "careers@acme.example", "resume_source": "tailored"},
+        )
 
         self.assertEqual(response.status_code, 409)
         self.assertEqual(response.data["code"], "TAILORED_RESUME_REQUIRED")

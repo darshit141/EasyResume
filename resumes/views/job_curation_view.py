@@ -25,6 +25,7 @@ from resumes.services.job_gap_analysis_service import (
     JobGapAnalysisService,
     JobRequirementsUnavailableError,
 )
+from resumes.services.application_tracking_service import ApplicationTrackingService
 from resumes.services.job_curation_service import (
     JobCurationDatabaseError,
     JobCurationService,
@@ -287,20 +288,17 @@ class JobCurationCreateAPIView(APIView):
 
         data = serializer.validated_data
         provider = requested_provider(data.get("ai_provider"))
-        if not data["curate_resume"]:
-            return Response(
-                {
-                    "curate_resume": False,
-                    "message": "Job-specific resume curation was not requested.",
-                },
-                status=status.HTTP_200_OK,
-            )
+        # Tailoring is the user's choice. Declining it still saves the job -
+        # it just doesn't spend an AI credit - so the quota gates apply only
+        # to the path that actually calls a model.
+        wants_analysis = data["curate_resume"]
 
-        try:
-            EntitlementsService.check_ai_provider_allowed(request.user, provider)
-            EntitlementsService.check_can_use_ai(request.user)
-        except PlanRestrictionError as exc:
-            return plan_restriction_response(exc)
+        if wants_analysis:
+            try:
+                EntitlementsService.check_ai_provider_allowed(request.user, provider)
+                EntitlementsService.check_can_use_ai(request.user)
+            except PlanRestrictionError as exc:
+                return plan_restriction_response(exc)
 
         job_title = data.get("job_title", "")
         job_description = data.get("job_description", "")
@@ -329,6 +327,19 @@ class JobCurationCreateAPIView(APIView):
                     ]
                 },
                 status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        if not wants_analysis:
+            curation, _ = ApplicationTrackingService.create_saved_job(
+                request.user,
+                job_title=job_title,
+                job_description=job_description,
+                job_url=job_url,
+                resume_id=data.get("resume_id"),
+            )
+            return Response(
+                JobResumeCurationSerializer(curation).data,
+                status=status.HTTP_201_CREATED,
             )
 
         try:
