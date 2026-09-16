@@ -25,17 +25,27 @@ document describes the technical mechanics underneath it.
 
 | Subprocessor | What they receive | When |
 |---|---|---|
-| **Groq** | Resume text, job description text | Only when the user selects `groq` as their AI provider |
-| **Google (Gemini)** | Resume text, job description text | Only when the user selects `gemini` as their AI provider |
+| **Google (Gemini API)** | Resume text, job description text | Every AI feature (resume parse, job analysis, gap analysis, tailored resume, cover letter, application email) while Gemini is the configured provider (`LLM_PROVIDER`) or the fallback (`LLM_FALLBACK_PROVIDER`). On Google's unpaid tier, submitted content may be used to improve Google's products, including human review - use a paid tier for production data |
+| **Groq** | Resume text, job description text | Same features, while Groq is the configured or fallback provider |
+| **Kira (kiraai.vn)** | Resume text, job description text | Same features, while Kira is the configured or fallback provider |
 | **Stripe** | Name, email, payment details | Only for a user who starts checkout — card details never touch this application's servers |
 | **Resend** | Email address, and the contents of the message sent to it | Every transactional email: login OTP codes, billing/dunning notices, and outcome follow-ups. Used because DigitalOcean blocks outbound SMTP from the droplet, so mail leaves over Resend's HTTPS API instead |
 | **Apify** | The job posting URL the user submitted, and the page content at that URL | Only when "Import from link" hits a posting the primary fetch can't read (a page that renders client-side) — used as a last-resort rescue to fetch and render it. Never receives resume data or anything about the user themselves |
-| Self-hosted Ollama | Resume/job text | Stays on the operator's own infrastructure — not a third party |
-| `standard` parser | Resume text | Stays on this application's own server — no AI provider involved at all |
+| Self-hosted Ollama | Resume/job text | Only if configured as a provider — stays on the operator's own infrastructure, not a third party |
+| `standard` parser | Resume text | Only when users are allowed to choose a provider (`AI_PROVIDER_SELECTION_ENABLED`) and pick it — stays on this application's own server, no AI provider involved |
 
-A user who never selects Groq or Gemini (uses `standard` or a
-self-hosted Ollama instance) never has resume/job text leave this
-application's own infrastructure.
+Which provider receives resume and job text is an operator setting in the
+admin Configuration tab, not a user choice (unless
+`AI_PROVIDER_SELECTION_ENABLED` is switched on). With a hosted provider
+configured — the production setup — every AI feature sends the relevant
+text to that provider, so the user-facing Privacy Policy names these
+providers rather than describing third-party processing as optional.
+
+All three hosted providers are based outside the EU (Google and Groq in the
+United States; Kira is a Vietnamese service), so EU users' data is
+transferred internationally. Confirm the transfer mechanism (for example
+Standard Contractual Clauses) and each provider's data-processing terms with
+counsel before relying on them.
 
 ## Self-service controls (GDPR Articles 15/17/20)
 

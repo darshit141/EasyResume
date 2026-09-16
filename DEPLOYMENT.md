@@ -120,7 +120,8 @@ Set every one of these on your hosting platform (not committed to git —
 | `STRIPE_PRICE_ID_PRO_EUR_MONTHLY` etc. | Live Price IDs from step 4 (whichever currency/period combos you're launching with) |
 | `STRIPE_PRICE_ID_MAX_EUR_MONTHLY` etc. | Same, for the **Max** tier. Until these are set, Max still appears on the pricing page but shows "Payments coming soon" and cannot be checked out - a deliberate safe failure rather than charging the wrong amount. |
 | `STRIPE_AUTOMATIC_TAX_ENABLED` | `True` (already the case if you copied `.env` forward — leave it; Stripe Tax must already be active from step 4) |
-| `GROQ_API_KEY` and/or `GEMINI_API_KEY` and/or `KIRA_API_KEY` | Production-tier keys, not a personal free-tier key that'll rate-limit under real traffic. `KIRA_API_KEY` (kiraai.vn) is an OpenAI-compatible provider with a large context window and high rate limits — a good choice for one key serving many users; set `LLM_PROVIDER=kira` to make it the default. API keys are env-var-only (never the admin Configuration tab); `KIRA_MODEL` / `KIRA_BASE_URL` can be tuned from that tab. |
+| `GROQ_API_KEY` and/or `GEMINI_API_KEY` and/or `KIRA_API_KEY` | Production-tier keys, not a personal free-tier key that'll rate-limit under real traffic (Google's free tier may also use submitted content to improve its products). These seed the admin Configuration tab on the first deploy that includes migration `api.0004`; after that, change keys in that tab — stored encrypted, used from the next request, no redeploy. `KIRA_API_KEY` (kiraai.vn) is an OpenAI-compatible provider with a large context window and high rate limits; set `LLM_PROVIDER=kira` to make it the default. |
+| `CONFIG_ENCRYPTION_KEY` | Encrypts the API keys stored in the admin Configuration tab. Set it **before** the first deploy that includes migration `api.0004`, and never change it afterwards — a different value makes every stored key unreadable (the app falls back to `.env` keys, and the stored ones must be re-entered). Generate one with `python -c "import secrets; print(secrets.token_urlsafe(48))"`. |
 
 ### Recommended
 
@@ -198,10 +199,11 @@ Off unless `REWARDED_ADS_ENABLED=true` is set in the admin Configuration tab. Th
 ### Leave at their defaults unless you have a specific reason
 
 `LLM_PROVIDER` (groq; set to `kira` to route AI through kiraai.vn),
-`KIRA_MODEL` (`kira-3.5-flash`), `FREE_AI_CALLS_PER_MONTH`, `FREE_TAILORED_RESUMES_PER_MONTH`,
+`AI_PROVIDER_SELECTION_ENABLED` (off — users don't pick a provider), `FREE_AI_CALLS_PER_MONTH`, `FREE_TAILORED_RESUMES_PER_MONTH`,
 `MAX_RESUMES_PER_USER`, `ACCESS_TOKEN_LIFETIME`, `REFRESH_TOKEN_LIFETIME`,
 throttle rates (`THROTTLE_*`) — all tunable later without a code change,
-none of them block launch.
+none of them block launch. `KIRA_MODEL` has no default: if you use Kira,
+set it in `.env` or the admin Configuration tab.
 
 ---
 
