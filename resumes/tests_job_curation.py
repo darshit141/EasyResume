@@ -204,7 +204,10 @@ class JobCurationAPITests(TestCase):
         self.assertEqual(response.status_code, 400)
         self.assertIn("job_description", response.data)
 
-    def test_curate_resume_false_skips_ai_and_persistence(self):
+    def test_curate_resume_false_saves_the_job_without_calling_ai(self):
+        """Declining to tailor is a choice, not a cancellation: the job is
+        still saved, so it can be applied to and tracked. It just costs no
+        AI credit."""
         self.authenticate()
         payload = {**VALID_REQUEST, "curate_resume": False}
         with patch(
@@ -212,9 +215,13 @@ class JobCurationAPITests(TestCase):
         ) as get_llm_service:
             response = self.client.post(self.url, payload, format="json")
 
-        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.status_code, 201)
         self.assertEqual(response.data["curate_resume"], False)
-        self.assertEqual(JobResumeCuration.objects.count(), 0)
+        self.assertEqual(response.data["status"], "saved")
+        self.assertEqual(JobResumeCuration.objects.count(), 1)
+        saved = JobResumeCuration.objects.get()
+        self.assertEqual(saved.analysis_data, {})
+        self.assertEqual(saved.tailored_resume_data, {})
         get_llm_service.assert_not_called()
 
     def test_ollama_unavailable_returns_service_error(self):

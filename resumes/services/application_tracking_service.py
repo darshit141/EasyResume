@@ -132,6 +132,41 @@ class ApplicationTrackingService:
         return curation, True
 
     @staticmethod
+    def create_saved_job(user, *, job_title, job_description="", job_url="", resume_id=None):
+        """Track a job the user chose not to have analysed.
+
+        Unticking "curate my resume" used to store nothing and return a
+        message, so the app said "job noted" about a job that did not exist,
+        and there was nothing to apply to or track afterwards. The row is
+        created the same way the extension's are - status `saved`, no AI
+        call, no credit spent - so the tracker and Direct Apply both work.
+
+        Returns ``(curation, created)``; saving the same link twice reuses
+        the existing row rather than adding a duplicate.
+        """
+        title = (job_title or "").strip()[:200]
+        if not title:
+            raise ValueError("A job title is required to save a job.")
+
+        key = normalise_job_url(job_url)
+        existing = ApplicationTrackingService._find_by_url(user, key)
+        if existing is not None:
+            return existing, False
+
+        curation = JobResumeCuration.objects.create(
+            user=user,
+            job_title=title,
+            job_description=(job_description or "").strip(),
+            job_url=(job_url or "").strip()[:MAX_URL_LENGTH] if key else "",
+            resume_id=resume_id,
+            curate_resume=False,
+            status=JobResumeCuration.STATUS_SAVED,
+            source=JobResumeCuration.SOURCE_WEB,
+            application_status=JobResumeCuration.APPLICATION_STATUS_SAVED,
+        )
+        return curation, True
+
+    @staticmethod
     def record_submission(curation):
         """Record that we saw this application's form actually submitted.
 

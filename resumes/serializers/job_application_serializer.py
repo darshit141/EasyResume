@@ -21,6 +21,7 @@ class JobApplicationSerializer(serializers.ModelSerializer):
             "body",
             "include_resume",
             "include_cover_letter",
+            "resume_source",
             "status",
             "sent_at",
             "error_code",
@@ -34,6 +35,7 @@ class JobApplicationSerializer(serializers.ModelSerializer):
         read_only_fields = [
             "id",
             "curation",
+            "resume_source",
             "job_title",
             "job_url",
             "status",
@@ -51,6 +53,15 @@ class JobApplicationDraftRequestSerializer(serializers.Serializer):
     company_name = serializers.CharField(max_length=200, required=False, allow_blank=True)
     include_resume = serializers.BooleanField(required=False, default=True)
     include_cover_letter = serializers.BooleanField(required=False, default=False)
+    resume_source = serializers.ChoiceField(
+        choices=["tailored", "master"],
+        required=False,
+        allow_null=True,
+        help_text=(
+            "Which resume to attach. Defaults to the tailored resume when one exists, "
+            "otherwise the account's master resume - tailoring is never required to apply."
+        ),
+    )
     provider = serializers.CharField(required=False, allow_blank=True)
 
 
