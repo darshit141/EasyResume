@@ -253,6 +253,11 @@ REST_FRAMEWORK = {
         # resume-file endpoint returns the whole file base64-encoded - up
         # to 5MB a call, which is bandwidth worth capping.
         "autofill": os.getenv("THROTTLE_AUTOFILL", "20/min"),
+        # Saving a bring-your-own key calls the provider to validate it, so
+        # this endpoint can be used to test credentials against Google from
+        # our IP. Tight on purpose: nobody legitimately saves an API key
+        # more than a few times an hour.
+        "user_ai_key": os.getenv("THROTTLE_USER_AI_KEY", "10/hour"),
     },
 }
 
@@ -440,6 +445,12 @@ LLM_PROVIDER = os.getenv("LLM_PROVIDER", "groq")
 # sends, so every request uses LLM_PROVIDER and LLM_FALLBACK_PROVIDER.
 # Switch it in the admin Configuration tab.
 AI_PROVIDER_SELECTION_ENABLED = os.getenv("AI_PROVIDER_SELECTION_ENABLED", "False") == "True"
+
+# Whether users may save their own provider API key (billing.UserAIKey).
+# Off by default: accepting someone else's credential is a decision an
+# operator should make deliberately. Overridable live from the admin
+# Configuration tab, so it can be switched off without a deploy.
+BYOK_ENABLED = os.getenv("BYOK_ENABLED", "False") == "True"
 # Sized for the slowest supported provider, not the fastest. A local
 # CPU-only Ollama run has to load the model (~60s cold) and then generate a
 # full structured resume document, which routinely exceeds two minutes;
@@ -679,6 +690,37 @@ STRIPE_WEBHOOK_SECRET = os.getenv("STRIPE_WEBHOOK_SECRET", "")
 # done, for correct VAT calculation on EU/UK checkouts.
 STRIPE_AUTOMATIC_TAX_ENABLED = os.getenv("STRIPE_AUTOMATIC_TAX_ENABLED", "False") == "True"
 
+# Razorpay takes INR payments — UPI AutoPay, cards and bank e-mandates —
+# because Stripe is invite-only for Indian businesses and offers neither UPI
+# nor Stripe Tax to them (see billing/plans.py). Credentials live in the
+# environment, never in the admin panel, exactly as Stripe's do. Blank means
+# INR checkout reports RAZORPAY_NOT_CONFIGURED instead of failing obscurely.
+RAZORPAY_KEY_ID = os.getenv("RAZORPAY_KEY_ID", "")
+RAZORPAY_KEY_SECRET = os.getenv("RAZORPAY_KEY_SECRET", "")
+RAZORPAY_WEBHOOK_SECRET = os.getenv("RAZORPAY_WEBHOOK_SECRET", "")
+RAZORPAY_API_BASE_URL = os.getenv("RAZORPAY_API_BASE_URL", "https://api.razorpay.com/v1")
+# How long a new subscription's mandate runs before the customer would have
+# to authorise again. Ten years matches Stripe's default UPI mandate term.
+RAZORPAY_SUBSCRIPTION_YEARS = int(os.getenv("RAZORPAY_SUBSCRIPTION_YEARS", "10"))
+
+# Indian GST on INR subscriptions (billing/gst.py). Every one of these is
+# also editable live from the admin Configuration tab; the values here are
+# only the defaults. GST_ENABLED stays False until the business actually
+# holds a GSTIN — an unregistered supplier must not collect GST at all.
+GST_ENABLED = os.getenv("GST_ENABLED", "False") == "True"
+GST_RATE_PERCENT = os.getenv("GST_RATE_PERCENT", "18")
+GST_SELLER_GSTIN = os.getenv("GST_SELLER_GSTIN", "")
+# Needed only if it can't be read from the GSTIN (the first two digits).
+GST_SELLER_STATE_CODE = os.getenv("GST_SELLER_STATE_CODE", "")
+GST_SELLER_LEGAL_NAME = os.getenv("GST_SELLER_LEGAL_NAME", "IntelliResume Pvt. Ltd.")
+GST_SELLER_ADDRESS = os.getenv("GST_SELLER_ADDRESS", "")
+# Services Accounting Code printed on each invoice. Deliberately blank: the
+# right code for this service is an accountant's call, not an engineer's.
+GST_SAC_CODE = os.getenv("GST_SAC_CODE", "")
+# Up to four letters; the serial becomes e.g. IR/2627/000001, which keeps
+# within GST's 16-character invoice-number limit.
+GST_INVOICE_PREFIX = os.getenv("GST_INVOICE_PREFIX", "IR")
+
 # Where Stripe Checkout redirects back to after a successful/canceled
 # payment, and where CORS/CSRF need to trust requests from.
 FRONTEND_URL = os.getenv("FRONTEND_URL", "http://localhost:5173")
@@ -717,6 +759,16 @@ CACHES = {
             "OPTIONS": {
                 "CLIENT_CLASS": "django_redis.client.DefaultClient",
                 "IGNORE_EXCEPTIONS": True,
+                # IGNORE_EXCEPTIONS only helps once an exception is raised.
+                # Without these, a Redis that is unreachable rather than
+                # refusing (a network partition, a hung container) blocks
+                # every throttled request until the OS gives up on TCP —
+                # which can be minutes. Found in browser QA, where each
+                # request stalled ~8s with Redis down. Short enough that an
+                # outage costs a request a moment, long enough for a
+                # healthy Redis on the same host or network.
+                "SOCKET_CONNECT_TIMEOUT": float(os.getenv("REDIS_SOCKET_CONNECT_TIMEOUT", "0.5")),
+                "SOCKET_TIMEOUT": float(os.getenv("REDIS_SOCKET_TIMEOUT", "1")),
             },
         }
     )

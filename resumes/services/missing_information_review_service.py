@@ -36,8 +36,11 @@ DEFAULT_PROFILE_SECTION = "profile"
 class MissingInformationReviewService:
     """Builds the frontend-facing missing-information review for a curation."""
 
-    def __init__(self, gap_analysis_service=None, provider=None):
-        self.gap_analysis_service = gap_analysis_service or JobGapAnalysisService(provider=provider)
+    def __init__(self, gap_analysis_service=None, provider=None, user=None):
+        self.user = user
+        self.gap_analysis_service = gap_analysis_service or JobGapAnalysisService(
+            provider=provider, user=user
+        )
 
     def build_review(self, user, curation_id, regenerate=False):
         curation = self.gap_analysis_service.get_or_create_gap_analysis(

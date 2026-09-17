@@ -46,6 +46,26 @@ class Subscription(models.Model):
     stripe_customer_id = models.CharField(max_length=255, blank=True)
     stripe_subscription_id = models.CharField(max_length=255, blank=True)
 
+    # Which processor this subscription is billed through. Blank for a
+    # free account or a coupon grant. It decides what "manage billing" means
+    # for this user: Stripe has a hosted customer portal, Razorpay does not,
+    # so an INR subscriber cancels through our own endpoint instead.
+    PROCESSOR_CHOICES = [("stripe", "Stripe"), ("razorpay", "Razorpay")]
+    payment_processor = models.CharField(max_length=20, choices=PROCESSOR_CHOICES, blank=True)
+    razorpay_subscription_id = models.CharField(max_length=64, blank=True)
+    razorpay_customer_id = models.CharField(max_length=64, blank=True)
+
+    # When the newest processor event applied to this row was *created* by
+    # the processor. Razorpay states plainly that webhooks can arrive out of
+    # order; without this, a late "charged" landing after "cancelled" would
+    # quietly reactivate a subscription the customer had ended.
+    processor_event_at = models.DateTimeField(null=True, blank=True)
+
+    # The customer has cancelled, but keeps access until current_period_end.
+    # Without it the settings page would keep offering "Cancel" to someone
+    # who already did, and could not tell them when access actually ends.
+    cancel_at_period_end = models.BooleanField(default=False)
+
     current_period_end = models.DateTimeField(null=True, blank=True)
 
     created_at = models.DateTimeField(auto_now_add=True)
@@ -63,7 +83,14 @@ class Subscription(models.Model):
                 fields=["stripe_customer_id"],
                 condition=~models.Q(stripe_customer_id=""),
                 name="unique_non_blank_stripe_customer_id",
-            )
+            ),
+            # Same reasoning: the Razorpay webhook finds the local row by
+            # this id, so it must identify at most one.
+            models.UniqueConstraint(
+                fields=["razorpay_subscription_id"],
+                condition=~models.Q(razorpay_subscription_id=""),
+                name="unique_non_blank_razorpay_subscription_id",
+            ),
         ]
 
     def __str__(self):
@@ -335,6 +362,13 @@ class PlanPrice(models.Model):
         blank=True,
         help_text="Leave blank to make this combination unpurchasable rather than charge the wrong amount.",
     )
+    # INR is charged through Razorpay, which bills against a Plan rather
+    # than a Stripe Price. Same rule as above: blank means "not for sale".
+    razorpay_plan_id = models.CharField(
+        max_length=64,
+        blank=True,
+        help_text="INR only. The Razorpay Plan that charges exactly this amount, GST included.",
+    )
 
     is_active = models.BooleanField(
         default=True,
@@ -420,3 +454,227 @@ class PricingOffer(models.Model):
             and self.stripe_price_id
             and self.starts_at <= now <= self.ends_at
         )
+
+
+class UserAIKey(models.Model):
+    """A provider API key the user brought themselves.
+
+    Entirely optional, and never the normal path: IntelliResume's own AI
+    infrastructure serves every request by default, and this exists only so
+    that someone who has exhausted their included allowance has a third
+    option beside "wait until next month" and "upgrade". When their own key
+    is in use they are paying the provider directly, so the monthly AI-call
+    ceiling — which exists purely to cap *our* spend — no longer applies to
+    them.
+
+    What it deliberately does NOT do is unlock paid features. Word export,
+    version history and unlimited tailored resumes are product value, not
+    compute cost, and a personal API key buys none of it. Conflating the
+    two would turn a cost-control valve into a way to get Pro for free.
+
+    Storage rules, all of which the tests assert:
+
+      - The key is encrypted at rest under its own key-derivation domain
+        (`api.utils.secrets.DOMAIN_USER_PROVIDER_KEY`), so a database dump
+        is not a list of working credentials and a SystemConfiguration
+        ciphertext cannot be replayed as somebody's personal key.
+      - The plaintext is never returned by any endpoint, never logged, and
+        never included in an error message. `last_four` exists so the UI can
+        say *which* key is saved without being able to use it.
+      - A key is validated against the live provider before it is stored, so
+        a typo is reported immediately rather than at the moment the user
+        next needs the feature to work.
+    """
+
+    # Only providers that are genuinely self-serve for an individual — a
+    # Google AI Studio key takes about a minute to create and has a free
+    # tier. Kept as a list rather than a single hardcoded "gemini" so
+    # adding one later is a one-line change, but deliberately not "any
+    # supported provider": Ollama is a local server with no key at all, and
+    # offering it here would be nonsense.
+    PROVIDER_GEMINI = "gemini"
+    PROVIDER_CHOICES = [(PROVIDER_GEMINI, "Google Gemini")]
+
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="ai_keys",
+    )
+    provider = models.CharField(max_length=20, choices=PROVIDER_CHOICES)
+
+    # Ciphertext, always. Never read this directly — go through
+    # UserAIKeyService, which decrypts under the right domain and handles a
+    # key that can no longer be decrypted.
+    encrypted_key = models.TextField()
+    last_four = models.CharField(max_length=4, blank=True)
+
+    # Off rather than deleted when the user pauses it, so turning it back on
+    # doesn't mean finding the key again.
+    is_active = models.BooleanField(default=True)
+
+    # When the provider last confirmed the key works, and what it said if it
+    # didn't. A key that was valid on the day it was saved can be revoked in
+    # the provider's console at any time, and the user needs to be told that
+    # here rather than discovering it as a failed resume generation.
+    last_validated_at = models.DateTimeField(null=True, blank=True)
+    last_used_at = models.DateTimeField(null=True, blank=True)
+    last_error_code = models.CharField(max_length=40, blank=True)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(fields=["user", "provider"], name="unique_user_ai_provider_key"),
+        ]
+        ordering = ["provider"]
+
+    def __str__(self):
+        # Never the key, not even partially beyond the last four — this
+        # string ends up in admin lists and log lines.
+        return f"{self.user_id}: {self.provider} (•••{self.last_four})"
+
+
+class BillingProfile(models.Model):
+    """What an Indian tax invoice needs to know about the buyer.
+
+    Only INR checkout asks for this. `state_code` is required there because
+    it decides the place of supply, and so whether the invoice shows CGST
+    and SGST or IGST. The GSTIN fields are optional: a business that
+    supplies them gets an invoice it can claim input tax credit against,
+    and pays exactly what a consumer pays.
+    """
+
+    user = models.OneToOneField(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="billing_profile",
+    )
+    country = models.CharField(max_length=2, default="IN")
+    state_code = models.CharField(max_length=2, blank=True)
+    gstin = models.CharField(max_length=15, blank=True)
+    legal_name = models.CharField(max_length=200, blank=True)
+    address = models.TextField(blank=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def __str__(self):
+        return f"{self.user_id}: {self.state_code or '--'} {self.gstin or '(consumer)'}"
+
+
+class RazorpayWebhookEvent(models.Model):
+    """One row per Razorpay webhook delivery, keyed by the
+    `x-razorpay-event-id` header — the Razorpay twin of StripeWebhookEvent,
+    and there for the same two reasons: duplicate deliveries are normal and
+    must not re-run business logic, and it is the audit trail of what
+    Razorpay told us and whether we applied it."""
+
+    event_id = models.CharField(max_length=64, unique=True)
+    event_type = models.CharField(max_length=100)
+    payload = models.JSONField(default=dict, blank=True)
+    processed_at = models.DateTimeField(null=True, blank=True)
+    error = models.CharField(max_length=1000, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+        indexes = [models.Index(fields=["event_type", "created_at"])]
+
+    def __str__(self):
+        return f"{self.event_type} ({self.event_id})"
+
+
+class InvoiceSequence(models.Model):
+    """The next invoice serial for one financial year.
+
+    GST requires invoice numbers to be consecutive and unique within a
+    financial year. A counter row locked with SELECT ... FOR UPDATE is the
+    simplest thing that guarantees that under concurrent webhooks; deriving
+    the next number from MAX() would hand two simultaneous charges the same
+    serial.
+    """
+
+    financial_year = models.CharField(max_length=7, unique=True)
+    last_number = models.PositiveIntegerField(default=0)
+
+    def __str__(self):
+        return f"{self.financial_year}: {self.last_number}"
+
+
+class GSTInvoice(models.Model):
+    """A tax invoice (or, before GST registration, a plain invoice) for one
+    successful INR charge.
+
+    Deliberately NOT deleted with the account. Section 36 of the CGST Act
+    requires invoices to be kept for 72 months after the annual return is
+    due, and GDPR Article 17(3)(b) exempts data held to meet a legal
+    obligation. So the user link is SET_NULL, and every buyer detail the
+    invoice prints is copied onto it at issue time — an invoice must say
+    what it said on the day it was issued, however the profile changes
+    later or whether the account still exists at all.
+    """
+
+    # A "tax invoice" carries GST and can only be issued by a registered
+    # supplier. Before registration the business issues a plain invoice
+    # with no tax lines — not a "bill of supply", which is a document for
+    # registered suppliers of exempt goods and services.
+    KIND_TAX_INVOICE = "tax_invoice"
+    KIND_INVOICE = "invoice"
+    KIND_CHOICES = [(KIND_TAX_INVOICE, "Tax invoice"), (KIND_INVOICE, "Invoice")]
+
+    number = models.CharField(max_length=16, unique=True)
+    kind = models.CharField(max_length=20, choices=KIND_CHOICES)
+    issued_at = models.DateTimeField()
+    financial_year = models.CharField(max_length=7)
+
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="gst_invoices",
+    )
+
+    # The charge this invoices. Unique, so a redelivered webhook can never
+    # issue a second invoice for the same money.
+    razorpay_payment_id = models.CharField(max_length=64, unique=True)
+    razorpay_subscription_id = models.CharField(max_length=64, blank=True)
+
+    plan_id = models.CharField(max_length=50)
+    billing_period = models.CharField(max_length=10)
+    description = models.CharField(max_length=200)
+    currency = models.CharField(max_length=3, default="INR")
+
+    # Supplier, as configured on the day of issue.
+    seller_legal_name = models.CharField(max_length=200)
+    seller_gstin = models.CharField(max_length=15, blank=True)
+    seller_address = models.TextField(blank=True)
+    seller_state_code = models.CharField(max_length=2, blank=True)
+    sac_code = models.CharField(max_length=8, blank=True)
+
+    # Buyer, as recorded on the day of issue.
+    buyer_name = models.CharField(max_length=200)
+    buyer_email = models.EmailField()
+    buyer_gstin = models.CharField(max_length=15, blank=True)
+    buyer_address = models.TextField(blank=True)
+    place_of_supply_code = models.CharField(max_length=2, blank=True)
+    place_of_supply_name = models.CharField(max_length=60, blank=True)
+
+    # Amounts in paise. taxable_value + cgst + sgst + igst == total, always.
+    supply_type = models.CharField(max_length=20, blank=True)
+    rate_percent = models.CharField(max_length=6, default="0")
+    taxable_value = models.PositiveIntegerField()
+    cgst = models.PositiveIntegerField(default=0)
+    sgst = models.PositiveIntegerField(default=0)
+    igst = models.PositiveIntegerField(default=0)
+    state_tax_label = models.CharField(max_length=5, default="SGST")
+    total = models.PositiveIntegerField()
+    note = models.CharField(max_length=300, blank=True)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-issued_at"]
+        indexes = [models.Index(fields=["user", "issued_at"])]
+
+    def __str__(self):
+        return f"{self.number} ({self.total / 100:.2f} INR)"

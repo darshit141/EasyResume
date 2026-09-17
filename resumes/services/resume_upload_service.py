@@ -157,7 +157,7 @@ class ResumeUploadService:
         return resume
 
     @staticmethod
-    def run_parse(resume, provider=None):
+    def run_parse(resume, provider=None, user=None):
         """Runs the AI parse for an already-created, status="processing"
         resume. Called by the background worker (ai_jobs.tasks) — never
         call this directly from a view. On any failure the resume is marked
@@ -173,7 +173,7 @@ class ResumeUploadService:
                     logger.exception("Failed to re-extract text for queued resume parse.")
                     raise ResumeTextExtractionError() from exc
 
-            parsed_data = ResumeParser.parse(extracted_text, provider=provider)
+            parsed_data = ResumeParser.parse(extracted_text, provider=provider, user=user)
             ats_score = ATSScorer.calculate_score(parsed_data)
         except Exception:
             resume.status = "failed"

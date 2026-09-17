@@ -28,6 +28,8 @@ class AccountExportService:
                 "date_joined": user.date_joined.isoformat() if user.date_joined else None,
             },
             "subscription": AccountExportService._subscription(user, Subscription),
+            "billing_profile": AccountExportService._billing_profile(user),
+            "invoices": AccountExportService._invoices(user),
             "resumes": AccountExportService._resumes(user, Resume),
             "job_curations": AccountExportService._job_curations(user, JobResumeCuration),
             "ai_usage_summary": AccountExportService._ai_usage_summary(user, AIUsageLog),
@@ -48,6 +50,43 @@ class AccountExportService:
             ),
             "created_at": subscription.created_at.isoformat(),
         }
+
+    @staticmethod
+    def _billing_profile(user):
+        from billing.models import BillingProfile
+
+        profile = BillingProfile.objects.filter(user=user).first()
+        if not profile:
+            return None
+        return {
+            "country": profile.country,
+            "state_code": profile.state_code,
+            "gstin": profile.gstin,
+            "legal_name": profile.legal_name,
+            "address": profile.address,
+        }
+
+    @staticmethod
+    def _invoices(user):
+        from billing.models import GSTInvoice
+
+        return [
+            {
+                "number": invoice.number,
+                "kind": invoice.kind,
+                "issued_at": invoice.issued_at.isoformat(),
+                "description": invoice.description,
+                "currency": invoice.currency,
+                "taxable_value_paise": invoice.taxable_value,
+                "cgst_paise": invoice.cgst,
+                "sgst_paise": invoice.sgst,
+                "igst_paise": invoice.igst,
+                "total_paise": invoice.total,
+                "place_of_supply": invoice.place_of_supply_name,
+                "buyer_gstin": invoice.buyer_gstin,
+            }
+            for invoice in GSTInvoice.objects.filter(user=user).order_by("issued_at")
+        ]
 
     @staticmethod
     def _resumes(user, Resume):

@@ -104,6 +104,21 @@ class EntitlementsService:
         return CreditService.active_balance(user)
 
     @staticmethod
+    def uses_own_ai_key(user):
+        """Whether this user is paying their provider directly for AI.
+
+        Wrapped because a failure here must not block an AI action: the
+        safe direction to be wrong in is "no personal key", which merely
+        applies the normal quota.
+        """
+        try:
+            from billing.services.user_ai_key_service import UserAIKeyService
+
+            return UserAIKeyService.has_active_key(user)
+        except Exception:  # pragma: no cover - defensive
+            return False
+
+    @staticmethod
     def check_can_use_ai(user):
         """The blanket cost-control gate: covers every AI-backed action
         combined, separate from the narrower `tailored_resumes_per_month`
@@ -112,6 +127,15 @@ class EntitlementsService:
         entitlements = EntitlementsService.for_user(user)
         base_limit = entitlements["ai_calls_per_month"]
         if base_limit is None:
+            return
+
+        # This ceiling exists to cap *our* provider bill, and nothing else.
+        # A user spending their own API quota isn't on that bill, so holding
+        # them to it would be charging them twice for the same call. Note
+        # what this deliberately does not lift: the tailored-resume limit,
+        # Word export, version history. Those are product value rather than
+        # compute cost, and a personal API key buys none of them.
+        if EntitlementsService.uses_own_ai_key(user):
             return
 
         bonus = EntitlementsService.bonus_credits(user)
@@ -135,9 +159,13 @@ class EntitlementsService:
         from resumes.services.llm_service import provider_selection_enabled
 
         entitlements = EntitlementsService.for_user(user)
+        uses_own_key = EntitlementsService.uses_own_ai_key(user)
         limit = entitlements["tailored_resumes_per_month"]
         used = EntitlementsService.tailored_resumes_used_this_month(user)
-        ai_limit = entitlements["ai_calls_per_month"]
+        # Reported as unlimited because that is what check_can_use_ai
+        # actually does for this user — the summary must describe the gate
+        # that runs, not the one that would run without their key.
+        ai_limit = None if uses_own_key else entitlements["ai_calls_per_month"]
         ai_used = EntitlementsService.ai_calls_used_this_month(user)
         bonus = EntitlementsService.bonus_credits(user) if ai_limit is not None else 0
         eff_limit = None if limit is None else limit + bonus
@@ -165,6 +193,11 @@ class EntitlementsService:
             # we are watching for a reply on this account, and how, rather
             # than implying a capability the plan doesn't have.
             "reply_tracking": entitlements["reply_tracking"],
+            # True when the user has supplied their own provider key, which
+            # is why their AI-action counter has stopped mattering. Without
+            # this the UI would keep counting down toward a limit that is no
+            # longer being enforced, which reads as a bug.
+            "uses_own_ai_key": uses_own_key,
         }
 
     @staticmethod

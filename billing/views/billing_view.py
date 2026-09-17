@@ -11,7 +11,9 @@ from rest_framework.views import APIView
 from billing.models import Subscription, StripeWebhookEvent
 from billing.plans import (
     PLANS,
+    PROCESSOR_RAZORPAY,
     SUPPORTED_CURRENCIES,
+    processor_for,
     published_plans,
     format_price_display,
     get_price,
@@ -31,14 +33,31 @@ from billing.serializers.billing_serializer import EntitlementsSerializer
 from billing.services.coupon_service import CouponError
 from billing.services.coupon_service import CouponService
 from billing.services.entitlements_service import EntitlementsService
+from billing.services.gst_service import GSTService
+from billing.services.razorpay_service import RazorpayService
 from billing.services.stripe_service import BillingError, StripeService
 from billing.services.subscription_sync_service import SubscriptionSyncService
 
 logger = logging.getLogger(__name__)
 
 
+_UNAVAILABLE_CODES = {"STRIPE_NOT_CONFIGURED", "RAZORPAY_NOT_CONFIGURED", "RAZORPAY_ERROR"}
+
+# How a customer can pay in each processor's checkout. Shown on the pricing
+# page so an Indian visitor sees "UPI" before they commit to anything.
+_PAYMENT_METHODS = {
+    "stripe": ["card"],
+    PROCESSOR_RAZORPAY: ["upi", "card", "netbanking"],
+}
+
+
 def _billing_error_response(exc):
-    status_code = status.HTTP_503_SERVICE_UNAVAILABLE if exc.code == "STRIPE_NOT_CONFIGURED" else status.HTTP_400_BAD_REQUEST
+    if exc.code in _UNAVAILABLE_CODES:
+        status_code = status.HTTP_503_SERVICE_UNAVAILABLE
+    elif exc.code == "ALREADY_SUBSCRIBED":
+        status_code = status.HTTP_409_CONFLICT
+    else:
+        status_code = status.HTTP_400_BAD_REQUEST
     return Response({"detail": str(exc), "code": exc.code}, status=status_code)
 
 
@@ -57,15 +76,20 @@ def _safe_event_payload(event):
         return {"id": event.get("id"), "type": event.get("type")}
 
 
-def _price_option(plan_id, currency, period):
+def _price_option(plan_id, currency, period, tax_note=""):
     price = get_price(plan_id, currency, period)
     if price is None:
         return None
     original = price.get("original_amount_cents")
+    processor = price.get("processor", "stripe")
     return {
         "amount_cents": price["amount_cents"],
         "display": format_price_display(price["amount_cents"], currency, period),
-        "purchasable": bool(price["stripe_price_id"]),
+        "purchasable": bool(price.get("processor_price_id")),
+        "processor": processor,
+        "payment_methods": _PAYMENT_METHODS.get(processor, ["card"]),
+        "tax_inclusive": bool(price.get("tax_inclusive")),
+        "tax_note": tax_note,
         # Present only while a promotion is running, so the card can show
         # the standard price struck through next to what is actually being
         # charged. Both numbers come from the same resolver as checkout.
@@ -77,14 +101,14 @@ def _price_option(plan_id, currency, period):
     }
 
 
-def _resolve_plan(plan, currency):
+def _resolve_plan(plan, currency, tax_note=""):
     return {
         "id": plan["id"],
         "name": plan["name"],
         "features": plan["features"],
         "currency": currency,
-        "monthly": _price_option(plan["id"], currency, "monthly"),
-        "annual": _price_option(plan["id"], currency, "annual"),
+        "monthly": _price_option(plan["id"], currency, "monthly", tax_note),
+        "annual": _price_option(plan["id"], currency, "annual", tax_note),
     }
 
 
@@ -97,9 +121,10 @@ def _resolve_plan(plan, currency):
         "required, so a pricing page can be shown to signed-out visitors. "
         "`purchasable` is false for any plan/currency/period combination "
         "whose Stripe Price ID hasn't been configured yet — the frontend "
-        "should disable checkout for it. Prices exclude VAT; VAT (where "
-        "applicable) is calculated at Stripe Checkout based on the "
-        "customer's billing location."
+        "should disable checkout for it. EUR and GBP prices exclude VAT, "
+        "which Stripe Checkout calculates from the billing location. INR "
+        "prices include GST and are paid through Razorpay (UPI, cards, "
+        "netbanking); `tax_note` is the line to show under each price."
     ),
     parameters=[
         OpenApiParameter(
@@ -108,7 +133,7 @@ def _resolve_plan(plan, currency):
             location=OpenApiParameter.QUERY,
             required=False,
             enum=list(SUPPORTED_CURRENCIES),
-            description="EUR or GBP. Defaults to EUR; an unsupported value also falls back to EUR.",
+            description="EUR, GBP or INR. Defaults to EUR; an unsupported value also falls back to EUR.",
         )
     ],
     responses={status.HTTP_200_OK: PlanSerializer(many=True)},
@@ -118,7 +143,10 @@ class PlanListAPIView(APIView):
 
     def get(self, request):
         currency = normalize_currency(request.query_params.get("currency"))
-        resolved = [_resolve_plan(plan, currency) for plan in published_plans()]
+        # Read once per request: the note depends on live GST settings, and
+        # every price on the page should say the same thing.
+        tax_note = GSTService.price_tax_note(currency)
+        resolved = [_resolve_plan(plan, currency, tax_note) for plan in published_plans()]
         return Response(PlanSerializer(resolved, many=True).data)
 
 
@@ -157,12 +185,16 @@ class EntitlementsAPIView(APIView):
 
 @extend_schema(
     tags=["Billing"],
-    summary="Create a Stripe Checkout session",
+    summary="Start checkout for a paid plan",
     description=(
-        "Creates a Stripe subscription Checkout session for the requested plan "
-        "and returns its URL — the frontend redirects the browser there. The "
-        "local subscription is only marked active once Stripe confirms payment "
-        "via webhook, never at checkout-session-creation time."
+        "Routes by currency. EUR/GBP: creates a Stripe Checkout session and "
+        "returns its URL for the browser to redirect to. INR: creates a "
+        "Razorpay subscription and returns what Razorpay Checkout needs to "
+        "open (UPI AutoPay, cards, netbanking); the account's billing state "
+        "must be saved first (code BILLING_STATE_REQUIRED otherwise), since "
+        "it decides the GST place of supply. In neither case does this mark "
+        "the subscription active — Stripe's webhook does, or for INR a "
+        "signature-verified confirmation re-checked against Razorpay's API."
     ),
     request=CheckoutRequestSerializer,
     responses={
@@ -182,17 +214,26 @@ class CreateCheckoutSessionAPIView(APIView):
         if not serializer.is_valid():
             return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
+        currency = normalize_currency(serializer.validated_data.get("currency"))
         try:
-            checkout_url = StripeService.create_checkout_session(
-                request.user,
-                serializer.validated_data["plan_id"],
-                currency=normalize_currency(serializer.validated_data.get("currency")),
-                billing_period=serializer.validated_data["billing_period"],
-            )
+            if processor_for(currency) == PROCESSOR_RAZORPAY:
+                result = RazorpayService.start_checkout(
+                    request.user,
+                    serializer.validated_data["plan_id"],
+                    billing_period=serializer.validated_data["billing_period"],
+                )
+            else:
+                checkout_url = StripeService.create_checkout_session(
+                    request.user,
+                    serializer.validated_data["plan_id"],
+                    currency=currency,
+                    billing_period=serializer.validated_data["billing_period"],
+                )
+                result = {"processor": "stripe", "checkout_url": checkout_url}
         except BillingError as exc:
             return _billing_error_response(exc)
 
-        return Response(CheckoutResponseSerializer({"checkout_url": checkout_url}).data)
+        return Response(CheckoutResponseSerializer(result).data)
 
 
 @extend_schema(
@@ -209,6 +250,18 @@ class CreatePortalSessionAPIView(APIView):
     permission_classes = [IsAuthenticated]
 
     def post(self, request):
+        subscription = Subscription.objects.filter(user=request.user).first()
+        if subscription is not None and subscription.payment_processor == PROCESSOR_RAZORPAY:
+            # Razorpay has no hosted customer portal. The settings page
+            # offers cancellation and invoices directly for these accounts;
+            # this says so if an older client asks anyway.
+            return Response(
+                {
+                    "detail": "Rupee subscriptions are managed from Settings, not a billing portal.",
+                    "code": "PORTAL_NOT_AVAILABLE",
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
         try:
             portal_url = StripeService.create_portal_session(request.user)
         except BillingError as exc:

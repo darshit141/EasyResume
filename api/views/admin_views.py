@@ -179,6 +179,70 @@ DEFAULT_CONFIGS = [
         "description": "Kira API key. Stored encrypted; never shown again after saving.",
     },
     {
+        "key": "BYOK_ENABLED",
+        "category": "llm",
+        "value_type": "boolean",
+        "description": (
+            "Let users save their own Google Gemini API key. While a user's own key is "
+            "active their AI requests use it, so the monthly AI-action limit — which only "
+            "exists to cap our provider bill — stops applying to them. It unlocks no paid "
+            "features. Switching this off immediately stops every saved key being used, "
+            "and users can still delete theirs."
+        ),
+    },
+    {
+        "key": "GST_ENABLED",
+        "category": "tax",
+        "value_type": "boolean",
+        "description": (
+            "Charge Indian GST on rupee subscriptions. Turn on only once the business holds "
+            "a GSTIN — an unregistered supplier must not collect GST. Prices stay the same "
+            "either way (they include GST); this changes what the invoice shows."
+        ),
+    },
+    {
+        "key": "GST_RATE_PERCENT",
+        "category": "tax",
+        "value_type": "string",
+        "description": "GST rate for the subscription, in percent (18 for software services).",
+    },
+    {
+        "key": "GST_SELLER_GSTIN",
+        "category": "tax",
+        "value_type": "string",
+        "description": "The business's 15-character GSTIN. An invalid one is ignored and no GST is charged until it is corrected.",
+    },
+    {
+        "key": "GST_SELLER_STATE_CODE",
+        "category": "tax",
+        "value_type": "string",
+        "description": "Two-digit GST state code of the business (e.g. 27 for Maharashtra). Read from the GSTIN when that is set.",
+    },
+    {
+        "key": "GST_SELLER_LEGAL_NAME",
+        "category": "tax",
+        "value_type": "string",
+        "description": "Legal name printed on invoices.",
+    },
+    {
+        "key": "GST_SELLER_ADDRESS",
+        "category": "tax",
+        "value_type": "string",
+        "description": "Registered address printed on invoices.",
+    },
+    {
+        "key": "GST_SAC_CODE",
+        "category": "tax",
+        "value_type": "string",
+        "description": "Services Accounting Code printed on tax invoices. Confirm the right code with your accountant.",
+    },
+    {
+        "key": "GST_INVOICE_PREFIX",
+        "category": "tax",
+        "value_type": "string",
+        "description": "Up to four letters starting every invoice number (PREFIX/2627/000001). Changing it mid-year starts a visibly different series.",
+    },
+    {
         "key": "MAX_RESUMES_PER_USER",
         "category": "limits",
         "value_type": "integer",

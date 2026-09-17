@@ -2,10 +2,13 @@ from django.contrib import admin
 
 from billing.models import (
     AIUsageLog,
+    BillingProfile,
     Coupon,
     CouponRedemption,
+    GSTInvoice,
     PlanPrice,
     PricingOffer,
+    RazorpayWebhookEvent,
     StripeWebhookEvent,
     Subscription,
 )
@@ -13,8 +16,8 @@ from billing.models import (
 
 @admin.register(Subscription)
 class SubscriptionAdmin(admin.ModelAdmin):
-    list_display = ("user", "plan_id", "status", "current_period_end", "updated_at")
-    list_filter = ("plan_id", "status")
+    list_display = ("user", "plan_id", "status", "payment_processor", "currency", "current_period_end", "updated_at")
+    list_filter = ("plan_id", "status", "payment_processor", "currency")
     search_fields = ("user__email",)
     readonly_fields = ("created_at", "updated_at")
 
@@ -76,8 +79,13 @@ class PlanPriceAdmin(admin.ModelAdmin):
 
     @admin.display(boolean=True, description="Purchasable")
     def purchasable(self, price):
-        # A price with no Stripe id displays but cannot be bought - worth
-        # seeing at a glance rather than discovering at checkout.
+        # A price with no processor id displays but cannot be bought - worth
+        # seeing at a glance rather than discovering at checkout. INR is
+        # charged through a Razorpay Plan, everything else a Stripe Price.
+        from billing.plans import PROCESSOR_RAZORPAY, processor_for
+
+        if processor_for(price.currency) == PROCESSOR_RAZORPAY:
+            return bool(price.razorpay_plan_id)
         return bool(price.stripe_price_id)
 
 
@@ -97,3 +105,43 @@ class PricingOfferAdmin(admin.ModelAdmin):
         not the same as is_active, because the dates and the Stripe price
         both have to line up too."""
         return offer.is_live()
+
+
+@admin.register(RazorpayWebhookEvent)
+class RazorpayWebhookEventAdmin(admin.ModelAdmin):
+    list_display = ("event_type", "event_id", "processed_at", "error", "created_at")
+    list_filter = ("event_type",)
+    search_fields = ("event_id",)
+    readonly_fields = [field.name for field in RazorpayWebhookEvent._meta.fields]
+
+    def has_add_permission(self, request):
+        return False
+
+
+@admin.register(BillingProfile)
+class BillingProfileAdmin(admin.ModelAdmin):
+    list_display = ("user", "state_code", "gstin", "legal_name", "updated_at")
+    search_fields = ("user__email", "gstin", "legal_name")
+
+
+@admin.register(GSTInvoice)
+class GSTInvoiceAdmin(admin.ModelAdmin):
+    """Read-only on purpose. An issued invoice is a legal record: a mistake
+    is corrected with a credit note, never by editing the original."""
+
+    list_display = ("number", "kind", "issued_at", "buyer_email", "place_of_supply_name", "total_rupees")
+    list_filter = ("kind", "financial_year", "supply_type")
+    search_fields = ("number", "buyer_email", "buyer_gstin", "razorpay_payment_id")
+    readonly_fields = [field.name for field in GSTInvoice._meta.fields]
+
+    @admin.display(description="Total (INR)")
+    def total_rupees(self, invoice):
+        from billing.gst import rupees
+
+        return rupees(invoice.total)
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_delete_permission(self, request, obj=None):
+        return False

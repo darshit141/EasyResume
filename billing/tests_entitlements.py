@@ -7,6 +7,7 @@ from rest_framework.test import APIClient
 from authentication.models import User
 from billing.entitlements import FREE_ENTITLEMENTS
 from billing.models import AIUsageLog, Subscription
+from billing.serializers.billing_serializer import EntitlementsSerializer
 from billing.services.entitlements_service import (
     EntitlementsService,
     FeatureRequiresProError,
@@ -562,3 +563,44 @@ class AIUsageEndpointGatingTests(TestCase):
 
         self.assertEqual(response.status_code, 200)
         mock_service.return_value.get_or_create_gap_analysis.assert_called_once()
+
+
+class EntitlementsContractTests(TestCase):
+    """The `/billing/entitlements/` view returns `usage_summary`'s dict
+    directly, so `EntitlementsSerializer` shapes nothing at runtime — it is
+    purely the published OpenAPI contract. That makes drift invisible
+    without a test: fields were added to the service (bonus credits,
+    application quota, reply tracking, template customization) and the
+    schema kept advertising the older, smaller response. Clients generated
+    from that schema silently lose the new fields.
+    """
+
+    def setUp(self):
+        self.user = _make_user("contract@example.com")
+        self.client = APIClient()
+        self.client.force_authenticate(self.user)
+
+    def test_serializer_documents_every_field_the_service_returns(self):
+        summary = EntitlementsService.usage_summary(self.user)
+
+        self.assertEqual(
+            set(EntitlementsSerializer().fields),
+            set(summary),
+            "EntitlementsSerializer and EntitlementsService.usage_summary have "
+            "drifted apart — the OpenAPI schema no longer describes the real "
+            "response.",
+        )
+
+    def test_endpoint_returns_the_documented_fields(self):
+        response = self.client.get("/api/billing/entitlements/")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(set(response.data), set(EntitlementsSerializer().fields))
+
+    def test_documented_response_validates_against_its_own_serializer(self):
+        """A field present but typed wrongly is as misleading as a missing
+        one, so the real payload is round-tripped through the contract."""
+        response = self.client.get("/api/billing/entitlements/")
+
+        serializer = EntitlementsSerializer(data=response.data)
+        self.assertTrue(serializer.is_valid(), serializer.errors)

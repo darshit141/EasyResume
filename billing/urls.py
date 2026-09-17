@@ -14,6 +14,14 @@ from billing.views import (
     RewardedAdTicketAPIView,
     StripeWebhookAPIView,
     SubscriptionStatusAPIView,
+    UserAIKeyAPIView,
+    BillingProfileAPIView,
+    GSTInfoAPIView,
+    InvoiceListAPIView,
+    InvoicePdfAPIView,
+    RazorpayCancelAPIView,
+    RazorpayConfirmAPIView,
+    RazorpayWebhookAPIView,
 )
 
 urlpatterns = [
@@ -21,6 +29,7 @@ urlpatterns = [
     path("subscription/", SubscriptionStatusAPIView.as_view(), name="billing-subscription"),
     path("entitlements/", EntitlementsAPIView.as_view(), name="billing-entitlements"),
     path("credits/", CreditsStatusAPIView.as_view(), name="billing-credits"),
+    path("ai-keys/", UserAIKeyAPIView.as_view(), name="billing-user-ai-keys"),
     path("ads/config/", DisplayAdConfigAPIView.as_view(), name="billing-display-ads-config"),
     path(
         "credits/rewarded-ad/ticket/",
@@ -35,6 +44,14 @@ urlpatterns = [
     path("checkout/", CreateCheckoutSessionAPIView.as_view(), name="billing-checkout"),
     path("portal/", CreatePortalSessionAPIView.as_view(), name="billing-portal"),
     path("webhook/", StripeWebhookAPIView.as_view(), name="billing-webhook"),
+    # Rupee billing: Razorpay (UPI AutoPay, cards, netbanking) and GST.
+    path("profile/", BillingProfileAPIView.as_view(), name="billing-profile"),
+    path("gst/", GSTInfoAPIView.as_view(), name="billing-gst-info"),
+    path("razorpay/confirm/", RazorpayConfirmAPIView.as_view(), name="billing-razorpay-confirm"),
+    path("razorpay/webhook/", RazorpayWebhookAPIView.as_view(), name="billing-razorpay-webhook"),
+    path("subscription/cancel/", RazorpayCancelAPIView.as_view(), name="billing-subscription-cancel"),
+    path("invoices/", InvoiceListAPIView.as_view(), name="billing-invoices"),
+    path("invoices/<int:invoice_id>/pdf/", InvoicePdfAPIView.as_view(), name="billing-invoice-pdf"),
     path("coupons/redeem/", CouponRedeemAPIView.as_view(), name="billing-coupon-redeem"),
     path("admin/coupons/", AdminCouponListCreateAPIView.as_view(), name="billing-admin-coupons"),
     path(

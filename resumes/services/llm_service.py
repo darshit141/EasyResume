@@ -944,10 +944,17 @@ def _provider_api_key(setting_name):
     return str(get_config_value(setting_name, getattr(settings, setting_name, "")) or "").strip()
 
 
-def _build_client(provider, timeout, max_retries, temperature, max_output_tokens):
+def _build_client(provider, timeout, max_retries, temperature, max_output_tokens, api_key_override=None):
+    """Construct one provider client.
+
+    ``api_key_override`` is a key belonging to the *user* rather than to the
+    server (see billing.services.user_ai_key_service). It is passed in as an
+    argument and used immediately; it is never cached on the module, never
+    written to a setting, and never logged.
+    """
     if provider == "groq":
         return GroqLLMService(
-            api_key=_provider_api_key("GROQ_API_KEY"),
+            api_key=api_key_override or _provider_api_key("GROQ_API_KEY"),
             model=get_config_value("GROQ_MODEL", settings.GROQ_MODEL),
             timeout=timeout,
             max_retries=max_retries,
@@ -958,7 +965,7 @@ def _build_client(provider, timeout, max_retries, temperature, max_output_tokens
 
     if provider == "gemini":
         return GeminiLLMService(
-            api_key=_provider_api_key("GEMINI_API_KEY"),
+            api_key=api_key_override or _provider_api_key("GEMINI_API_KEY"),
             model=get_config_value("GEMINI_MODEL", settings.GEMINI_MODEL),
             timeout=timeout,
             max_retries=max_retries,
@@ -977,7 +984,7 @@ def _build_client(provider, timeout, max_retries, temperature, max_output_tokens
 
     if provider == "kira":
         return KiraLLMService(
-            api_key=_provider_api_key("KIRA_API_KEY"),
+            api_key=api_key_override or _provider_api_key("KIRA_API_KEY"),
             model=get_config_value("KIRA_MODEL", settings.KIRA_MODEL),
             timeout=timeout,
             max_retries=max_retries,
@@ -997,7 +1004,34 @@ def _build_client(provider, timeout, max_retries, temperature, max_output_tokens
     )
 
 
-def get_llm_service(provider=None):
+def _llm_tuning():
+    """The four runtime knobs every client is built with."""
+    return (
+        get_config_value("LLM_TIMEOUT", settings.LLM_TIMEOUT),
+        get_config_value("LLM_MAX_RETRIES", settings.LLM_MAX_RETRIES),
+        get_config_value("LLM_TEMPERATURE", settings.LLM_TEMPERATURE),
+        get_config_value("LLM_MAX_OUTPUT_TOKENS", settings.LLM_MAX_OUTPUT_TOKENS),
+    )
+
+
+def build_client_with_key(provider, api_key):
+    """A client for `provider` using the supplied key and nothing else.
+
+    Exists for one caller: validating a key a user has just pasted, before
+    it is stored. Deliberately unwrapped by any fallback — the question
+    being asked is "does *this* key work", and quietly answering it with a
+    different provider's credentials would be worse than useless.
+    """
+    if provider not in SUPPORTED_PROVIDERS:
+        raise LLMServiceError("Unsupported AI provider.")
+    timeout, max_retries, temperature, max_output_tokens = _llm_tuning()
+    return _build_client(
+        provider, timeout, max_retries, temperature, max_output_tokens,
+        api_key_override=api_key,
+    )
+
+
+def get_llm_service(provider=None, user=None):
     """Build the requested provider's client without exposing it to controllers.
 
     ``provider`` lets a single request opt into a specific AI provider
@@ -1018,12 +1052,22 @@ def get_llm_service(provider=None):
     if resolved_provider not in SUPPORTED_PROVIDERS:
         raise LLMServiceError("Unsupported AI provider.")
 
-    timeout = get_config_value("LLM_TIMEOUT", settings.LLM_TIMEOUT)
-    max_retries = get_config_value("LLM_MAX_RETRIES", settings.LLM_MAX_RETRIES)
-    temperature = get_config_value("LLM_TEMPERATURE", settings.LLM_TEMPERATURE)
-    max_output_tokens = get_config_value("LLM_MAX_OUTPUT_TOKENS", settings.LLM_MAX_OUTPUT_TOKENS)
+    timeout, max_retries, temperature, max_output_tokens = _llm_tuning()
 
-    primary = _build_client(resolved_provider, timeout, max_retries, temperature, max_output_tokens)
+    user_key = _user_key_for(user, resolved_provider)
+    primary = _build_client(
+        resolved_provider, timeout, max_retries, temperature, max_output_tokens,
+        api_key_override=user_key,
+    )
+
+    # A user's own key is never silently swapped for the server's, for the
+    # same reason an explicitly requested provider isn't: they chose to
+    # spend their own quota on this provider, and falling back would spend
+    # ours instead without asking. If their key fails they get a real error
+    # that names the problem, which is the only way they will ever know to
+    # fix it in the provider's console.
+    if user_key:
+        return primary
 
     fallback_provider = get_config_value("LLM_FALLBACK_PROVIDER", settings.LLM_FALLBACK_PROVIDER)
     if (
@@ -1036,3 +1080,22 @@ def get_llm_service(provider=None):
         return FallbackLLMService(primary, fallback_client, fallback_provider)
 
     return primary
+
+
+def _user_key_for(user, provider):
+    """The caller's own key for this provider, if they have a working one.
+
+    Imported lazily and wrapped: BYOK is an optional convenience, and a
+    problem looking it up — a migration not yet applied on a worker, a
+    database blip — must degrade to "use the server's key", never to a
+    failed resume generation.
+    """
+    if user is None:
+        return None
+    try:
+        from billing.services.user_ai_key_service import UserAIKeyService
+
+        return UserAIKeyService.active_key_for(user, provider)
+    except Exception:  # pragma: no cover - defensive
+        logger.warning("Could not resolve a user-supplied AI key; using the server key.", exc_info=True)
+        return None
