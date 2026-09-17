@@ -8,7 +8,7 @@ always be withdrawn.
 
 from unittest.mock import patch
 
-from django.test import TestCase
+from django.test import TestCase, override_settings
 from rest_framework.test import APIClient
 
 from api.models import SystemConfiguration
@@ -282,8 +282,15 @@ class BYOKIsolationTests(TestCase):
         self.assertNotEqual(service.api_key, VALID_KEY)
 
 
+@override_settings(LLM_PROVIDER="gemini")
 class BYOKQuotaTests(TestCase):
-    """What a personal key buys — and, just as importantly, what it doesn't."""
+    """What a personal key buys — and, just as importantly, what it doesn't.
+
+    Pinned to LLM_PROVIDER="gemini" throughout: these tests are about
+    whether a *gemini* key lifts the ceiling for a *gemini* call, and must
+    not depend on whatever LLM_PROVIDER happens to be set to in whichever
+    environment the suite runs in.
+    """
 
     def setUp(self):
         _enable_byok(True)
@@ -294,14 +301,43 @@ class BYOKQuotaTests(TestCase):
             with self.assertRaises(PlanLimitReachedError):
                 EntitlementsService.check_can_use_ai(self.user)
 
-    def test_a_personal_key_lifts_the_ai_ceiling(self):
+    def test_a_personal_key_lifts_the_ai_ceiling_for_its_own_provider(self):
         """That ceiling exists only to cap IntelliResume's provider bill. A
-        user paying their own provider is not on that bill."""
+        user paying their own provider is not on that bill — for calls
+        actually served by that provider."""
         with _accept_validation():
             UserAIKeyService.set_key(self.user, "gemini", VALID_KEY)
 
         with patch.dict(FREE_ENTITLEMENTS, {"ai_calls_per_month": 0}):
             EntitlementsService.check_can_use_ai(self.user)  # must not raise
+            # Explicit and implicit resolution to the key's own provider
+            # both count — the server default here *is* gemini.
+            EntitlementsService.check_can_use_ai(self.user, provider="gemini")
+
+    def test_a_gemini_key_does_not_lift_the_ceiling_for_a_different_provider(self):
+        """The exact bug this guards against: a user's key is only for
+        Gemini, so a call that actually resolves to Groq is not covered by
+        it and must still be billed to the free allowance — a security
+        review flagged the provider-agnostic version of this check as a
+        way to permanently bypass the cost-control quota for free."""
+        with _accept_validation():
+            UserAIKeyService.set_key(self.user, "gemini", VALID_KEY)
+
+        with patch.dict(FREE_ENTITLEMENTS, {"ai_calls_per_month": 0}):
+            with self.assertRaises(PlanLimitReachedError):
+                EntitlementsService.check_can_use_ai(self.user, provider="groq")
+
+    @override_settings(LLM_PROVIDER="groq")
+    def test_a_gemini_key_does_not_lift_the_ceiling_when_the_server_default_is_different(self):
+        """The same bug, via the common path: no ai_provider was requested
+        at all, so it resolves to whatever the server's own default is —
+        here, deliberately not gemini."""
+        with _accept_validation():
+            UserAIKeyService.set_key(self.user, "gemini", VALID_KEY)
+
+        with patch.dict(FREE_ENTITLEMENTS, {"ai_calls_per_month": 0}):
+            with self.assertRaises(PlanLimitReachedError):
+                EntitlementsService.check_can_use_ai(self.user)
 
     def test_a_personal_key_does_not_lift_the_tailored_resume_limit(self):
         """The marketed feature limit is product value, not compute cost."""
@@ -331,6 +367,18 @@ class BYOKQuotaTests(TestCase):
         self.assertTrue(summary["uses_own_ai_key"])
         self.assertIsNone(summary["ai_calls_limit"])
         self.assertIsNotNone(summary["tailored_resumes_limit"])
+
+    @override_settings(LLM_PROVIDER="groq")
+    def test_usage_summary_does_not_claim_unlimited_for_an_unrelated_key(self):
+        """A gemini key must not make the summary tell a user their AI
+        allowance is unlimited when an ordinary request — no provider
+        specified — actually resolves to Groq and is still metered."""
+        with _accept_validation():
+            UserAIKeyService.set_key(self.user, "gemini", VALID_KEY)
+
+        summary = EntitlementsService.usage_summary(self.user)
+        self.assertFalse(summary["uses_own_ai_key"])
+        self.assertIsNotNone(summary["ai_calls_limit"])
 
 
 class BYOKEndpointTests(TestCase):

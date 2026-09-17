@@ -104,26 +104,48 @@ class EntitlementsService:
         return CreditService.active_balance(user)
 
     @staticmethod
-    def uses_own_ai_key(user):
-        """Whether this user is paying their provider directly for AI.
+    def uses_own_ai_key(user, provider=None):
+        """Whether this user is paying their provider directly for the AI
+        call that would actually run.
+
+        `provider` must be the *resolved* provider that call will be served
+        by — not the raw `ai_provider` a request asked for, which can be
+        None. A key for one provider says nothing about who pays for a
+        different one: BYOK today only covers Gemini, so a user with a
+        saved Gemini key who is served by the server's Groq credentials
+        (Groq is the default `LLM_PROVIDER`) is not covering that call, and
+        must not have it waved through on the strength of an unrelated key.
+        Resolved here, not left to the caller, so every call site gets the
+        same rule automatically. With no provider given, resolves to the
+        server's own default — the account-level answer `usage_summary`
+        needs, for a request that will not name a provider at all.
 
         Wrapped because a failure here must not block an AI action: the
         safe direction to be wrong in is "no personal key", which merely
         applies the normal quota.
         """
         try:
+            from resumes.services.llm_service import resolve_provider
             from billing.services.user_ai_key_service import UserAIKeyService
 
-            return UserAIKeyService.has_active_key(user)
+            return UserAIKeyService.has_active_key(user, provider=resolve_provider(provider))
         except Exception:  # pragma: no cover - defensive
             return False
 
     @staticmethod
-    def check_can_use_ai(user):
+    def check_can_use_ai(user, provider=None):
         """The blanket cost-control gate: covers every AI-backed action
         combined, separate from the narrower `tailored_resumes_per_month`
         feature limit. Skip entirely for the `standard` parser — it isn't
-        an AI call, so it never needs a permission check."""
+        an AI call, so it never needs a permission check.
+
+        `provider` is the raw `ai_provider` the request asked for (or
+        None) — the same value the view passes on to `resolve_provider`
+        when it actually builds the LLM client a few lines later. Pass it
+        through here too: the BYOK bypass below must be scoped to the
+        provider this specific call resolves to, not to "does this user
+        have a key for anything" (see uses_own_ai_key).
+        """
         entitlements = EntitlementsService.for_user(user)
         base_limit = entitlements["ai_calls_per_month"]
         if base_limit is None:
@@ -135,7 +157,7 @@ class EntitlementsService:
         # what this deliberately does not lift: the tailored-resume limit,
         # Word export, version history. Those are product value rather than
         # compute cost, and a personal API key buys none of them.
-        if EntitlementsService.uses_own_ai_key(user):
+        if EntitlementsService.uses_own_ai_key(user, provider=provider):
             return
 
         bonus = EntitlementsService.bonus_credits(user)
@@ -159,12 +181,19 @@ class EntitlementsService:
         from resumes.services.llm_service import provider_selection_enabled
 
         entitlements = EntitlementsService.for_user(user)
+        # No provider given: this describes the account in general, for a
+        # request that has not named one, which resolves to the server's
+        # default provider — see uses_own_ai_key. A key for a provider the
+        # user isn't the server default must not be reported as unlimited
+        # here either; it would tell someone their quota doesn't matter
+        # when an ordinary request still spends it.
         uses_own_key = EntitlementsService.uses_own_ai_key(user)
         limit = entitlements["tailored_resumes_per_month"]
         used = EntitlementsService.tailored_resumes_used_this_month(user)
         # Reported as unlimited because that is what check_can_use_ai
-        # actually does for this user — the summary must describe the gate
-        # that runs, not the one that would run without their key.
+        # actually does for this user's default-provider requests — the
+        # summary must describe the gate that runs, not the one that would
+        # run without their key.
         ai_limit = None if uses_own_key else entitlements["ai_calls_per_month"]
         ai_used = EntitlementsService.ai_calls_used_this_month(user)
         bonus = EntitlementsService.bonus_credits(user) if ai_limit is not None else 0

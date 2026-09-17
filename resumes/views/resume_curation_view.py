@@ -288,7 +288,7 @@ class JobResumeCurationGenerateAPIView(APIView):
             EntitlementsService.check_ai_provider_allowed(request.user, provider)
             if creates_new_version:
                 EntitlementsService.check_can_generate_tailored_resume(request.user)
-                EntitlementsService.check_can_use_ai(request.user)
+                EntitlementsService.check_can_use_ai(request.user, provider=provider)
         except PlanRestrictionError as exc:
             return plan_restriction_response(exc)
 

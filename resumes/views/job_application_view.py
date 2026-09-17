@@ -82,7 +82,7 @@ class JobApplicationDraftAPIView(APIView):
 
         try:
             EntitlementsService.check_ai_provider_allowed(request.user, provider)
-            EntitlementsService.check_can_use_ai(request.user)
+            EntitlementsService.check_can_use_ai(request.user, provider=provider)
             # Checked at draft time as well as send time so a user who has
             # exhausted their allowance is told before they write an email
             # they can't send, not after.

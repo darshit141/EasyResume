@@ -104,7 +104,7 @@ class ResumeUploadAPIView(APIView):
         try:
             EntitlementsService.check_ai_provider_allowed(request.user, provider)
             if is_ai_call:
-                EntitlementsService.check_can_use_ai(request.user)
+                EntitlementsService.check_can_use_ai(request.user, provider=provider)
         except PlanRestrictionError as exc:
             return plan_restriction_response(exc)
 

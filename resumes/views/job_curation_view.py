@@ -301,7 +301,7 @@ class JobCurationCreateAPIView(APIView):
         if wants_analysis:
             try:
                 EntitlementsService.check_ai_provider_allowed(request.user, provider)
-                EntitlementsService.check_can_use_ai(request.user)
+                EntitlementsService.check_can_use_ai(request.user, provider=provider)
             except PlanRestrictionError as exc:
                 return plan_restriction_response(exc)
 
@@ -552,7 +552,7 @@ class JobGapAnalysisAPIView(APIView):
         try:
             EntitlementsService.check_ai_provider_allowed(request.user, provider)
             if not already_has_gap_analysis:
-                EntitlementsService.check_can_use_ai(request.user)
+                EntitlementsService.check_can_use_ai(request.user, provider=provider)
         except PlanRestrictionError as exc:
             return plan_restriction_response(exc)
 

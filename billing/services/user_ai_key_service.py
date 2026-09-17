@@ -192,9 +192,12 @@ class UserAIKeyService:
     def has_active_key(user, provider=None):
         """Whether this user is currently covering their own AI cost.
 
-        With no provider given, asks about any provider — which is what the
-        quota check needs, since it only cares whether *somebody else* is
-        paying for the next call.
+        Pass the specific provider a call will actually be served by — a
+        key for one provider must not be read as "somebody else is paying"
+        for a request that will run on a *different* provider's server
+        credentials. Only entitlements_service.usage_summary(), which is
+        describing the account rather than gating one specific call, asks
+        with no provider at all.
         """
         if user is None or not getattr(user, "is_authenticated", False):
             return False
