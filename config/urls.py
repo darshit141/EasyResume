@@ -8,8 +8,16 @@ from drf_spectacular.views import (
     SpectacularSwaggerView,
 )
 
+from blog.views import RobotsTxtView, SitemapXMLView
+
 urlpatterns = [
     path("admin/", admin.site.urls),
+
+    # Search engines fetch these from the site root, not from /api/ — see
+    # blog/views/seo_view.py for why. Production nginx proxies both paths
+    # straight to this backend, the same way it already does for /api/.
+    path("sitemap.xml", SitemapXMLView.as_view(), name="sitemap-xml"),
+    path("robots.txt", RobotsTxtView.as_view(), name="robots-txt"),
 
     # Existing APIs
     path("api/", include("api.urls")),
