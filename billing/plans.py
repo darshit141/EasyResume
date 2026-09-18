@@ -34,15 +34,51 @@ import os
 
 from billing.entitlements import FREE_AI_CALLS_PER_MONTH
 
-SUPPORTED_CURRENCIES = ("EUR", "GBP")
+SUPPORTED_CURRENCIES = ("EUR", "GBP", "INR")
 DEFAULT_CURRENCY = "EUR"
 BILLING_PERIODS = ("monthly", "annual")
-CURRENCY_SYMBOLS = {"EUR": "€", "GBP": "£"}
+CURRENCY_SYMBOLS = {"EUR": "€", "GBP": "£", "INR": "₹"}
+
+# Which payment processor can actually take money in each currency.
+#
+# INR goes through Razorpay, not Stripe, and not by preference. The business
+# is an Indian private limited company, and Stripe is invite-only for Indian
+# businesses; its UPI support is offered to accounts in other countries
+# only, and Stripe Tax cannot be used by an India-based business either.
+# Razorpay supports UPI AutoPay, cards and bank e-mandates for recurring
+# billing, which is what an Indian subscriber expects to see at checkout.
+PROCESSOR_STRIPE = "stripe"
+PROCESSOR_RAZORPAY = "razorpay"
+CURRENCY_PROCESSORS = {"EUR": PROCESSOR_STRIPE, "GBP": PROCESSOR_STRIPE, "INR": PROCESSOR_RAZORPAY}
+
+# Prices in these currencies already include tax (see billing/gst.py for
+# why INR is priced that way). EUR and GBP prices exclude VAT, which Stripe
+# adds at checkout.
+TAX_INCLUSIVE_CURRENCIES = frozenset({"INR"})
+
+# RBI caps a UPI AutoPay debit at Rs 15,000 without fresh authentication, so
+# a recurring INR price above this cannot renew over UPI. Every INR price
+# in the catalog sits far below it; the check exists so an admin price edit
+# can't quietly break UPI renewals.
+UPI_AUTOPAY_MAX_PAISE = 1_500_000
 
 logger = logging.getLogger(__name__)
 
 
+def processor_for(currency):
+    return CURRENCY_PROCESSORS.get(normalize_currency(currency), PROCESSOR_STRIPE)
+
+
 def _price(plan_id, currency, period, default_cents, env_price_id):
+    """One catalog price.
+
+    `processor_price_id` is the identifier checkout hands to the processor:
+    a Stripe Price for EUR/GBP, a Razorpay Plan for INR. `stripe_price_id`
+    is kept alongside it, blank for non-Stripe currencies, because a great
+    deal of existing code (and the admin) reads that key by name.
+    """
+    processor = CURRENCY_PROCESSORS[currency]
+    processor_price_id = os.getenv(env_price_id, "")
     # The plan id is part of the amount's env key: it used to be hardcoded
     # to PRO_, so a second tier would silently have read Pro's override.
     return {
@@ -52,7 +88,9 @@ def _price(plan_id, currency, period, default_cents, env_price_id):
                 str(default_cents),
             )
         ),
-        "stripe_price_id": os.getenv(env_price_id, ""),
+        "processor": processor,
+        "processor_price_id": processor_price_id,
+        "stripe_price_id": processor_price_id if processor == PROCESSOR_STRIPE else "",
     }
 
 
@@ -92,6 +130,18 @@ PRO_PLAN = {
         "GBP": {
             "monthly": _price("pro", "GBP", "monthly", 1299, "STRIPE_PRICE_ID_PRO_GBP_MONTHLY"),
             "annual": _price("pro", "GBP", "annual", 9900, "STRIPE_PRICE_ID_PRO_GBP_ANNUAL"),
+        },
+        # Rs 499/mo and Rs 3,999/yr, GST included - a starting hypothesis,
+        # not a finding, and editable from the admin like every other price.
+        # India-native resume tools start around Rs 249/mo and international
+        # ones are sold at around Rs 1,999/mo; this sits between them, which
+        # is where "cheaper, but more value per outcome" belongs. It is
+        # roughly purchasing-power parity with the EUR price rather than an
+        # exchange-rate conversion of it, and the annual discount (~33%)
+        # matches the EUR/GBP structure for the reason given above.
+        "INR": {
+            "monthly": _price("pro", "INR", "monthly", 49900, "RAZORPAY_PLAN_ID_PRO_INR_MONTHLY"),
+            "annual": _price("pro", "INR", "annual", 399900, "RAZORPAY_PLAN_ID_PRO_INR_ANNUAL"),
         },
     },
 }
@@ -138,6 +188,10 @@ MAX_PLAN = {
         "GBP": {
             "monthly": _price("max", "GBP", "monthly", 2499, "STRIPE_PRICE_ID_MAX_GBP_MONTHLY"),
             "annual": _price("max", "GBP", "annual", 20900, "STRIPE_PRICE_ID_MAX_GBP_ANNUAL"),
+        },
+        "INR": {
+            "monthly": _price("max", "INR", "monthly", 99900, "RAZORPAY_PLAN_ID_MAX_INR_MONTHLY"),
+            "annual": _price("max", "INR", "annual", 799900, "RAZORPAY_PLAN_ID_MAX_INR_ANNUAL"),
         },
     },
 }
@@ -199,6 +253,32 @@ def find_plan_by_stripe_price_id(stripe_price_id):
     return None
 
 
+def find_plan_by_razorpay_plan_id(razorpay_plan_id):
+    """The Razorpay counterpart of find_plan_by_stripe_price_id: which
+    (plan_id, currency, billing_period) a Razorpay Plan on a subscription
+    belongs to, or None if it isn't one of ours."""
+    if not razorpay_plan_id:
+        return None
+
+    try:
+        from billing.models import PlanPrice
+
+        row = PlanPrice.objects.filter(razorpay_plan_id=razorpay_plan_id).first()
+        if row is not None:
+            return row.plan_id, row.currency, row.billing_period
+    except Exception:
+        logger.exception("Could not search PlanPrice for a Razorpay plan.")
+
+    for plan in PLANS:
+        for currency, periods in plan.get("prices", {}).items():
+            if CURRENCY_PROCESSORS.get(currency) != PROCESSOR_RAZORPAY:
+                continue
+            for billing_period, price in periods.items():
+                if price.get("processor_price_id") == razorpay_plan_id:
+                    return plan["id"], currency, billing_period
+    return None
+
+
 def catalog_price(plan_id, currency, billing_period):
     """The built-in price, before any admin override or offer. The fallback
     that keeps the product working with an empty database."""
@@ -234,12 +314,23 @@ def get_price(plan_id, currency, billing_period, now=None):
     if base is None:
         return None
 
+    processor = CURRENCY_PROCESSORS[currency]
     resolved = {
         "amount_cents": base["amount_cents"],
-        "stripe_price_id": base["stripe_price_id"],
+        "processor": processor,
+        "processor_price_id": base["processor_price_id"],
+        "stripe_price_id": base["processor_price_id"] if processor == PROCESSOR_STRIPE else "",
+        "tax_inclusive": currency in TAX_INCLUSIVE_CURRENCIES,
         "original_amount_cents": None,
         "offer": None,
     }
+
+    # Promotional offers are Stripe Prices, so they only exist for Stripe
+    # currencies. An INR sale would need its own Razorpay plan; until that
+    # is built, an INR offer row simply never goes live rather than showing
+    # a discount Razorpay would not charge.
+    if processor != PROCESSOR_STRIPE:
+        return resolved
 
     offer = _live_offer(plan_id, currency, billing_period, now)
     if offer is None:
@@ -257,6 +348,7 @@ def get_price(plan_id, currency, billing_period, now=None):
 
     resolved.update(
         amount_cents=offer.amount_cents,
+        processor_price_id=offer.stripe_price_id,
         stripe_price_id=offer.stripe_price_id,
         original_amount_cents=base["amount_cents"],
         offer={
@@ -277,8 +369,19 @@ def _base_price(plan_id, currency, billing_period):
 
     row = _price_row(plan_id, currency, billing_period)
     if row is None:
-        return catalog
-    return {"amount_cents": row.amount_cents, "stripe_price_id": row.stripe_price_id}
+        # For Stripe currencies `stripe_price_id` stays the key that counts:
+        # it is the name every existing override, test and admin screen
+        # uses, so reading anything else would silently ignore them.
+        if CURRENCY_PROCESSORS.get(currency) == PROCESSOR_RAZORPAY:
+            processor_price_id = catalog.get("processor_price_id", "")
+        else:
+            processor_price_id = catalog.get("stripe_price_id", "")
+        return {"amount_cents": catalog["amount_cents"], "processor_price_id": processor_price_id}
+    if CURRENCY_PROCESSORS.get(currency) == PROCESSOR_RAZORPAY:
+        processor_price_id = row.razorpay_plan_id
+    else:
+        processor_price_id = row.stripe_price_id
+    return {"amount_cents": row.amount_cents, "processor_price_id": processor_price_id}
 
 
 def _price_row(plan_id, currency, billing_period):
@@ -328,6 +431,12 @@ def format_price_display(amount_cents, currency, billing_period):
     amount = amount_cents / 100
     # Whole-number amounts read cleaner without trailing ".00" (matches the
     # audit's own "€119/yr", not "€119.00/yr").
-    amount_str = f"{amount:g}"
+    if currency == "INR":
+        # Indian digit grouping: "₹3,999/yr", never "₹3999/yr".
+        from billing.gst import rupees
+
+        amount_str = rupees(amount_cents).removesuffix(".00")
+    else:
+        amount_str = f"{amount:g}"
     suffix = "/mo" if billing_period == "monthly" else "/yr"
     return f"{symbol}{amount_str}{suffix}"

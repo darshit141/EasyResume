@@ -7,9 +7,10 @@ from rest_framework.response import Response
 from rest_framework.pagination import PageNumberPagination
 
 from authentication.models import User
-from api.models import SystemConfiguration
+from api.models import AdminAuditLog, SystemConfiguration
+from api.utils.audit import mask_secret_for_audit, record_admin_action
 from api.utils.secrets import encrypt_value, is_secret_key
-from api.serializers.admin_serializers import AdminUserSerializer
+from api.serializers.admin_serializers import AdminAuditLogSerializer, AdminUserSerializer
 
 # Every AI setting - provider, models, fallbacks and the provider API keys - is
 # editable here and takes effect on the next request, so a discontinued model
@@ -24,7 +25,7 @@ DEFAULT_CONFIGS = [
         "key": "LLM_PROVIDER",
         "category": "llm",
         "value_type": "string",
-        "description": "Default LLM provider (ollama, groq, gemini, kira)",
+        "description": "Default LLM provider (ollama, groq, gemini, kira, openrouter)",
     },
     {
         "key": "LLM_FALLBACK_PROVIDER",
@@ -177,6 +178,92 @@ DEFAULT_CONFIGS = [
         "category": "llm",
         "value_type": "string",
         "description": "Kira API key. Stored encrypted; never shown again after saving.",
+    },
+    {
+        "key": "OPENROUTER_MODEL",
+        "category": "llm",
+        "value_type": "string",
+        "description": (
+            "OpenRouter chat model id (e.g. a :free-suffixed one). Pro/Max plans only — "
+            "see billing.entitlements. OpenRouter's free-model roster changes often; check "
+            "openrouter.ai/models?max_price=0 for what's currently live."
+        ),
+    },
+    {
+        "key": "OPENROUTER_BASE_URL",
+        "category": "llm",
+        "value_type": "string",
+        "description": "Base URL for the OpenRouter API",
+    },
+    {
+        "key": "OPENROUTER_API_KEY",
+        "category": "llm",
+        "value_type": "string",
+        "description": "OpenRouter API key. Stored encrypted; never shown again after saving.",
+    },
+    {
+        "key": "BYOK_ENABLED",
+        "category": "llm",
+        "value_type": "boolean",
+        "description": (
+            "Let users save their own Google Gemini API key. While a user's own key is "
+            "active their AI requests use it, so the monthly AI-action limit — which only "
+            "exists to cap our provider bill — stops applying to them. It unlocks no paid "
+            "features. Switching this off immediately stops every saved key being used, "
+            "and users can still delete theirs."
+        ),
+    },
+    {
+        "key": "GST_ENABLED",
+        "category": "tax",
+        "value_type": "boolean",
+        "description": (
+            "Charge Indian GST on rupee subscriptions. Turn on only once the business holds "
+            "a GSTIN — an unregistered supplier must not collect GST. Prices stay the same "
+            "either way (they include GST); this changes what the invoice shows."
+        ),
+    },
+    {
+        "key": "GST_RATE_PERCENT",
+        "category": "tax",
+        "value_type": "string",
+        "description": "GST rate for the subscription, in percent (18 for software services).",
+    },
+    {
+        "key": "GST_SELLER_GSTIN",
+        "category": "tax",
+        "value_type": "string",
+        "description": "The business's 15-character GSTIN. An invalid one is ignored and no GST is charged until it is corrected.",
+    },
+    {
+        "key": "GST_SELLER_STATE_CODE",
+        "category": "tax",
+        "value_type": "string",
+        "description": "Two-digit GST state code of the business (e.g. 27 for Maharashtra). Read from the GSTIN when that is set.",
+    },
+    {
+        "key": "GST_SELLER_LEGAL_NAME",
+        "category": "tax",
+        "value_type": "string",
+        "description": "Legal name printed on invoices.",
+    },
+    {
+        "key": "GST_SELLER_ADDRESS",
+        "category": "tax",
+        "value_type": "string",
+        "description": "Registered address printed on invoices.",
+    },
+    {
+        "key": "GST_SAC_CODE",
+        "category": "tax",
+        "value_type": "string",
+        "description": "Services Accounting Code printed on tax invoices. Confirm the right code with your accountant.",
+    },
+    {
+        "key": "GST_INVOICE_PREFIX",
+        "category": "tax",
+        "value_type": "string",
+        "description": "Up to four letters starting every invoice number (PREFIX/2627/000001). Changing it mid-year starts a visibly different series.",
     },
     {
         "key": "MAX_RESUMES_PER_USER",
@@ -420,25 +507,46 @@ class SystemConfigurationListUpdateAPIView(APIView):
             return Response({"errors": errors}, status=status.HTTP_400_BAD_REQUEST)
             
         # Write valid ones
+        existing = {c.key: c for c in SystemConfiguration.objects.filter(
+            key__in=[item.get("key") for item in request.data]
+        )}
         for item in request.data:
             key = item.get("key")
             value = item.get("value")
-            
+
             # If sensitive and value is masked, do not modify/overwrite the configuration
             if is_sensitive_key(key) and value == "********":
                 continue
-                
+
             meta = next(d for d in DEFAULT_CONFIGS if d["key"] == key)
             value_str = (str(value) if value is not None else "").strip()
+            previous = existing.get(key)
+
             if is_sensitive_key(key):
                 if not value_str:
                     # Clearing a key removes the stored one; the server
                     # environment's key (if any) is used again.
-                    SystemConfiguration.objects.filter(key=key).delete()
+                    if previous is not None:
+                        SystemConfiguration.objects.filter(key=key).delete()
+                        record_admin_action(
+                            request, AdminAuditLog.ACTION_CONFIG_UPDATED, key,
+                            detail={"change": "cleared", "was_configured": True},
+                        )
                     continue
                 # Encrypted at rest: a database dump or backup must not be a
                 # list of working provider credentials.
+                detail = {
+                    "change": "updated" if previous is not None else "set",
+                    "new_value_hint": mask_secret_for_audit(value_str),
+                }
                 value_str = encrypt_value(value_str)
+            elif previous is not None and previous.value == value_str:
+                # No actual change - a no-op save from the admin UI resending
+                # every field. Not worth a row in the trail.
+                continue
+            else:
+                detail = {"old_value": previous.value if previous else None, "new_value": value_str}
+
             SystemConfiguration.objects.update_or_create(
                 key=key,
                 defaults={
@@ -448,7 +556,8 @@ class SystemConfigurationListUpdateAPIView(APIView):
                     "value_type": meta["value_type"],
                 }
             )
-            
+            record_admin_action(request, AdminAuditLog.ACTION_CONFIG_UPDATED, key, detail=detail)
+
         return self.get(request)
 
 
@@ -460,7 +569,12 @@ class SystemConfigurationResetAPIView(APIView):
         # the AI down on a click meant to undo a bad setting.
         rows = SystemConfiguration.objects.all()
         secret_ids = [row.pk for row in rows if is_sensitive_key(row.key)]
+        reset_keys = list(rows.exclude(pk__in=secret_ids).values_list("key", flat=True))
         rows.exclude(pk__in=secret_ids).delete()
+        record_admin_action(
+            request, AdminAuditLog.ACTION_CONFIG_RESET, "all",
+            detail={"reset_keys": reset_keys},
+        )
         return Response(
             {"detail": "Settings reset to defaults. Stored API keys were kept."},
             status=status.HTTP_200_OK,
@@ -510,7 +624,13 @@ class AdminUserToggleActiveAPIView(APIView):
             
         user.is_active = not user.is_active
         user.save()
-        
+        record_admin_action(
+            request,
+            AdminAuditLog.ACTION_USER_ACTIVATED if user.is_active else AdminAuditLog.ACTION_USER_DEACTIVATED,
+            f"user:{user.id}",
+            detail={"user_email": user.email},
+        )
+
         annotated_user = User.objects.annotate(resume_count=Count("resumes")).get(id=user_id)
         return Response(AdminUserSerializer(annotated_user).data, status=status.HTTP_200_OK)
 
@@ -532,7 +652,13 @@ class AdminUserToggleStaffAPIView(APIView):
             
         user.is_staff = not user.is_staff
         user.save()
-        
+        record_admin_action(
+            request,
+            AdminAuditLog.ACTION_USER_STAFF_GRANTED if user.is_staff else AdminAuditLog.ACTION_USER_STAFF_REVOKED,
+            f"user:{user.id}",
+            detail={"user_email": user.email},
+        )
+
         annotated_user = User.objects.annotate(resume_count=Count("resumes")).get(id=user_id)
         return Response(AdminUserSerializer(annotated_user).data, status=status.HTTP_200_OK)
 
@@ -553,3 +679,34 @@ class AdminStatsAPIView(APIView):
             "staff_users": staff_users,
             "total_resumes": total_resumes,
         }, status=status.HTTP_200_OK)
+
+
+class AdminAuditLogPagination(PageNumberPagination):
+    page_size = 25
+    page_size_query_param = "page_size"
+    max_page_size = 100
+
+
+class AdminAuditLogListAPIView(APIView):
+    """Read-only: who did what from the admin panel, and when. The only
+    write path into AdminAuditLog is api.utils.audit.record_admin_action,
+    called from every mutating view above - this just lists what has
+    accumulated."""
+
+    permission_classes = [permissions.IsAdminUser]
+
+    def get(self, request):
+        queryset = AdminAuditLog.objects.select_related("actor").all()
+
+        action = request.query_params.get("action", "").strip()
+        if action:
+            queryset = queryset.filter(action=action)
+
+        target = request.query_params.get("target", "").strip()
+        if target:
+            queryset = queryset.filter(target__icontains=target)
+
+        paginator = AdminAuditLogPagination()
+        page = paginator.paginate_queryset(queryset, request, view=self)
+        serializer = AdminAuditLogSerializer(page, many=True)
+        return paginator.get_paginated_response(serializer.data)

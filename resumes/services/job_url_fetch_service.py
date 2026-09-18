@@ -15,7 +15,9 @@ exists for that reason and should not be relaxed:
 
 Extraction prefers schema.org JobPosting JSON-LD, which most job boards and
 ATS platforms embed. It is structured, unambiguous, and far more reliable
-than scraping rendered markup. Plain-HTML text extraction is the fallback.
+than scraping rendered markup. Without it, job_page_extractor finds the
+posting inside the page — never the whole page, which used to bring the
+site's menus, cookie banner and "similar jobs" along with it.
 """
 
 import gzip
@@ -34,6 +36,11 @@ from urllib.request import HTTPRedirectHandler, Request, build_opener
 from django.conf import settings
 from api.utils.config import get_config_value
 from resumes.services.apify_job_fetch_service import fetch_via_apify
+from resumes.services.job_page_extractor import (
+    JobPageNotAPostingError,
+    extract_job_content,
+    job_signal_count,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -94,6 +101,19 @@ class JobUrlNotFoundError(JobUrlFetchError):
     message = (
         "That link returned nothing — the posting may have been removed or the URL "
         "may be incomplete. Check the link, or paste the job description text instead."
+    )
+
+
+class JobUrlNotAPostingError(JobUrlFetchError):
+    """The page loaded fine but isn't one job: a company homepage, a careers
+    page listing many openings, a blog post. Returning its text as a "job
+    description" would send the whole site for analysis."""
+
+    code = "JOB_URL_NOT_A_POSTING"
+    message = (
+        "That link doesn't look like a single job posting — it may be a company or "
+        "careers page. Open the specific job and paste its link, or paste the job "
+        "description text instead."
     )
 
 
@@ -480,7 +500,9 @@ def _from_meta_tags(markup):
         return ""
 
     description = meta("og:description", "twitter:description", "description")
-    if len(description) < 200:
+    # A site-wide description ("Acme builds software for...") can easily be
+    # 200 characters; only accept one that reads like a posting.
+    if len(description) < 200 or job_signal_count(description) < 1:
         return None
     return {"title": meta("og:title", "twitter:title")[:200], "description": description}
 
@@ -489,7 +511,8 @@ def fetch_job_posting(url):
     """Returns {"title": str, "description": str}.
 
     Tries, in descending order of fidelity: a platform-specific API adapter,
-    schema.org JSON-LD, embedded app state, meta tags, then raw page text.
+    schema.org JSON-LD, embedded app state, the posting found inside the
+    page, then meta tags, then a headless-browser rescue.
 
     Raises JobUrlFetchError (or a subclass) if the page can't be reached or
     no usable description can be extracted. Never returns an empty
@@ -518,32 +541,35 @@ def fetch_job_posting(url):
         logger.info("Imported job posting from embedded app state: %s", url)
         return embedded
 
+    try:
+        extracted = extract_job_content(markup)
+    except JobPageNotAPostingError as exc:
+        logger.info("Job URL is not a single posting (%s): %s", exc, url)
+        raise JobUrlNotAPostingError() from exc
+    if extracted:
+        logger.info("Extracted job posting from page content: %s", url)
+        return extracted
+
+    # Meta tags come after the page's own content: they are usually a
+    # truncated summary, so they only help when the body couldn't be read.
     meta_result = _from_meta_tags(markup)
     if meta_result:
         logger.info("Imported job posting from meta tags: %s", url)
         return meta_result
 
-    # No structured data — fall back to the page's visible text.
-    text = _strip_html(markup)
-    if len(text) < 200:
-        # Almost always a JS-rendered shell or a login wall: the fetch
-        # succeeded, but the real content was never in the HTML we received.
-        logger.info(
-            "Job URL had no JobPosting JSON-LD and only %d chars of text "
-            "(page is likely JavaScript-rendered or gated): %s",
-            len(text), url,
-        )
-        # Last resort before giving up: a handful of allowlisted ATS
-        # platforms (Workday among them) render entirely client-side, which
-        # is exactly what a headless-browser fetch fixes. No-ops (returns
-        # None) when APIFY_API_TOKEN isn't configured, so this is inert
-        # until that's set up.
+    # Almost always a JS-rendered shell or a login wall: the fetch succeeded,
+    # but the real content was never in the HTML we received.
+    logger.info(
+        "Job URL had no readable posting in its HTML (likely JavaScript-rendered or gated): %s",
+        url,
+    )
+    # Last resort: some allowlisted ATS platforms (Workday among them) render
+    # entirely client-side, which a headless-browser fetch fixes. No-ops
+    # (returns None) when APIFY_API_TOKEN isn't configured.
+    try:
         rescued = fetch_via_apify(url)
-        if rescued:
-            return rescued
-        raise JobUrlUnreadableError()
-
-    title_match = re.search(r"<title[^>]*>(.*?)</title>", markup, re.DOTALL | re.IGNORECASE)
-    title = html.unescape(title_match.group(1)).strip() if title_match else ""
-    logger.info("Extracted job posting from page text: %s", url)
-    return {"title": title[:200], "description": text}
+    except JobPageNotAPostingError as exc:
+        raise JobUrlNotAPostingError() from exc
+    if rescued:
+        return rescued
+    raise JobUrlUnreadableError()

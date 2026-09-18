@@ -26,15 +26,33 @@ ids). Until then, `GET /api/billing/plans/` reports it as
 
 ## Currency
 
-`GET /api/billing/plans/?currency=EUR|GBP` resolves the catalog to one
-currency (default EUR; anything else falls back to EUR). There is no
-geo-detection — the frontend's pricing page has an explicit EUR/GBP
-toggle and passes the user's choice through to both the plan list and
-`POST /api/billing/checkout/`.
+`GET /api/billing/plans/?currency=EUR|GBP|INR` resolves the catalog to one
+currency (default EUR; anything else falls back to EUR). The pricing page
+has an explicit currency toggle and passes the choice through to both the
+plan list and `POST /api/billing/checkout/`. Its only "detection" is picking
+INR as the starting tab for a browser whose time zone is India; the visitor
+can always switch.
 
-## VAT
+## Payment processors
 
-Prices are displayed VAT-exclusive. Actual VAT calculation is **not**
+Each currency is charged by the processor that can take it
+(`CURRENCY_PROCESSORS` in `billing/plans.py`):
+
+- **EUR, GBP → Stripe.** Prices exclude VAT.
+- **INR → Razorpay** (UPI AutoPay, cards, net banking). Prices *include*
+  GST. Stripe is invite-only for Indian businesses and offers them neither
+  UPI nor Stripe Tax. Setup, webhooks, GST and invoicing are covered in
+  `RAZORPAY_SETUP.md`.
+
+`POST /api/billing/checkout/` routes by currency and returns `processor`:
+redirect to `checkout_url` for Stripe, or open Razorpay Checkout with the
+`razorpay` block. Each price option in the plan list carries `processor`,
+`payment_methods`, `tax_inclusive` and `tax_note` so the page never has to
+know the routing or hardcode a tax statement.
+
+## VAT (EUR/GBP)
+
+EUR and GBP prices are displayed VAT-exclusive. Actual VAT calculation is **not**
 computed by this application — it is Stripe's job. `STRIPE_AUTOMATIC_TAX_ENABLED`
 (env, default `False`) turns on Stripe Checkout's automatic tax and
 required billing-address collection; it must stay `False` until Stripe

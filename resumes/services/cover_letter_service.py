@@ -19,9 +19,12 @@ class CoverLetterService:
     """Coordinates verified candidate data, job requirements, and match
     results into a source-grounded cover letter for a curation."""
 
-    def __init__(self, ai_service=None, gap_analysis_service=None, provider=None):
-        self.ai_service = ai_service or CoverLetterAIService(provider=provider)
-        self.gap_analysis_service = gap_analysis_service or JobGapAnalysisService(provider=provider)
+    def __init__(self, ai_service=None, gap_analysis_service=None, provider=None, user=None):
+        self.user = user
+        self.ai_service = ai_service or CoverLetterAIService(provider=provider, user=user)
+        self.gap_analysis_service = gap_analysis_service or JobGapAnalysisService(
+            provider=provider, user=user
+        )
 
     def generate(self, user, curation_id, regenerate=False):
         curation = JobResumeCuration.objects.get(id=curation_id, user=user)

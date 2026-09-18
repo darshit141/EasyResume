@@ -15,7 +15,12 @@ primary fetch — it costs real (if small) platform usage per call, so
 job_url_fetch_service only reaches for it after its own free, unauthenticated
 fetch has already failed.
 
-Fails closed in every case: no configured token, a network error, an
+The rendered page is run through job_page_extractor, the same as a page the
+primary fetch could read, so a rescue returns the posting rather than the
+whole page. The one thing that can propagate is JobPageNotAPostingError: that
+is a verdict about the link, not a failure of the rescue.
+
+Fails closed in every other case: no configured token, a network error, an
 unexpected response shape, or too little extracted text all return None
 rather than raising, so the caller falls back to its existing
 JOB_URL_UNREADABLE message ("paste the description instead") exactly as it
@@ -27,6 +32,8 @@ import logging
 
 import requests
 from django.conf import settings
+
+from resumes.services.job_page_extractor import clean_plain_text, extract_job_content
 
 logger = logging.getLogger(__name__)
 
@@ -59,7 +66,9 @@ def fetch_via_apify(url):
             params={"token": token},
             json={
                 "query": url,
-                "outputFormats": ["text"],
+                # HTML so the posting can be picked out of the page; text as
+                # a fallback for an item that comes back without it.
+                "outputFormats": ["html", "text"],
                 "scrapingTool": "browser-playwright",
                 "requestTimeoutSecs": _ACTOR_REQUEST_TIMEOUT_SECS,
             },
@@ -88,15 +97,25 @@ def fetch_via_apify(url):
     if not isinstance(item, dict):
         return None
 
-    description = (item.get("text") or "").strip()
+    title = ((item.get("metadata") or {}).get("title") or "").strip()
+
+    rendered = item.get("html") or ""
+    if rendered:
+        extracted = extract_job_content(rendered)  # may raise JobPageNotAPostingError
+        if extracted:
+            logger.info("Recovered job posting via Apify rescue: %s", url)
+            return {
+                "title": (extracted["title"] or title)[:_MAX_TITLE_CHARS],
+                "description": extracted["description"],
+            }
+
+    description = clean_plain_text(item.get("text") or "")
     if len(description) < _MIN_DESCRIPTION_CHARS:
         logger.info(
             "Apify job-URL rescue returned only %d chars for %s — treating as unreadable.",
             len(description), url,
         )
         return None
-
-    title = ((item.get("metadata") or {}).get("title") or "").strip()
 
     logger.info("Recovered job posting via Apify rescue: %s", url)
     return {"title": title[:_MAX_TITLE_CHARS], "description": description}

@@ -54,6 +54,8 @@ class SubscriptionSyncService:
             return
 
         subscription.stripe_customer_id = session.get("customer") or subscription.stripe_customer_id
+        subscription.payment_processor = "stripe"
+        subscription.cancel_at_period_end = False
         stripe_subscription_id = session.get("subscription") or subscription.stripe_subscription_id
         subscription.stripe_subscription_id = stripe_subscription_id
         if plan_id:
@@ -100,6 +102,8 @@ class SubscriptionSyncService:
                 stripe_subscription.get("customer"),
             )
             return
+        if _billed_elsewhere(subscription):
+            return
 
         stripe_status = stripe_subscription.get("status")
         subscription.status = "active" if stripe_status in _ACTIVE_STRIPE_STATUSES else stripe_status
@@ -108,6 +112,7 @@ class SubscriptionSyncService:
         period_end = stripe_subscription.get("current_period_end")
         if period_end:
             subscription.current_period_end = datetime.fromtimestamp(period_end, tz=dt_timezone.utc)
+        subscription.cancel_at_period_end = bool(stripe_subscription.get("cancel_at_period_end"))
 
         # A plan or billing-period change made through the Stripe Customer
         # Portal (the only upgrade/downgrade path this app offers — see
@@ -134,10 +139,11 @@ class SubscriptionSyncService:
         subscription = Subscription.objects.filter(
             stripe_customer_id=stripe_subscription.get("customer")
         ).first()
-        if subscription is None:
+        if subscription is None or _billed_elsewhere(subscription):
             return
         subscription.status = "canceled"
-        subscription.save(update_fields=["status", "updated_at"])
+        subscription.cancel_at_period_end = False
+        subscription.save(update_fields=["status", "cancel_at_period_end", "updated_at"])
 
     @staticmethod
     def _handle_invoice_payment_failed(invoice):
@@ -175,7 +181,7 @@ class SubscriptionSyncService:
         subscription = Subscription.objects.filter(
             stripe_customer_id=invoice.get("customer")
         ).first()
-        if subscription is None:
+        if subscription is None or _billed_elsewhere(subscription):
             return
         if subscription.status == "past_due":
             subscription.status = "active"
@@ -190,7 +196,7 @@ class SubscriptionSyncService:
         subscription = Subscription.objects.filter(
             stripe_customer_id=charge.get("customer")
         ).first()
-        if subscription is None:
+        if subscription is None or _billed_elsewhere(subscription):
             return
 
         amount = charge.get("amount") or 0
@@ -207,3 +213,20 @@ class SubscriptionSyncService:
         if is_full_refund:
             subscription.status = "canceled"
             subscription.save(update_fields=["status", "updated_at"])
+
+
+def _billed_elsewhere(subscription):
+    """True when this account now pays through Razorpay.
+
+    A customer who once had a Stripe subscription keeps their Stripe
+    customer id after moving to a rupee plan, so a late Stripe event about
+    the old subscription still finds their row. It must not be allowed to
+    cancel, reactivate or re-plan a subscription Stripe knows nothing about.
+    """
+    if subscription.payment_processor == "razorpay":
+        logger.info(
+            "Ignoring Stripe event for user_id=%s, who is now billed through Razorpay.",
+            subscription.user_id,
+        )
+        return True
+    return False

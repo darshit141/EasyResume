@@ -25,9 +25,12 @@ class JobResumeCurationService:
     job-tailored resume for a curation session.
     """
 
-    def __init__(self, ai_service=None, gap_analysis_service=None, provider=None):
-        self.ai_service = ai_service or ResumeCurationAIService(provider=provider)
-        self.gap_analysis_service = gap_analysis_service or JobGapAnalysisService(provider=provider)
+    def __init__(self, ai_service=None, gap_analysis_service=None, provider=None, user=None):
+        self.user = user
+        self.ai_service = ai_service or ResumeCurationAIService(provider=provider, user=user)
+        self.gap_analysis_service = gap_analysis_service or JobGapAnalysisService(
+            provider=provider, user=user
+        )
 
     def generate(self, user, curation_id, regenerate=False):
         """Returns (curation, version). ``version`` is the JobResumeCurationVersion

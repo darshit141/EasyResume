@@ -73,7 +73,7 @@ class LLMQuotaExceededError(LLMServiceError):
     message = "The AI provider's quota for the configured key is exhausted."
 
 
-SUPPORTED_PROVIDERS = ("ollama", "groq", "gemini", "kira")
+SUPPORTED_PROVIDERS = ("ollama", "groq", "gemini", "kira", "openrouter")
 
 # Resume upload/parsing has one extra choice unavailable elsewhere: a
 # deterministic, non-AI parser (see StandardResumeParserService). The other
@@ -215,7 +215,18 @@ class GroqLLMService(LLMService):
     conformance, so the schema is embedded in the prompt text as an
     instruction; each caller's own ``_validate``/``validate_*`` step is what
     actually enforces the contract (same as it already does for Ollama).
+
+    Every failure is logged before being raised - this class used to be
+    silent on error (only the typed exception told a caller anything went
+    wrong), which meant a production auth failure or a string of timeouts
+    against Groq/Kira/OpenRouter left no trace in the logs the way the same
+    failure against Gemini always has. ``provider_name`` (overridden by the
+    Kira/OpenRouter subclasses) is what tells those log lines apart; never
+    the api_key or the raw prompt/response body, which may contain a
+    candidate's resume text.
     """
+
+    provider_name = "groq"
 
     def __init__(self, api_key, model, timeout, max_retries, temperature, base_url, max_output_tokens=2048):
         self.api_key = api_key
@@ -268,16 +279,43 @@ class GroqLLMService(LLMService):
                 except json.JSONDecodeError as exc:
                     raise LLMInvalidResponseError() from exc
             except HTTPError as exc:
+                detail = exc.read().decode(errors="replace") if hasattr(exc, "read") else ""
                 if exc.code in (401, 403):
+                    logger.error(
+                        "%s rejected the API key (HTTP %s) for model %s.",
+                        self.provider_name, exc.code, self.model,
+                    )
                     raise LLMAuthError() from exc
                 if exc.code == 404:
+                    logger.warning(
+                        "%s model %s is unavailable (HTTP 404): %s",
+                        self.provider_name, self.model, detail,
+                    )
                     raise LLMModelUnavailableError() from exc
+                if exc.code == 429:
+                    logger.warning(
+                        "%s rate-limited model %s (HTTP 429): %s",
+                        self.provider_name, self.model, detail,
+                    )
+                else:
+                    logger.error(
+                        "%s request to %s failed (HTTP %s): %s",
+                        self.provider_name, self.model, exc.code, detail,
+                    )
                 raise LLMServiceError() from exc
             except (socket.timeout, TimeoutError) as exc:
                 if attempt == self.max_retries:
+                    logger.warning(
+                        "%s timed out calling model %s after %s attempt(s).",
+                        self.provider_name, self.model, attempt + 1,
+                    )
                     raise LLMTimeoutError() from exc
             except (URLError, ConnectionError) as exc:
                 if attempt == self.max_retries:
+                    logger.error(
+                        "%s was unreachable for model %s after %s attempt(s): %s",
+                        self.provider_name, self.model, attempt + 1, exc,
+                    )
                     raise LLMServiceError() from exc
 
         raise LLMServiceError()
@@ -331,6 +369,22 @@ class KiraLLMService(GroqLLMService):
     window and higher rate limits than the free tiers of the other
     providers, which is why a deployment sharing one key across many
     users would pick it as the default (``LLM_PROVIDER=kira``).
+    """
+
+
+class OpenRouterLLMService(GroqLLMService):
+    """Client for OpenRouter, an OpenAI-compatible gateway to hundreds of
+    models. Same wire format as Groq/Kira, so it reuses that client as-is.
+
+    Configured with its own base URL, key and model (``OPENROUTER_*`` in
+    settings) — the server's own OpenRouter account, shared across every
+    request that resolves to this provider, not a per-user BYOK key.
+    Gated to Pro/Max plans in ``billing.entitlements`` rather than offered
+    to everyone: the point of this slot is giving paid users a second
+    provider to fall back on, not adding free capacity for the free tier.
+    A single model id is chosen server-side (``OPENROUTER_MODEL`` in the
+    admin Configuration tab) — users never pick a model, only optionally a
+    provider, and only when ``AI_PROVIDER_SELECTION_ENABLED`` is on.
     """
 
 
@@ -944,10 +998,17 @@ def _provider_api_key(setting_name):
     return str(get_config_value(setting_name, getattr(settings, setting_name, "")) or "").strip()
 
 
-def _build_client(provider, timeout, max_retries, temperature, max_output_tokens):
+def _build_client(provider, timeout, max_retries, temperature, max_output_tokens, api_key_override=None):
+    """Construct one provider client.
+
+    ``api_key_override`` is a key belonging to the *user* rather than to the
+    server (see billing.services.user_ai_key_service). It is passed in as an
+    argument and used immediately; it is never cached on the module, never
+    written to a setting, and never logged.
+    """
     if provider == "groq":
         return GroqLLMService(
-            api_key=_provider_api_key("GROQ_API_KEY"),
+            api_key=api_key_override or _provider_api_key("GROQ_API_KEY"),
             model=get_config_value("GROQ_MODEL", settings.GROQ_MODEL),
             timeout=timeout,
             max_retries=max_retries,
@@ -958,7 +1019,7 @@ def _build_client(provider, timeout, max_retries, temperature, max_output_tokens
 
     if provider == "gemini":
         return GeminiLLMService(
-            api_key=_provider_api_key("GEMINI_API_KEY"),
+            api_key=api_key_override or _provider_api_key("GEMINI_API_KEY"),
             model=get_config_value("GEMINI_MODEL", settings.GEMINI_MODEL),
             timeout=timeout,
             max_retries=max_retries,
@@ -977,12 +1038,23 @@ def _build_client(provider, timeout, max_retries, temperature, max_output_tokens
 
     if provider == "kira":
         return KiraLLMService(
-            api_key=_provider_api_key("KIRA_API_KEY"),
+            api_key=api_key_override or _provider_api_key("KIRA_API_KEY"),
             model=get_config_value("KIRA_MODEL", settings.KIRA_MODEL),
             timeout=timeout,
             max_retries=max_retries,
             temperature=temperature,
             base_url=get_config_value("KIRA_BASE_URL", settings.KIRA_BASE_URL),
+            max_output_tokens=max_output_tokens,
+        )
+
+    if provider == "openrouter":
+        return OpenRouterLLMService(
+            api_key=api_key_override or _provider_api_key("OPENROUTER_API_KEY"),
+            model=get_config_value("OPENROUTER_MODEL", settings.OPENROUTER_MODEL),
+            timeout=timeout,
+            max_retries=max_retries,
+            temperature=temperature,
+            base_url=get_config_value("OPENROUTER_BASE_URL", settings.OPENROUTER_BASE_URL),
             max_output_tokens=max_output_tokens,
         )
 
@@ -997,7 +1069,34 @@ def _build_client(provider, timeout, max_retries, temperature, max_output_tokens
     )
 
 
-def get_llm_service(provider=None):
+def _llm_tuning():
+    """The four runtime knobs every client is built with."""
+    return (
+        get_config_value("LLM_TIMEOUT", settings.LLM_TIMEOUT),
+        get_config_value("LLM_MAX_RETRIES", settings.LLM_MAX_RETRIES),
+        get_config_value("LLM_TEMPERATURE", settings.LLM_TEMPERATURE),
+        get_config_value("LLM_MAX_OUTPUT_TOKENS", settings.LLM_MAX_OUTPUT_TOKENS),
+    )
+
+
+def build_client_with_key(provider, api_key):
+    """A client for `provider` using the supplied key and nothing else.
+
+    Exists for one caller: validating a key a user has just pasted, before
+    it is stored. Deliberately unwrapped by any fallback — the question
+    being asked is "does *this* key work", and quietly answering it with a
+    different provider's credentials would be worse than useless.
+    """
+    if provider not in SUPPORTED_PROVIDERS:
+        raise LLMServiceError("Unsupported AI provider.")
+    timeout, max_retries, temperature, max_output_tokens = _llm_tuning()
+    return _build_client(
+        provider, timeout, max_retries, temperature, max_output_tokens,
+        api_key_override=api_key,
+    )
+
+
+def get_llm_service(provider=None, user=None):
     """Build the requested provider's client without exposing it to controllers.
 
     ``provider`` lets a single request opt into a specific AI provider
@@ -1018,12 +1117,22 @@ def get_llm_service(provider=None):
     if resolved_provider not in SUPPORTED_PROVIDERS:
         raise LLMServiceError("Unsupported AI provider.")
 
-    timeout = get_config_value("LLM_TIMEOUT", settings.LLM_TIMEOUT)
-    max_retries = get_config_value("LLM_MAX_RETRIES", settings.LLM_MAX_RETRIES)
-    temperature = get_config_value("LLM_TEMPERATURE", settings.LLM_TEMPERATURE)
-    max_output_tokens = get_config_value("LLM_MAX_OUTPUT_TOKENS", settings.LLM_MAX_OUTPUT_TOKENS)
+    timeout, max_retries, temperature, max_output_tokens = _llm_tuning()
 
-    primary = _build_client(resolved_provider, timeout, max_retries, temperature, max_output_tokens)
+    user_key = _user_key_for(user, resolved_provider)
+    primary = _build_client(
+        resolved_provider, timeout, max_retries, temperature, max_output_tokens,
+        api_key_override=user_key,
+    )
+
+    # A user's own key is never silently swapped for the server's, for the
+    # same reason an explicitly requested provider isn't: they chose to
+    # spend their own quota on this provider, and falling back would spend
+    # ours instead without asking. If their key fails they get a real error
+    # that names the problem, which is the only way they will ever know to
+    # fix it in the provider's console.
+    if user_key:
+        return primary
 
     fallback_provider = get_config_value("LLM_FALLBACK_PROVIDER", settings.LLM_FALLBACK_PROVIDER)
     if (
@@ -1036,3 +1145,22 @@ def get_llm_service(provider=None):
         return FallbackLLMService(primary, fallback_client, fallback_provider)
 
     return primary
+
+
+def _user_key_for(user, provider):
+    """The caller's own key for this provider, if they have a working one.
+
+    Imported lazily and wrapped: BYOK is an optional convenience, and a
+    problem looking it up — a migration not yet applied on a worker, a
+    database blip — must degrade to "use the server's key", never to a
+    failed resume generation.
+    """
+    if user is None:
+        return None
+    try:
+        from billing.services.user_ai_key_service import UserAIKeyService
+
+        return UserAIKeyService.active_key_for(user, provider)
+    except Exception:  # pragma: no cover - defensive
+        logger.warning("Could not resolve a user-supplied AI key; using the server key.", exc_info=True)
+        return None

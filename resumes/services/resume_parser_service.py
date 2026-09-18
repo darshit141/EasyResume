@@ -16,8 +16,15 @@ class ResumeParserService:
     string_list_fields = ("skills", "achievements", "languages")
     collection_fields = entry_fields + string_list_fields
 
-    def __init__(self, llm_service=None, provider=None):
-        self.llm_service = llm_service or get_llm_service(provider)
+    def __init__(self, llm_service=None, provider=None, user=None):
+        """``user`` is the account the work is being done for. It is used for
+        one thing: if they have saved their own provider API key, the client
+        built here uses it instead of the server's (see
+        billing.services.user_ai_key_service). Left None — a management
+        command, a health check — the server's own credentials are used, which
+        is the behaviour this had before BYOK existed."""
+        self.user = user
+        self.llm_service = llm_service or get_llm_service(provider, user=user)
 
     def parse(self, text):
         result = self.llm_service.generate_structured(

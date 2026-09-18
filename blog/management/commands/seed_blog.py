@@ -163,6 +163,143 @@ you; it's writing a resume you'll have to defend in an interview.
 """,
     },
     {
+        "slug": "cover-letter-that-isnt-a-summary",
+        "title": "How to Write a Cover Letter That Isn't Just a Summary of Your Resume",
+        "excerpt": (
+            "The reason most cover letters get skipped isn't that nobody reads them. It's "
+            "that most of them repeat the resume in paragraph form, which gives the reader "
+            "no reason to keep going."
+        ),
+        "tags": "cover letters, job search",
+        "seo_description": (
+            "Why most cover letters restate the resume and get skipped, and a concrete "
+            "structure for writing one that actually adds information a recruiter needs."
+        ),
+        "body": """\
+Whether cover letters "matter" is the wrong question — it depends entirely on what's in them.
+A letter that repeats the resume in sentence form adds nothing and gets skipped in about
+the time it takes to notice that's what it is. A letter that does something the resume
+structurally can't gets read.
+
+## What a resume can't do, and a letter can
+
+A resume is a list. It's optimised for scanning, which means it has no room for connecting
+tissue: why you left, why this role specifically, why now. A cover letter's entire job is
+to supply the connecting tissue a bullet-point format has no space for.
+
+That means a cover letter should never contain a sentence that's just a resume line with
+"I" in front of it. "I have five years of experience in backend development" is already on
+the resume. Writing it again in prose is not a cover letter — it's a worse version of the
+document the reader already has open in another tab.
+
+## What to actually put in it
+
+**Why this role, specifically.** Not "I am excited about this opportunity" — that's true of
+every application. What about *this* posting or *this* company connects to something real
+about your background or interests? If you can't answer that in one honest sentence, that's
+worth noticing before you apply, not after.
+
+**The one thing the resume doesn't explain.** A career change, a gap, a move from a
+different industry, why you're leaving a role after eight months. The resume shows the
+fact; the letter is the only place to give it context. Not an excuse — context. "I spent
+two years in operations before moving into engineering, which is why I debug production
+incidents faster than most people at my level" reframes a fact the resume states flatly.
+
+**One piece of evidence the job description specifically asked for.** Read the posting for
+what it actually emphasises, then pick the one thing from your background that answers it
+most directly — not the accomplishment you're proudest of, the one that's most relevant to
+what this employer said they need.
+
+## What to leave out
+
+- Restating your job titles and dates — the resume already has these
+- "I am a hard worker" or "I am passionate about X" — unfalsifiable, ignored
+- Anything about salary or availability unless the posting explicitly asked
+- More than four paragraphs. If it doesn't fit in four, it's doing the resume's job as well
+  as its own, and both jobs suffer
+
+## Length and structure
+
+Three to four short paragraphs. Open by naming the role. One paragraph on why this role or
+company. One paragraph connecting a specific piece of your evidence to what they asked for.
+Close with a plain, direct sign-off — no "looking forward to hearing from you soon!"
+
+## How IntelliResume fits in
+
+Our cover letter generator works from the same verified resume data as the rest of the
+product — it can't invent an accomplishment that isn't already in your profile, because it
+has no other source to draw from. What it's good at is the part people find hardest under
+time pressure: pulling out the one piece of your real evidence that actually answers what a
+specific posting asked for, instead of restating your resume in longer sentences.
+""",
+    },
+    {
+        "slug": "what-a-skills-gap-actually-means",
+        "title": "What a \"Skills Gap\" Actually Means Before You Apply",
+        "excerpt": (
+            "Missing one requirement on a job posting isn't a verdict. Here's how to read a "
+            "gap analysis honestly — what to add to your resume, what to actually learn, "
+            "and what's just not a match."
+        ),
+        "tags": "job search, resume tips",
+        "seo_description": (
+            "How to interpret a gap between your resume and a job description honestly: "
+            "what's a documentation problem, what's a real skills gap, and what to do about each."
+        ),
+        "body": """\
+Seeing "missing: Kubernetes" next to a job posting feels like a verdict. It usually isn't
+one. A gap between your resume and a job description is one of three different things, and
+they call for three different responses — treating all of them the same way is where people
+go wrong in both directions, either over-applying to roles they're not close to, or
+under-applying to roles they're actually qualified for.
+
+## Three different kinds of gap
+
+**You have it, but it isn't written down.** This is the most common case, and it's a
+documentation problem, not a skills problem. You've used the tool, run the process, or
+solved the kind of issue the posting describes, but your resume doesn't say so in those
+words — because you wrote it for a different role, or because you didn't think it was
+worth mentioning. The fix is adding a true, specific line to your resume, not learning
+anything new.
+
+**You have something adjacent, not the exact thing.** The posting asks for a specific tool
+or framework; you have solid experience with a comparable one. This is real, but it's a
+framing gap, not a knowledge gap — a resume that says "5 years with PostgreSQL; comfortable
+picking up MySQL" is honest and often enough. Claiming the exact tool you haven't used is
+where "tailoring" turns into fabrication.
+
+**You genuinely don't have it.** No adjacent experience, no reasonable reframing. This is
+the one category where the honest options are: learn it before applying, accept the
+posting is a stretch and apply anyway if enough else lines up, or skip it. All three are
+legitimate calls — what isn't legitimate is resolving the gap by writing a resume that
+implies otherwise.
+
+## Why this distinction matters more than the gap itself
+
+An interview is where an invented qualification gets tested directly, by someone who
+actually knows the subject. A documentation gap costs you nothing once it's fixed. A framed
+gap survives scrutiny because it was honest to begin with. A fabricated gap is the one that
+turns an interview into the moment you get caught, which is a worse outcome than simply not
+getting the interview.
+
+## Reading a match percentage correctly
+
+A single number that says you're an "80% match" invites treating requirements as
+interchangeable — but a posting's required skills and its preferred ones are not the same
+weight, and a job description almost always lists more than any one candidate will actually
+have. A gap analysis is only useful if it tells you *which* three requirements are load-bearing and
+which one nice-to-have you can safely not have, not just how many boxes are checked.
+
+## How IntelliResume fits in
+
+Our gap analysis compares a job's stated requirements against your verified resume data —
+never the other way around, and it never invents a skill you haven't demonstrated. Every
+item comes back as one of the categories above: something you have that isn't written down
+yet, or something you genuinely don't have. What you do with that is still your call; the
+tool's job is making sure the call is based on an accurate picture, not a guess.
+""",
+    },
+    {
         "slug": "resume-mistakes-that-cost-interviews",
         "title": "Seven Resume Mistakes That Quietly Cost You Interviews",
         "excerpt": (

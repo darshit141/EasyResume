@@ -99,7 +99,11 @@ PRO_ENTITLEMENTS = {
     # Not None: see the note on the constants above. This is a spam ceiling,
     # not a paywall — no honest job seeker emails 200 applications a month.
     "job_applications_per_month": PRO_JOB_APPLICATIONS_PER_MONTH,
-    "allowed_ai_providers": ["ollama", "standard", "groq", "gemini", "kira"],
+    # "openrouter" is Pro/Max only, unlike the rest of this list — it runs on
+    # the server's own OpenRouter account, offered as an extra provider for
+    # paying users rather than as free-tier capacity. See OPENROUTER_* in
+    # settings and resumes.services.llm_service.OpenRouterLLMService.
+    "allowed_ai_providers": ["ollama", "standard", "groq", "gemini", "kira", "openrouter"],
     "docx_export": True,
     "tailored_resume_version_history": True,
     "resume_template_customization": True,

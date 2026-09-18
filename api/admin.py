@@ -1,6 +1,24 @@
 from django.contrib import admin
 
-from api.models import AnalyticsEvent, B2BLead
+from api.models import AdminAuditLog, AnalyticsEvent, B2BLead
+
+
+@admin.register(AdminAuditLog)
+class AdminAuditLogAdmin(admin.ModelAdmin):
+    list_display = ("created_at", "actor_email", "action", "target", "ip_address")
+    list_filter = ("action",)
+    search_fields = ("actor_email", "target")
+    readonly_fields = [field.name for field in AdminAuditLog._meta.fields]
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_change_permission(self, request, obj=None):
+        return False
+
+    def has_delete_permission(self, request, obj=None):
+        # An audit trail that admins can delete rows from isn't one.
+        return False
 
 
 @admin.register(AnalyticsEvent)

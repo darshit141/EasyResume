@@ -1,6 +1,6 @@
 from datetime import timedelta
 
-from django.test import TestCase
+from django.test import TestCase, override_settings
 from django.utils import timezone
 from rest_framework.test import APIClient
 
@@ -139,3 +139,72 @@ class NewsletterAPITests(TestCase):
     def test_invalid_email_is_rejected(self):
         response = self.client.post("/api/blog/subscribe/", {"email": "not-an-email"}, format="json")
         self.assertEqual(response.status_code, 400)
+
+
+@override_settings(FRONTEND_URL="https://example.com")
+class SitemapAndRobotsTests(TestCase):
+    """These are served at the site root (not /api/) because that's the
+    only place a search engine will look for them, and both are built from
+    FRONTEND_URL rather than the API's own host — see blog/views/seo_view.py.
+
+    FRONTEND_URL is pinned explicitly rather than relied on from whatever
+    the environment's .env happens to set — the exact mistake this suite
+    exists to avoid repeating (see the BYOK quota tests for the same fix
+    for the same reason).
+    """
+
+    def setUp(self):
+        self.client = APIClient()
+
+    def test_sitemap_lists_the_static_marketing_pages(self):
+        response = self.client.get("/sitemap.xml")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response["Content-Type"], "application/xml")
+        body = response.content.decode()
+        for path in ("/", "/pricing", "/blog", "/about"):
+            self.assertIn(f"<loc>https://example.com{path}</loc>", body)
+
+    def test_sitemap_includes_only_published_posts(self):
+        published = _post(status=Post.STATUS_PUBLISHED)
+        draft = _post(title="Not ready yet", status=Post.STATUS_DRAFT)
+        future = _post(
+            title="Scheduled",
+            status=Post.STATUS_PUBLISHED,
+            published_at=timezone.now() + timedelta(days=3),
+        )
+
+        body = self.client.get("/sitemap.xml").content.decode()
+
+        self.assertIn(f"/blog/{published.slug}</loc>", body)
+        self.assertNotIn(f"/blog/{draft.slug}</loc>", body)
+        self.assertNotIn(f"/blog/{future.slug}</loc>", body)
+
+    def test_sitemap_never_lists_app_or_auth_routes(self):
+        """A crawler gains nothing from an authenticated app shell or an
+        OTP/reset link, and listing them just narrates internal structure."""
+        body = self.client.get("/sitemap.xml").content.decode()
+
+        for path in ("/app", "/login", "/verify-otp", "/reset-password"):
+            self.assertNotIn(f"<loc>https://example.com{path}<", body)
+
+    def test_robots_txt_points_at_the_sitemap_on_the_frontend_origin(self):
+        response = self.client.get("/robots.txt")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response["Content-Type"], "text/plain")
+        self.assertIn("Sitemap: https://example.com/sitemap.xml", response.content.decode())
+
+    def test_robots_txt_disallows_the_authenticated_app_shell(self):
+        body = self.client.get("/robots.txt").content.decode()
+        self.assertIn("Disallow: /app/", body)
+
+    @override_settings(DEBUG=True)
+    def test_a_debug_deploy_disallows_everything(self):
+        """The safe default for a non-production environment is staying out
+        of search results entirely, not trusting every deploy to remember
+        DEBUG=False before it's reachable."""
+        body = self.client.get("/robots.txt").content.decode()
+
+        self.assertIn("Disallow: /\n", body)
+        self.assertNotIn("Sitemap:", body)

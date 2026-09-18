@@ -114,6 +114,162 @@ business metrics (`api/views/business_metrics_view.py`), B2B lead capture
 
 ---
 
+## 0A. Re-audit and remediation — 2026-09-16 (authoritative current status)
+
+**Supersedes section 0's open-items list. Section 0's verdict still stands:
+the product is launch-capable in code and unproven against Stripe.**
+
+Method: full read of the working tree on `darshit`, one local run of the
+backend suite before and after the work below, and a browser walk-through of
+the authenticated app against a live local backend. This pass *did* change
+application code, unlike the two audits above; what changed is listed in 0A.3.
+
+### 0A.1 What the 2026-08-28 audit's open items look like now
+
+| ID | Item | Status |
+|---|---|---|
+| R0-1 | Stripe never exercised end-to-end | **Still open.** Needs a real test-mode account; cannot be closed from the repository. |
+| R0-3 | Live Stripe Price IDs unverified | **Still open.** Confirm on the droplet. |
+| R0-4 | VAT treatment undecided (`STRIPE_AUTOMATIC_TAX_ENABLED=False`) | **Still open.** Needs an accountant, not an engineer. |
+| P1 | AI providers never benchmarked | Still open, but materially less risky: provider/model selection, fallback order and model discovery are now all admin-configurable at runtime, so a bad default is a settings change rather than a deploy. |
+| P1 | Frontend has no test suite | **Still open.** `package.json` has no test runner at all. This is now the largest single gap in the engineering story. |
+
+### 0A.2 What the master brief asked for that already existed
+
+Recorded because it saves the next audit from re-deriving it. The brief's
+sections 11–14 assume a hardcoded single-provider AI integration. That is not
+what is here:
+
+- `LLMService` is an ABC with four implementations (`ollama`, `groq`,
+  `gemini`, `kira`) and one shared structured-generation contract.
+- `FallbackLLMService` retries a failed primary against a configured
+  fallback provider, and deliberately does *not* fall back on schema or
+  content validation errors.
+- Provider, model, base URL, timeouts, retries, temperature, token ceilings,
+  Gemini fallback-model lists and live model discovery are all read through
+  `get_config_value` — the admin Configuration tab, no redeploy.
+- Provider API keys are stored encrypted (Fernet, domain-separated) and
+  masked in admin responses.
+- Plan limits, quotas, reply-tracking strategy per tier and prices are all
+  environment- or admin-configurable (`billing/plans.py`,
+  `billing/entitlements.py`).
+
+The brief's sections 3–10 (discoverability) and 15–16 (BYOK) described real
+gaps. Those are what this pass fixed.
+
+### 0A.3 Changed in this pass
+
+**Product / discoverability**
+
+- **`/app/toolkit` — "Everything you can do".** Every capability the product
+  actually has, grouped Build / Optimize / Tailor / Apply / Improve / Track,
+  each with an outcome-shaped description, a direct link, and a live
+  availability badge computed from `/billing/entitlements/`. Capabilities
+  that need a job to exist say so rather than appearing locked. The catalog
+  lives in one file (`src/lib/capabilities.js`) with the rule that nothing
+  may be listed that is not reachable today, and no limit may be written as
+  a literal.
+- **Plan and usage are now ambient.** A chip in the app header and a card on
+  the toolkit page show the plan and remaining allowance *before* it is
+  spent. Previously the only mention of any limit was the 402 upgrade prompt
+  at the moment it was hit.
+- The guided flow is untouched. This is additive.
+
+**Correctness**
+
+- `Settings` decided paid status with `plan_id === "pro"`. A Max subscriber
+  would have seen the Free badge, an upgrade CTA, and no route to the
+  billing portal they pay for. Paid-plan identity now lives in
+  `src/utils/plans.js`, mirroring the server's `PAID_PLAN_IDS`.
+- `EntitlementsSerializer` had drifted from `usage_summary` by five fields.
+  It shapes nothing at runtime — it is the published OpenAPI contract — so
+  the drift was invisible and clients generated from the schema silently
+  lost fields. Now complete, with a test asserting the two cannot separate
+  again.
+- `useEntitlements`'s loading defaults were missing most of the contract,
+  so any component reading `ai_calls_remaining` mid-flight got `undefined`.
+
+**Bring your own key (brief §15–16)**
+
+- `billing.UserAIKey`, one row per (user, provider), currently Gemini only.
+- Keys are validated against the live provider *before* being stored,
+  encrypted at rest under their own key-derivation domain, never returned by
+  any endpoint, never logged, and always deletable — including when the
+  feature is switched off server-wide.
+- While a user's key is active their requests use it, and the monthly
+  AI-call ceiling stops applying to them. That ceiling exists solely to cap
+  our provider bill, and they are not on it. **It unlocks no paid feature**:
+  the tailored-resume limit, Word export and version history are product
+  value, not compute cost.
+- A user's key is never wrapped in the provider fallback — falling back
+  would spend our quota on a request they chose to pay for themselves.
+- Off by default (`BYOK_ENABLED`), switchable live from the admin
+  Configuration tab. Throttled at 10/hour, because the save endpoint calls
+  the provider and would otherwise be a way to test stolen keys from our IP.
+- 38 tests, including cross-user isolation, encryption-domain separation,
+  and that a rotated encryption key degrades to the server credentials
+  rather than to a failed generation.
+
+**Security**
+
+- Job descriptions and uploaded resumes are attacker-controlled text that
+  goes straight into prompts. Every prompt that embeds them now states
+  plainly that the block is data, not instructions, placed *before* the
+  untrusted text. The text itself is still passed through verbatim —
+  stripping suspicious phrases would corrupt legitimate postings.
+- This is explicitly the weakest of three layers and is documented as such
+  in `resumes/prompts.py`. The two that carry the real weight already
+  existed: schema-constrained output, and the deterministic evidence
+  re-check that overrules any unsupported claim to MISSING.
+
+**Tests:** 885 → 932, all passing, ~12s.
+
+### 0A.4 What this pass did not do
+
+1. Nothing was run against production, and Stripe was still not contacted.
+2. No frontend test suite was added. The new UI was verified by hand in a
+   browser against a live backend, which is not the same thing.
+3. AI output quality is still unmeasured against real postings.
+4. BYOK was verified against the real Gemini API only on the rejection path
+   (a deliberately invalid key, correctly refused with a clear message). The
+   acceptance path is covered by tests with the provider boundary faked.
+
+### 0A.5 Rupee billing — UPI and GST (added later on 2026-09-16)
+
+**Added:** INR pricing (Pro ₹499/mo, ₹3,999/yr; Max ₹999/mo, ₹7,999/yr,
+GST-inclusive, admin-editable) charged through **Razorpay** — UPI AutoPay,
+cards and bank e-mandates — alongside the unchanged Stripe EUR/GBP path.
+Indian GST is calculated in-house (`billing/gst.py`): 18%, back-calculated
+from the inclusive price, CGST+SGST/UTGST for the supplier's own state and
+IGST otherwise, place of supply from the buyer's state or GSTIN, GSTIN
+check-digit validation. Every captured rupee payment gets a numbered
+invoice (a tax invoice once `GST_ENABLED` is on with a valid GSTIN, a plain
+invoice before), downloadable as PDF and retained after account deletion as
+the CGST Act requires. Full detail: `RAZORPAY_SETUP.md`. Tests: 932 → 1,029.
+
+**Why Razorpay:** the Privacy Policy names the operator "IntelliResume Pvt.
+Ltd.", an Indian company. Stripe is invite-only for Indian businesses, lists
+no India-based accounts among those that can accept UPI, and Stripe Tax
+cannot be used by an India-based business.
+
+**New blocker this raises — R0-5: confirm where the business and its Stripe
+account are registered.** If the operator is Indian, the existing EUR/GBP
+plan depends on (a) Stripe approving an Indian account for live payments and
+(b) EU/UK VAT being handled without Stripe Tax, since a non-EU seller of
+digital services generally owes EU VAT (non-Union OSS) and UK VAT from the
+first sale. That turns R0-4 from "decide whether to turn Stripe Tax on" into
+"decide how VAT is collected at all". If the operator is instead registered
+abroad, Stripe can take UPI directly and GST on Indian consumer sales falls
+under the OIDAR rules — a different setup. Either way this is a question for
+the founder and an accountant before live checkout, not for code.
+
+**Not verified:** Razorpay was never contacted; the flow was exercised in a
+browser up to the provider boundary (billing details, GSTIN validation,
+checkout reporting "not configured", subscriber settings, invoice PDF), and
+past it only with the Razorpay API faked in tests.
+
+---
+
 ## 1. Current Architecture
 
 ### 1.1 As-built

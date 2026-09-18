@@ -32,8 +32,15 @@ class JobCurationAIService:
     Uses the configured LLM provider to extract strict job requirement data.
     """
 
-    def __init__(self, llm_service=None, provider=None):
-        self.llm_service = llm_service or get_llm_service(provider)
+    def __init__(self, llm_service=None, provider=None, user=None):
+        """``user`` is the account the work is being done for. It is used for
+        one thing: if they have saved their own provider API key, the client
+        built here uses it instead of the server's (see
+        billing.services.user_ai_key_service). Left None — a management
+        command, a health check — the server's own credentials are used, which
+        is the behaviour this had before BYOK existed."""
+        self.user = user
+        self.llm_service = llm_service or get_llm_service(provider, user=user)
 
     def analyze_job_description(self, job_description):
         prompt = build_job_description_extraction_prompt(job_description)

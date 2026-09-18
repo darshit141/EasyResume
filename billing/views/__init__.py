@@ -12,6 +12,16 @@ from billing.views.coupon_admin_view import (
     AdminCouponToggleActiveAPIView,
 )
 from billing.views.display_ads_view import DisplayAdConfigAPIView
+from billing.views.user_ai_key_view import UserAIKeyAPIView
+from billing.views.razorpay_view import (
+    BillingProfileAPIView,
+    GSTInfoAPIView,
+    InvoiceListAPIView,
+    InvoicePdfAPIView,
+    RazorpayCancelAPIView,
+    RazorpayConfirmAPIView,
+    RazorpayWebhookAPIView,
+)
 from billing.views.credits_view import (
     CreditsStatusAPIView,
     RewardedAdCallbackAPIView,
@@ -32,4 +42,12 @@ __all__ = [
     "DisplayAdConfigAPIView",
     "RewardedAdCallbackAPIView",
     "RewardedAdTicketAPIView",
+    "UserAIKeyAPIView",
+    "BillingProfileAPIView",
+    "GSTInfoAPIView",
+    "InvoiceListAPIView",
+    "InvoicePdfAPIView",
+    "RazorpayCancelAPIView",
+    "RazorpayConfirmAPIView",
+    "RazorpayWebhookAPIView",
 ]

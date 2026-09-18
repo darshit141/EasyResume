@@ -237,7 +237,9 @@ class JobUrlPreviewAPIView(APIView):
             "no AI credit.\n\n"
             "Fails with a specific code when the posting can't be read: "
             "`JOB_URL_BLOCKED` (the site refuses automated access), "
-            "`JOB_URL_NOT_FOUND` (dead link), or `JOB_URL_UNREADABLE` (the "
+            "`JOB_URL_NOT_FOUND` (dead link), `JOB_URL_NOT_A_POSTING` (a "
+            "homepage or a list of openings rather than one job), or "
+            "`JOB_URL_UNREADABLE` (the "
             "page renders its content with JavaScript). In every case the "
             "user can still paste the description manually."
         ),
@@ -247,7 +249,10 @@ class JobUrlPreviewAPIView(APIView):
             status.HTTP_400_BAD_REQUEST: OpenApiResponse(description="Invalid or unsupported URL."),
             status.HTTP_422_UNPROCESSABLE_ENTITY: OpenApiResponse(
                 response=APIErrorSerializer,
-                description="code: JOB_URL_BLOCKED | JOB_URL_NOT_FOUND | JOB_URL_UNREADABLE | JOB_URL_FETCH_FAILED.",
+                description=(
+                    "code: JOB_URL_BLOCKED | JOB_URL_NOT_FOUND | JOB_URL_NOT_A_POSTING | "
+                    "JOB_URL_UNREADABLE | JOB_URL_FETCH_FAILED."
+                ),
             ),
         },
     )
@@ -296,7 +301,7 @@ class JobCurationCreateAPIView(APIView):
         if wants_analysis:
             try:
                 EntitlementsService.check_ai_provider_allowed(request.user, provider)
-                EntitlementsService.check_can_use_ai(request.user)
+                EntitlementsService.check_can_use_ai(request.user, provider=provider)
             except PlanRestrictionError as exc:
                 return plan_restriction_response(exc)
 
@@ -547,7 +552,7 @@ class JobGapAnalysisAPIView(APIView):
         try:
             EntitlementsService.check_ai_provider_allowed(request.user, provider)
             if not already_has_gap_analysis:
-                EntitlementsService.check_can_use_ai(request.user)
+                EntitlementsService.check_can_use_ai(request.user, provider=provider)
         except PlanRestrictionError as exc:
             return plan_restriction_response(exc)
 
