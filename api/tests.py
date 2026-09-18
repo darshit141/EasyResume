@@ -5,7 +5,7 @@ from django.urls import reverse
 from rest_framework import status
 from rest_framework.test import APITestCase
 from resumes.services.llm_service import LLMModelUnavailableError
-from api.models import SystemConfiguration
+from api.models import AdminAuditLog, SystemConfiguration
 from api.utils.config import get_config_value
 from authentication.models import User
 
@@ -233,4 +233,111 @@ class AdminPanelAPITests(APITestCase):
         response = self.client.post(url_self)
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
         self.assertEqual(response.json()["detail"], "You cannot deactivate your own account.")
+
+
+class AdminAuditLogTests(APITestCase):
+    """Every admin-panel action that changes state must leave a row in
+    AdminAuditLog, and a secret value must never appear in one."""
+
+    def setUp(self):
+        SystemConfiguration.objects.all().delete()
+        AdminAuditLog.objects.all().delete()
+        User.objects.all().delete()
+
+        self.admin_user = User.objects.create_superuser(
+            email="admin@example.com", name="Admin", phone="1234567890", password="adminpassword"
+        )
+        self.regular_user = User.objects.create_user(
+            email="user@example.com", name="User", phone="0987654321", password="userpassword"
+        )
+        self.client.force_authenticate(user=self.admin_user)
+
+    def test_config_update_is_audited_with_old_and_new_values(self):
+        self.client.put(
+            reverse("admin-config"),
+            [{"key": "LLM_TIMEOUT", "value": "120"}],
+            format="json",
+        )
+        log = AdminAuditLog.objects.get(action=AdminAuditLog.ACTION_CONFIG_UPDATED, target="LLM_TIMEOUT")
+        self.assertEqual(log.actor, self.admin_user)
+        self.assertEqual(log.actor_email, self.admin_user.email)
+        self.assertEqual(log.detail["new_value"], "120")
+
+    def test_unchanged_config_value_is_not_audited(self):
+        SystemConfiguration.objects.create(
+            key="LLM_TIMEOUT", value="120", value_type="integer", category="llm"
+        )
+        self.client.put(
+            reverse("admin-config"),
+            [{"key": "LLM_TIMEOUT", "value": "120"}],
+            format="json",
+        )
+        self.assertFalse(
+            AdminAuditLog.objects.filter(action=AdminAuditLog.ACTION_CONFIG_UPDATED, target="LLM_TIMEOUT").exists()
+        )
+
+    def test_secret_config_update_is_audited_without_leaking_the_value(self):
+        self.client.put(
+            reverse("admin-config"),
+            [{"key": "GROQ_API_KEY", "value": "gsk_live_super_secret_example"}],
+            format="json",
+        )
+        log = AdminAuditLog.objects.get(action=AdminAuditLog.ACTION_CONFIG_UPDATED, target="GROQ_API_KEY")
+        self.assertNotIn("gsk_live_super_secret_example", str(log.detail))
+        self.assertEqual(log.detail["new_value_hint"], "...mple")
+
+        # A masked resend (the UI's own unmodified value) must not be logged
+        # as a change at all.
+        self.client.put(
+            reverse("admin-config"),
+            [{"key": "GROQ_API_KEY", "value": "********"}],
+            format="json",
+        )
+        self.assertEqual(
+            AdminAuditLog.objects.filter(action=AdminAuditLog.ACTION_CONFIG_UPDATED, target="GROQ_API_KEY").count(),
+            1,
+        )
+
+    def test_config_reset_is_audited(self):
+        SystemConfiguration.objects.create(
+            key="LLM_TIMEOUT", value="120", value_type="integer", category="llm"
+        )
+        self.client.post(reverse("admin-config-reset"))
+        log = AdminAuditLog.objects.get(action=AdminAuditLog.ACTION_CONFIG_RESET, target="all")
+        self.assertIn("LLM_TIMEOUT", log.detail["reset_keys"])
+
+    def test_user_toggle_active_and_staff_are_audited(self):
+        url = reverse("admin-user-toggle-active", kwargs={"user_id": self.regular_user.id})
+        self.client.post(url)
+        log = AdminAuditLog.objects.get(target=f"user:{self.regular_user.id}", action=AdminAuditLog.ACTION_USER_DEACTIVATED)
+        self.assertEqual(log.detail["user_email"], self.regular_user.email)
+
+        url_staff = reverse("admin-user-toggle-staff", kwargs={"user_id": self.regular_user.id})
+        self.client.post(url_staff)
+        self.assertTrue(
+            AdminAuditLog.objects.filter(
+                target=f"user:{self.regular_user.id}", action=AdminAuditLog.ACTION_USER_STAFF_GRANTED
+            ).exists()
+        )
+
+    def test_audit_log_list_requires_admin(self):
+        self.client.force_authenticate(user=self.regular_user)
+        response = self.client.get(reverse("admin-audit-log"))
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+
+    def test_audit_log_list_and_filter(self):
+        self.client.put(
+            reverse("admin-config"),
+            [{"key": "LLM_TIMEOUT", "value": "77"}],
+            format="json",
+        )
+        response = self.client.get(reverse("admin-audit-log"))
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertGreaterEqual(response.json()["count"], 1)
+
+        response = self.client.get(reverse("admin-audit-log") + "?action=" + AdminAuditLog.ACTION_CONFIG_UPDATED)
+        self.assertTrue(all(row["action"] == AdminAuditLog.ACTION_CONFIG_UPDATED for row in response.json()["results"]))
+
+        response = self.client.get(reverse("admin-audit-log") + "?target=LLM_TIMEOUT")
+        self.assertTrue(all(row["target"] == "LLM_TIMEOUT" for row in response.json()["results"]))
 

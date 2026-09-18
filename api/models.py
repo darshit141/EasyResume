@@ -120,3 +120,70 @@ class B2BLead(models.Model):
     def __str__(self):
         return f"{self.name} <{self.email}> @ {self.created_at:%Y-%m-%d}"
 
+
+class AdminAuditLog(models.Model):
+    """A record of every action taken from the admin panel: who did what,
+    to what, and when.
+
+    Nothing here was tracked before this model existed — a config value
+    could change, a user could be deactivated, and there was no record of
+    who did it or when short of a database backup diff. This is the fix:
+    every admin-panel write goes through `record_admin_action` below,
+    which is the only thing that creates a row.
+
+    `actor` is nullable and `actor_email` is denormalized so a row survives
+    the acting admin's account later being deleted — the audit trail is
+    exactly the kind of record that must not disappear because of an
+    unrelated cleanup elsewhere.
+
+    `detail` never holds a secret in plaintext. A config write for a key
+    api.utils.secrets.is_secret_key() flags stores only whether the value
+    changed and its last four characters (see mask_secret_for_audit below,
+    the same convention billing.UserAIKey already uses for masked_key) -
+    never the key itself, encrypted or not. A leaked audit log must not be
+    a second way to steal a provider credential.
+    """
+
+    ACTION_CONFIG_UPDATED = "config_updated"
+    ACTION_CONFIG_RESET = "config_reset"
+    ACTION_USER_ACTIVATED = "user_activated"
+    ACTION_USER_DEACTIVATED = "user_deactivated"
+    ACTION_USER_STAFF_GRANTED = "user_staff_granted"
+    ACTION_USER_STAFF_REVOKED = "user_staff_revoked"
+    ACTION_CHOICES = [
+        (ACTION_CONFIG_UPDATED, "Configuration updated"),
+        (ACTION_CONFIG_RESET, "Configuration reset to defaults"),
+        (ACTION_USER_ACTIVATED, "User activated"),
+        (ACTION_USER_DEACTIVATED, "User deactivated"),
+        (ACTION_USER_STAFF_GRANTED, "Admin access granted"),
+        (ACTION_USER_STAFF_REVOKED, "Admin access revoked"),
+    ]
+
+    actor = models.ForeignKey(
+        "authentication.User",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="admin_audit_logs",
+    )
+    actor_email = models.CharField(max_length=255, blank=True)
+    action = models.CharField(max_length=40, choices=ACTION_CHOICES)
+    # What the action was taken on: a config key, or "user:<id>". Free text
+    # rather than a generic FK, since the two things admins act on today
+    # (SystemConfiguration rows, User accounts) don't share a base table.
+    target = models.CharField(max_length=200)
+    detail = models.JSONField(default=dict, blank=True)
+    ip_address = models.GenericIPAddressField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+        indexes = [
+            models.Index(fields=["action", "created_at"]),
+            models.Index(fields=["target"]),
+        ]
+
+    def __str__(self):
+        who = self.actor_email or "unknown"
+        return f"{who}: {self.action} {self.target} @ {self.created_at:%Y-%m-%d %H:%M}"
+

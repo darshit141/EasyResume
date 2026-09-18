@@ -73,7 +73,7 @@ class LLMQuotaExceededError(LLMServiceError):
     message = "The AI provider's quota for the configured key is exhausted."
 
 
-SUPPORTED_PROVIDERS = ("ollama", "groq", "gemini", "kira")
+SUPPORTED_PROVIDERS = ("ollama", "groq", "gemini", "kira", "openrouter")
 
 # Resume upload/parsing has one extra choice unavailable elsewhere: a
 # deterministic, non-AI parser (see StandardResumeParserService). The other
@@ -215,7 +215,18 @@ class GroqLLMService(LLMService):
     conformance, so the schema is embedded in the prompt text as an
     instruction; each caller's own ``_validate``/``validate_*`` step is what
     actually enforces the contract (same as it already does for Ollama).
+
+    Every failure is logged before being raised - this class used to be
+    silent on error (only the typed exception told a caller anything went
+    wrong), which meant a production auth failure or a string of timeouts
+    against Groq/Kira/OpenRouter left no trace in the logs the way the same
+    failure against Gemini always has. ``provider_name`` (overridden by the
+    Kira/OpenRouter subclasses) is what tells those log lines apart; never
+    the api_key or the raw prompt/response body, which may contain a
+    candidate's resume text.
     """
+
+    provider_name = "groq"
 
     def __init__(self, api_key, model, timeout, max_retries, temperature, base_url, max_output_tokens=2048):
         self.api_key = api_key
@@ -268,16 +279,43 @@ class GroqLLMService(LLMService):
                 except json.JSONDecodeError as exc:
                     raise LLMInvalidResponseError() from exc
             except HTTPError as exc:
+                detail = exc.read().decode(errors="replace") if hasattr(exc, "read") else ""
                 if exc.code in (401, 403):
+                    logger.error(
+                        "%s rejected the API key (HTTP %s) for model %s.",
+                        self.provider_name, exc.code, self.model,
+                    )
                     raise LLMAuthError() from exc
                 if exc.code == 404:
+                    logger.warning(
+                        "%s model %s is unavailable (HTTP 404): %s",
+                        self.provider_name, self.model, detail,
+                    )
                     raise LLMModelUnavailableError() from exc
+                if exc.code == 429:
+                    logger.warning(
+                        "%s rate-limited model %s (HTTP 429): %s",
+                        self.provider_name, self.model, detail,
+                    )
+                else:
+                    logger.error(
+                        "%s request to %s failed (HTTP %s): %s",
+                        self.provider_name, self.model, exc.code, detail,
+                    )
                 raise LLMServiceError() from exc
             except (socket.timeout, TimeoutError) as exc:
                 if attempt == self.max_retries:
+                    logger.warning(
+                        "%s timed out calling model %s after %s attempt(s).",
+                        self.provider_name, self.model, attempt + 1,
+                    )
                     raise LLMTimeoutError() from exc
             except (URLError, ConnectionError) as exc:
                 if attempt == self.max_retries:
+                    logger.error(
+                        "%s was unreachable for model %s after %s attempt(s): %s",
+                        self.provider_name, self.model, attempt + 1, exc,
+                    )
                     raise LLMServiceError() from exc
 
         raise LLMServiceError()
@@ -331,6 +369,22 @@ class KiraLLMService(GroqLLMService):
     window and higher rate limits than the free tiers of the other
     providers, which is why a deployment sharing one key across many
     users would pick it as the default (``LLM_PROVIDER=kira``).
+    """
+
+
+class OpenRouterLLMService(GroqLLMService):
+    """Client for OpenRouter, an OpenAI-compatible gateway to hundreds of
+    models. Same wire format as Groq/Kira, so it reuses that client as-is.
+
+    Configured with its own base URL, key and model (``OPENROUTER_*`` in
+    settings) — the server's own OpenRouter account, shared across every
+    request that resolves to this provider, not a per-user BYOK key.
+    Gated to Pro/Max plans in ``billing.entitlements`` rather than offered
+    to everyone: the point of this slot is giving paid users a second
+    provider to fall back on, not adding free capacity for the free tier.
+    A single model id is chosen server-side (``OPENROUTER_MODEL`` in the
+    admin Configuration tab) — users never pick a model, only optionally a
+    provider, and only when ``AI_PROVIDER_SELECTION_ENABLED`` is on.
     """
 
 
@@ -990,6 +1044,17 @@ def _build_client(provider, timeout, max_retries, temperature, max_output_tokens
             max_retries=max_retries,
             temperature=temperature,
             base_url=get_config_value("KIRA_BASE_URL", settings.KIRA_BASE_URL),
+            max_output_tokens=max_output_tokens,
+        )
+
+    if provider == "openrouter":
+        return OpenRouterLLMService(
+            api_key=api_key_override or _provider_api_key("OPENROUTER_API_KEY"),
+            model=get_config_value("OPENROUTER_MODEL", settings.OPENROUTER_MODEL),
+            timeout=timeout,
+            max_retries=max_retries,
+            temperature=temperature,
+            base_url=get_config_value("OPENROUTER_BASE_URL", settings.OPENROUTER_BASE_URL),
             max_output_tokens=max_output_tokens,
         )
 

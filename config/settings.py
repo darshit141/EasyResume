@@ -569,6 +569,18 @@ KIRA_API_KEY = os.getenv("KIRA_API_KEY", "")
 KIRA_MODEL = os.getenv("KIRA_MODEL", "")
 KIRA_BASE_URL = os.getenv("KIRA_BASE_URL", "https://kiraai.vn/api/v1")
 
+# OpenRouter: an OpenAI-compatible gateway to hundreds of models, several
+# free. Reuses the Groq client (see resumes.services.llm_service.
+# OpenRouterLLMService) since the wire format is identical. Pro/Max only
+# (billing.entitlements.PRO_ENTITLEMENTS/MAX_ENTITLEMENTS) — this is the
+# server's own OpenRouter account, shared across every paid user, not a
+# per-user BYOK key. Pick the chat model in the admin Configuration tab
+# (OPENROUTER_MODEL); OpenRouter's free-model roster changes often, so none
+# is assumed here.
+OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "")
+OPENROUTER_MODEL = os.getenv("OPENROUTER_MODEL", "")
+OPENROUTER_BASE_URL = os.getenv("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1")
+
 # --- Rewarded ads -> earned credits ---------------------------------------
 # A free-tier user can watch an opt-in rewarded video to earn a credit (one
 # extra AI action + one extra tailored resume, expiring after a few days).

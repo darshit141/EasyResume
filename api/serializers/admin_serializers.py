@@ -1,6 +1,6 @@
 from rest_framework import serializers
 from authentication.models import User
-from api.models import SystemConfiguration
+from api.models import AdminAuditLog, SystemConfiguration
 from billing.models import Subscription
 
 
@@ -11,6 +11,13 @@ class SystemConfigurationSerializer(serializers.ModelSerializer):
         model = SystemConfiguration
         fields = ["key", "value", "description", "category", "value_type", "updated_at", "is_custom"]
         read_only_fields = ["updated_at", "is_custom"]
+
+
+class AdminAuditLogSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = AdminAuditLog
+        fields = ["id", "actor_email", "action", "target", "detail", "ip_address", "created_at"]
+        read_only_fields = fields
 
 
 class AdminUserSerializer(serializers.ModelSerializer):

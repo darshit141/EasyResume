@@ -8,6 +8,7 @@ from .views.admin_views import (
     AdminUserToggleActiveAPIView,
     AdminUserToggleStaffAPIView,
     AdminStatsAPIView,
+    AdminAuditLogListAPIView,
 )
 from .views.business_metrics_view import AdminBusinessMetricsAPIView
 from .views.analytics_views import TrackEventAPIView
@@ -41,4 +42,5 @@ urlpatterns = [
     path("admin/business-metrics/", AdminBusinessMetricsAPIView.as_view(), name="admin-business-metrics"),
     path("admin/users/<int:user_id>/toggle-active/", AdminUserToggleActiveAPIView.as_view(), name="admin-user-toggle-active"),
     path("admin/users/<int:user_id>/toggle-staff/", AdminUserToggleStaffAPIView.as_view(), name="admin-user-toggle-staff"),
+    path("admin/audit-log/", AdminAuditLogListAPIView.as_view(), name="admin-audit-log"),
 ]
