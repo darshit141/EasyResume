@@ -17,6 +17,7 @@ from .views.b2b_lead_views import (
     AdminB2BLeadToggleContactedAPIView,
     B2BLeadCreateAPIView,
 )
+from .views.feedback_views import FeedbackCreateAPIView
 
 urlpatterns = [
     path("health/", health_check, name="health-check"),
@@ -24,6 +25,9 @@ urlpatterns = [
 
     # Analytics
     path("analytics/track/", TrackEventAPIView.as_view(), name="analytics-track"),
+
+    # Feedback
+    path("feedback/", FeedbackCreateAPIView.as_view(), name="feedback-create"),
 
     # Leads
     path("leads/b2b/", B2BLeadCreateAPIView.as_view(), name="b2b-lead-create"),

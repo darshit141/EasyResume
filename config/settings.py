@@ -241,6 +241,10 @@ REST_FRAMEWORK = {
         # Public B2B lead-capture form — a real person fills this out at
         # most once; tight enough to make scripted spam submissions costly.
         "b2b_lead": os.getenv("THROTTLE_B2B_LEAD", "5/min"),
+        # "Report a bug" button, open to signed-out visitors too. A real
+        # report is a rare, deliberate action; capped to stop it being used
+        # to spam the sales inbox.
+        "feedback": os.getenv("THROTTLE_FEEDBACK", "5/min"),
         # Public, unauthenticated outcome-recording link from the nudge
         # email. Generous enough for a real person clicking once, capped so
         # the endpoint cannot be hammered to brute-force tokens.
