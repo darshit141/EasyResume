@@ -430,6 +430,12 @@ CELERY_BEAT_SCHEDULE = {
         "task": "resumes.tasks.send_outcome_nudges_task",
         "schedule": 86400.0,
     },
+    # Job sites change their pages without notice; this imports one live
+    # posting per major platform and emails OPS_ALERT_EMAIL if any break.
+    "job-import-canary-daily": {
+        "task": "resumes.tasks.job_import_canary_task",
+        "schedule": 86400.0,
+    },
 }
 
 # LLM configuration.  These are deliberately kept separate from the request
@@ -498,6 +504,31 @@ ALLOWED_JOB_URL_DOMAINS = [
     for domain in os.getenv("ALLOWED_JOB_URL_DOMAINS", _DEFAULT_ALLOWED_JOB_URL_DOMAINS).split(",")
     if domain.strip()
 ]
+# Most postings live on companies' own career pages, which no allowlist can
+# enumerate. With this on, any public site can be imported (the SSRF guards
+# in job_url_fetch_service still apply) and ALLOWED_JOB_URL_DOMAINS is
+# ignored. Turn it off to go back to allowlist-only.
+JOB_URL_ALLOW_ANY_PUBLIC_SITE = os.getenv("JOB_URL_ALLOW_ANY_PUBLIC_SITE", "True") == "True"
+# Sites that refuse or hang on requests from a server. Importing from them
+# fails instantly with a clear message instead of spending the whole time
+# budget on a guaranteed failure. "name.*" matches any suffix (indeed.* is
+# in.indeed.com and indeed.co.uk). Verified from the production droplet.
+BOT_WALLED_JOB_DOMAINS = [
+    domain.strip().lower()
+    for domain in os.getenv(
+        "BOT_WALLED_JOB_DOMAINS",
+        "naukri.com,indeed.*,glassdoor.*,ziprecruiter.*,monster.*,wellfound.com,angel.co",
+    ).split(",")
+    if domain.strip()
+]
+# Total time one link import may take, across every request it makes.
+JOB_IMPORT_TIME_BUDGET_SECONDS = float(os.getenv("JOB_IMPORT_TIME_BUDGET_SECONDS", "8"))
+# How long a successful import is reused for the same link.
+JOB_IMPORT_CACHE_SECONDS = int(os.getenv("JOB_IMPORT_CACHE_SECONDS", str(24 * 60 * 60)))
+# Import attempts older than this are deleted by the daily cleanup.
+JOB_IMPORT_ATTEMPT_RETENTION_DAYS = int(os.getenv("JOB_IMPORT_ATTEMPT_RETENTION_DAYS", "90"))
+# Where operational alerts (the daily job-import check) are sent.
+OPS_ALERT_EMAIL = os.getenv("OPS_ALERT_EMAIL", "sales@patrixel.com")
 
 # Optional rescue for job postings the free fetch above can't read because
 # they render client-side (see resumes/services/apify_job_fetch_service.py).

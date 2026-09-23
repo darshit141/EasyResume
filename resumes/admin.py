@@ -1,5 +1,5 @@
 from django.contrib import admin
-from .models import JobResumeCuration, Resume
+from .models import JobImportAttempt, JobResumeCuration, Resume
 
 
 @admin.register(Resume)
@@ -59,3 +59,11 @@ class JobResumeCurationAdmin(admin.ModelAdmin):
         "created_at",
         "updated_at",
     )
+
+
+@admin.register(JobImportAttempt)
+class JobImportAttemptAdmin(admin.ModelAdmin):
+    list_display = ("created_at", "domain", "outcome", "source", "duration_ms", "trigger", "user")
+    list_filter = ("outcome", "trigger", "source", "created_at")
+    search_fields = ("domain", "url", "user__email")
+    readonly_fields = [field.name for field in JobImportAttempt._meta.fields]

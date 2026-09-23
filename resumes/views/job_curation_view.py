@@ -30,7 +30,8 @@ from resumes.services.job_curation_service import (
     JobCurationDatabaseError,
     JobCurationService,
 )
-from resumes.services.job_url_fetch_service import JobUrlFetchError, fetch_job_posting
+from resumes.services.job_import_service import import_job_posting
+from resumes.services.job_url_fetch_service import JobUrlFetchError
 from resumes.services.llm_service import SUPPORTED_PROVIDERS, LLMServiceError, resolve_provider
 from ai_jobs.models import AIJob
 from ai_jobs.serializers import AIJobSerializer
@@ -262,7 +263,7 @@ class JobUrlPreviewAPIView(APIView):
             return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
         try:
-            imported = fetch_job_posting(serializer.validated_data["job_url"])
+            imported = import_job_posting(serializer.validated_data["job_url"], user=request.user)
         except JobUrlFetchError as exc:
             return Response(
                 {"detail": exc.message, "code": exc.code},
@@ -273,6 +274,11 @@ class JobUrlPreviewAPIView(APIView):
             JobUrlPreviewResponseSerializer({
                 "job_title": imported["title"],
                 "job_description": imported["description"],
+                "company": imported.get("company", ""),
+                "location": imported.get("location", ""),
+                "employment_type": imported.get("employment_type", ""),
+                "seniority": imported.get("seniority", ""),
+                "source": imported.get("source", ""),
             }).data
         )
 
@@ -314,7 +320,7 @@ class JobCurationCreateAPIView(APIView):
         # they've seen the posting and we haven't.
         if job_url and not job_description:
             try:
-                imported = fetch_job_posting(job_url)
+                imported = import_job_posting(job_url, user=request.user)
             except JobUrlFetchError as exc:
                 return Response(
                     {"detail": exc.message, "code": exc.code},

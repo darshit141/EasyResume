@@ -1,5 +1,6 @@
 from unittest.mock import patch
 
+from django.core.cache import cache
 from django.test import TestCase, override_settings
 from rest_framework.test import APIClient
 
@@ -43,7 +44,8 @@ class JobUrlSecurityTests(TestCase):
             with self.assertRaises(JobUrlNotAllowedError):
                 fetch_job_posting(url)
 
-    def test_domain_outside_the_allowlist_is_rejected(self):
+    @override_settings(JOB_URL_ALLOW_ANY_PUBLIC_SITE=False)
+    def test_domain_outside_the_allowlist_is_rejected_in_allowlist_mode(self):
         with self.assertRaises(JobUrlNotAllowedError):
             fetch_job_posting("https://evil.example/jobs/1")
 
@@ -174,10 +176,11 @@ class JobUrlPreviewAPITests(TestCase):
         self.client = APIClient()
         self.client.force_authenticate(user=self.user)
         self.url = "/api/resumes/job-curations/import-url/"
+        cache.clear()
 
     def test_returns_extracted_title_and_description(self):
         with patch(
-            "resumes.views.job_curation_view.fetch_job_posting",
+            "resumes.services.job_import_service.fetch_job_posting",
             return_value={"title": "Senior Backend Engineer", "description": "Python and Django."},
         ):
             response = self.client.post(self.url, {"job_url": JOB_URL}, format="json")
@@ -190,7 +193,7 @@ class JobUrlPreviewAPITests(TestCase):
         from billing.models import AIUsageLog
 
         with patch(
-            "resumes.views.job_curation_view.fetch_job_posting",
+            "resumes.services.job_import_service.fetch_job_posting",
             return_value={"title": "Engineer", "description": "Text."},
         ):
             self.client.post(self.url, {"job_url": JOB_URL}, format="json")
@@ -202,7 +205,7 @@ class JobUrlPreviewAPITests(TestCase):
         from resumes.services.job_url_fetch_service import JobUrlBlockedError
 
         with patch(
-            "resumes.views.job_curation_view.fetch_job_posting",
+            "resumes.services.job_import_service.fetch_job_posting",
             side_effect=JobUrlBlockedError(),
         ):
             response = self.client.post(self.url, {"job_url": JOB_URL}, format="json")
@@ -212,7 +215,7 @@ class JobUrlPreviewAPITests(TestCase):
 
     def test_javascript_rendered_page_reports_unreadable(self):
         with patch(
-            "resumes.views.job_curation_view.fetch_job_posting",
+            "resumes.services.job_import_service.fetch_job_posting",
             side_effect=JobUrlUnreadableError(),
         ):
             response = self.client.post(self.url, {"job_url": JOB_URL}, format="json")
@@ -220,14 +223,27 @@ class JobUrlPreviewAPITests(TestCase):
         self.assertEqual(response.status_code, 422)
         self.assertEqual(response.data["code"], "JOB_URL_UNREADABLE")
 
-    def test_unsupported_domain_is_rejected_before_any_fetch(self):
-        with patch("resumes.views.job_curation_view.fetch_job_posting") as mock_fetch:
+    @override_settings(JOB_URL_ALLOW_ANY_PUBLIC_SITE=False)
+    def test_unsupported_domain_is_rejected_before_any_fetch_in_allowlist_mode(self):
+        with patch("resumes.services.job_import_service.fetch_job_posting") as mock_fetch:
             response = self.client.post(
                 self.url, {"job_url": "https://evil.example/x"}, format="json"
             )
 
         self.assertEqual(response.status_code, 400)
         mock_fetch.assert_not_called()
+
+    def test_company_career_pages_are_accepted_by_default(self):
+        with patch(
+            "resumes.services.job_import_service.fetch_job_posting",
+            return_value={"title": "Account Manager", "description": "Own a book of accounts."},
+        ) as mock_fetch:
+            response = self.client.post(
+                self.url, {"job_url": "https://careers.airbnb.com/positions/8184174"}, format="json"
+            )
+
+        self.assertEqual(response.status_code, 200)
+        mock_fetch.assert_called_once()
 
     def test_requires_authentication(self):
         response = APIClient().post(self.url, {"job_url": JOB_URL}, format="json")
@@ -243,9 +259,10 @@ class JobCurationFromUrlAPITests(TestCase):
         self.client = APIClient()
         self.client.force_authenticate(user=self.user)
         self.url = "/api/resumes/job-curations/analyze/"
+        cache.clear()
 
     def post(self, payload, imported=None, fetch_error=None):
-        target = "resumes.views.job_curation_view.fetch_job_posting"
+        target = "resumes.services.job_import_service.fetch_job_posting"
         patcher = (
             patch(target, side_effect=fetch_error)
             if fetch_error

@@ -563,3 +563,44 @@ class JobApplication(models.Model):
 
     def __str__(self):
         return f"{self.subject} -> {self.recipient_email} ({self.status})"
+
+
+class JobImportAttempt(models.Model):
+    """One attempt to import a job posting from a link.
+
+    Kept so import reliability is measurable per site: job boards change
+    their pages without notice, and a success rate that drops for one domain
+    is the earliest sign. Holds the link and the outcome only, never the
+    imported text.
+    """
+
+    TRIGGER_USER = "user"
+    TRIGGER_CANARY = "canary"
+    TRIGGER_CHOICES = [(TRIGGER_USER, "User"), (TRIGGER_CANARY, "Daily check")]
+
+    OUTCOME_SUCCESS = "SUCCESS"
+
+    user = models.ForeignKey(
+        User, on_delete=models.SET_NULL, null=True, blank=True, related_name="job_import_attempts",
+    )
+    trigger = models.CharField(max_length=10, choices=TRIGGER_CHOICES, default=TRIGGER_USER)
+    domain = models.CharField(max_length=255)
+    url = models.CharField(max_length=1000, help_text="Normalised: tracking parameters removed.")
+    # SUCCESS, or the JobUrlFetchError code that ended the attempt.
+    outcome = models.CharField(max_length=40)
+    # Which extraction strategy produced the posting (linkedin, json_ld,
+    # page_content, ...), or "cache" when a recent import was reused.
+    source = models.CharField(max_length=40, blank=True)
+    duration_ms = models.PositiveIntegerField(default=0)
+    description_chars = models.PositiveIntegerField(default=0)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+        indexes = [
+            models.Index(fields=["created_at"]),
+            models.Index(fields=["domain", "created_at"]),
+        ]
+
+    def __str__(self):
+        return f"{self.domain} {self.outcome} ({self.source or '-'})"

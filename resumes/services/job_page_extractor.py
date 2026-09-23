@@ -124,12 +124,25 @@ _JOB_LINK = re.compile(
     re.I,
 )
 
-# Lines that are UI, not posting.
+# Lines that are UI, not posting. Anchored to the whole line, so a sentence
+# that merely contains "apply" or "save" is never touched.
 _NOISE_LINE = re.compile(
-    r"^(apply( now| for this job| here)?|save( job)?|share( this job)?|report( this)? job|"
+    r"^(apply( now| for this job| here| on company website)?|easy apply|save( job)?|"
+    r"share( this job)?|report( this)? job|"
     r"back to (jobs|search|results)|sign in|log in|register|print|copy link|"
     r"similar jobs|related jobs|view all jobs|see all jobs|accept( all)?( cookies)?|"
-    r"decline|close|menu|skip to (main )?content|loading\.*)$",
+    r"decline|close|menu|skip to (main )?content|loading\.*|show (more|less)|"
+    # Job-board activity chrome (LinkedIn, Indeed, Naukri and similar).
+    r"(over |be among the first )?\d[\d,]* applicants?|"
+    r"(posted |reposted )?\d+\+? (minute|hour|day|week|month)s? ago|"
+    r"(actively|urgently) (hiring|recruiting)|"
+    r"see who .{1,80} has hired for this role|see who you know|"
+    r"referrals increase your chances of interviewing at .{1,80}|"
+    r"join or sign in to find your next job|join to apply for the|"
+    r"use ai to assess how you fit|get ai-powered advice on this job and more exclusive features\.?|"
+    r"am i a good fit for this job\??|tailor my resume|"
+    r"sign in to (evaluate|see|view) .{1,80}|"
+    r"(set )?(job )?alert( for similar jobs)?|get notified about new .{1,80} jobs.*)$",
     re.IGNORECASE,
 )
 
@@ -537,3 +550,64 @@ def clean_plain_text(text):
     """For providers that hand back text rather than markup: drop UI lines
     and repeats, keep the rest."""
     return _clean_lines(text or "")[:MAX_DESCRIPTION_CHARS]
+
+
+def finalize_description(text):
+    """The last step every import goes through, whatever produced the text.
+
+    Drops UI lines and tidies whitespace, but unlike clean_plain_text keeps
+    repeated short lines: structured sources (JSON-LD, ATS APIs) don't
+    duplicate page furniture, and a posting can legitimately list "Python"
+    under both required and preferred skills.
+    """
+    lines = []
+    for raw in (text or "").split("\n"):
+        line = re.sub(r"[ \t ]+", " ", raw).strip()
+        if not line or line == "-":
+            if lines and lines[-1] != "":
+                lines.append("")
+            continue
+        if _NOISE_LINE.match(line.lstrip("-•* ").strip()):
+            continue
+        lines.append(line)
+    # List items are each their own block when rendered from markup, which
+    # leaves a blank line between every bullet. A list reads as a list.
+    tidy = [
+        line for index, line in enumerate(lines)
+        if not (
+            line == ""
+            and 0 < index < len(lines) - 1
+            and lines[index - 1].startswith("- ")
+            and lines[index + 1].startswith("- ")
+        )
+    ]
+    return "\n".join(tidy).strip()[:MAX_DESCRIPTION_CHARS]
+
+
+def render_markup(markup):
+    """Posting markup (an ATS API's HTML body, a JSON-LD description) as
+    readable text: blocks on their own lines, list items bulleted. Unlike
+    extract_job_content this assumes the markup *is* the posting and
+    doesn't go looking for it."""
+    if not re.search(r"<[a-zA-Z/!]", markup or ""):
+        # Already plain text: parsing it would collapse its line breaks.
+        return finalize_description(html.unescape(markup or ""))
+    root = _parse(markup or "")
+    _prune(root)
+    parts = []
+    _render(root, parts)
+    return finalize_description("".join(parts))
+
+
+def render_element_with_class(markup, class_name):
+    """The text of the first element carrying `class_name` among its
+    classes, or "" if there is none. For sources whose layout is known, where
+    picking the exact container beats scoring the whole page."""
+    root = _parse(markup or "")
+    for element in _iter_elements(root):
+        if class_name in element.attrs.get("class", "").split():
+            _prune(element)
+            parts = []
+            _render(element, parts)
+            return finalize_description("".join(parts))
+    return ""

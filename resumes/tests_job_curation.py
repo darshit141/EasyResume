@@ -349,6 +349,8 @@ class JobCurationAPITests(TestCase):
         poll_job(self.client, response)
         mock_urlopen.assert_not_called()
 
+    # Allowlist mode only: by default any public site is accepted.
+    @override_settings(JOB_URL_ALLOW_ANY_PUBLIC_SITE=False)
     def test_url_on_an_unsupported_domain_is_rejected(self):
         self.authenticate()
         payload = {**VALID_REQUEST, "job_url": "https://random-scam-site.example/jobs/1"}
@@ -386,6 +388,8 @@ class JobCurationAPITests(TestCase):
         self.assertEqual(response.status_code, 202)
         poll_job(self.client, response)
 
+    # Allowlist mode only: by default any public site is accepted.
+    @override_settings(JOB_URL_ALLOW_ANY_PUBLIC_SITE=False)
     def test_a_lookalike_domain_is_not_accepted_as_a_suffix_match(self):
         # "notlinkedin.com" must not pass just because it ends in a
         # substring that looks like an allowed domain.

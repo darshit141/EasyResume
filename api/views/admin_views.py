@@ -395,7 +395,31 @@ DEFAULT_CONFIGS = [
         "key": "ALLOWED_JOB_URL_DOMAINS",
         "category": "limits",
         "value_type": "list",
-        "description": "Comma-separated list of domains allowed for job URL parsing",
+        "description": "Comma-separated list of domains allowed for job URL parsing. Only used when 'allow any public site' is off.",
+    },
+    {
+        "key": "JOB_URL_ALLOW_ANY_PUBLIC_SITE",
+        "category": "limits",
+        "value_type": "boolean",
+        "description": "Import job links from any public website, including companies' own career pages. Server-side safety checks still apply. Off = only the allowed domains list.",
+    },
+    {
+        "key": "BOT_WALLED_JOB_DOMAINS",
+        "category": "limits",
+        "value_type": "list",
+        "description": "Job sites that block server requests. Imports from these fail instantly with a clear message instead of waiting. 'name.*' matches any suffix, e.g. indeed.*",
+    },
+    {
+        "key": "JOB_IMPORT_TIME_BUDGET_SECONDS",
+        "category": "limits",
+        "value_type": "float",
+        "description": "Maximum total seconds one job-link import may take.",
+    },
+    {
+        "key": "JOB_IMPORT_CACHE_SECONDS",
+        "category": "limits",
+        "value_type": "integer",
+        "description": "How long (seconds) a successful job-link import is reused for the same link.",
     },
     {
         "key": "LOGIN_OTP_REQUIRED",

@@ -18,3 +18,12 @@ def send_outcome_nudges_task():
     result = send_due_outcome_nudges()
     logger.info("Outcome nudge task finished: %s", result)
     return result
+
+
+@shared_task
+def job_import_canary_task():
+    """Daily: import one live posting per major job platform and email an
+    alert if any fail. Also deletes old import records."""
+    from resumes.services.job_import_canary import run_daily_check
+
+    return run_daily_check()
