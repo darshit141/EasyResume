@@ -599,6 +599,27 @@ class RazorpayWebhookTests(TestCase):
         self.assertEqual(GSTInvoice.objects.filter(razorpay_payment_id="pay_rzp_1").count(), 1)
         self.assertEqual(InvoiceSequence.objects.get().last_number, 1, "no serial burned by the duplicate")
 
+    def test_charged_emails_a_receipt(self):
+        from django.core import mail
+
+        with _inr_plan_ids():
+            self._post("subscription.charged", _entity(self.user), _payment(), event_id="evt_a")
+
+        self.assertEqual(len(mail.outbox), 1)
+        self.assertEqual(mail.outbox[0].to, [self.user.email])
+        self.assertIn("successful", mail.outbox[0].subject)
+        self.assertIn("IR/", mail.outbox[0].body)
+
+    def test_a_redelivered_charge_sends_only_one_receipt(self):
+        from django.core import mail
+
+        now = int(time.time())
+        with _inr_plan_ids():
+            self._post("subscription.charged", _entity(self.user), _payment(), event_id="evt_a", created_at=now)
+            self._post("subscription.charged", _entity(self.user), _payment(), event_id="evt_b", created_at=now + 1)
+
+        self.assertEqual(len(mail.outbox), 1)
+
     def test_a_renewal_failure_keeps_access_while_retrying_and_emails_the_customer(self):
         self._post("subscription.activated", _entity(self.user), event_id="evt_a")
         with patch("billing.services.dunning_mailer.send_payment_failed_email") as email:

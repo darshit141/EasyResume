@@ -514,6 +514,44 @@ class SubscriptionSyncServiceTests(TestCase):
 
         self.assertEqual(Subscription.objects.get(stripe_customer_id="cus_123").status, "active")
 
+    def test_invoice_paid_emails_a_receipt(self):
+        from django.core import mail
+
+        Subscription.objects.create(
+            user=self.user, stripe_customer_id="cus_123", status="active",
+            plan_id="pro", billing_period="monthly",
+        )
+
+        event = {
+            "type": "invoice.paid",
+            "data": {"object": {
+                "customer": "cus_123", "id": "in_123", "number": "INV-001",
+                "amount_paid": 1499, "currency": "eur",
+            }},
+        }
+        SubscriptionSyncService.apply_event(event)
+
+        self.assertEqual(len(mail.outbox), 1)
+        self.assertEqual(mail.outbox[0].to, [self.user.email])
+        self.assertIn("successful", mail.outbox[0].subject)
+        self.assertIn("14.99", mail.outbox[0].body)
+        self.assertIn("INV-001", mail.outbox[0].body)
+
+    def test_invoice_paid_with_zero_amount_sends_no_receipt(self):
+        # A $0 invoice (e.g. a fully-discounted trial period) isn't a
+        # charge the customer needs a receipt for.
+        from django.core import mail
+
+        Subscription.objects.create(user=self.user, stripe_customer_id="cus_123", status="active")
+
+        event = {
+            "type": "invoice.paid",
+            "data": {"object": {"customer": "cus_123", "id": "in_123", "amount_paid": 0, "currency": "eur"}},
+        }
+        SubscriptionSyncService.apply_event(event)
+
+        self.assertEqual(len(mail.outbox), 0)
+
     def test_full_refund_cancels_the_subscription(self):
         Subscription.objects.create(user=self.user, stripe_customer_id="cus_123", status="active")
 

@@ -163,7 +163,18 @@ class SubscriptionSyncService:
 
         from billing.services.dunning_mailer import send_payment_failed_email
 
-        send_payment_failed_email(subscription.user, invoice)
+        # `next_payment_attempt` and `amount_due` are the fields Stripe
+        # actually puts on the invoice object itself for a failed renewal;
+        # the decline reason lives on the charge/payment intent, which this
+        # event doesn't carry, so it's left out rather than guessed at.
+        send_payment_failed_email(
+            subscription.user,
+            invoice,
+            amount_minor=invoice.get("amount_due"),
+            currency=(invoice.get("currency") or "").upper() or None,
+            plan_id=subscription.plan_id,
+            billing_period=subscription.billing_period,
+        )
 
         logger.warning(
             "Invoice payment failed for user_id=%s stripe_customer_id=%s invoice=%s",
@@ -177,7 +188,12 @@ class SubscriptionSyncService:
         """A renewal (or the first payment) succeeded. If the subscription
         had been marked past_due by an earlier failed attempt, this is the
         recovery signal — restore active status immediately rather than
-        waiting for a separate customer.subscription.updated event."""
+        waiting for a separate customer.subscription.updated event.
+
+        Every paid invoice gets a receipt email, first payment and renewals
+        alike — not just the past_due recovery case above, which only
+        covers whether *local status* needed correcting, not whether the
+        customer already knows the charge went through."""
         subscription = Subscription.objects.filter(
             stripe_customer_id=invoice.get("customer")
         ).first()
@@ -186,6 +202,21 @@ class SubscriptionSyncService:
         if subscription.status == "past_due":
             subscription.status = "active"
             subscription.save(update_fields=["status", "updated_at"])
+
+        amount_paid = invoice.get("amount_paid")
+        currency = (invoice.get("currency") or "").upper()
+        if amount_paid and currency:
+            from billing.services.dunning_mailer import send_payment_succeeded_email
+
+            send_payment_succeeded_email(
+                subscription.user,
+                amount_minor=amount_paid,
+                currency=currency,
+                plan_id=subscription.plan_id,
+                billing_period=subscription.billing_period,
+                reference=invoice.get("number") or invoice.get("id"),
+                processor="stripe",
+            )
 
     @staticmethod
     def _handle_charge_refunded(charge):
