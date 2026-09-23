@@ -120,7 +120,8 @@ class MaxEntitlementTests(TestCase):
 
 class ReplyTrackingConfigTests(TestCase):
     def test_defaults_form_a_ladder(self):
-        self.assertEqual(entitlements_for(None, False)["reply_tracking"], "none")
+        # Free gets tracking too, capped by REPLY_TRACKING_FREE_JOB_LIMIT.
+        self.assertEqual(entitlements_for(None, False)["reply_tracking"], "alias")
         self.assertEqual(entitlements_for("pro", True)["reply_tracking"], "alias")
         self.assertEqual(entitlements_for("max", True)["reply_tracking"], "gmail")
 

@@ -33,6 +33,7 @@ urlpatterns = [
 
     # Blog / marketing APIs
     path("api/blog/", include("blog.urls")),
+    path("api/inbox/", include("inbox.urls")),
 
     # Background AI job status polling
     path("api/ai-jobs/", include("ai_jobs.urls")),

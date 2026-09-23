@@ -105,12 +105,17 @@ class ApplicationTrackingService:
 
         if existing is not None:
             existing.autofilled_at = now
-            existing.save(update_fields=["autofilled_at", "updated_at"])
+            fields = ["autofilled_at", "updated_at"]
+            if company and not existing.company_name:
+                existing.company_name = company.strip()[:200]
+                fields.append("company_name")
+            existing.save(update_fields=fields)
             return existing, False
 
         curation = JobResumeCuration.objects.create(
             user=user,
             job_title=title,
+            company_name=(company or "").strip()[:200],
             # Whatever the extension could read off the page. Often empty on
             # an application form, which is a different page from the
             # posting — an empty description is honest and still leaves a
@@ -132,7 +137,7 @@ class ApplicationTrackingService:
         return curation, True
 
     @staticmethod
-    def create_saved_job(user, *, job_title, job_description="", job_url="", resume_id=None):
+    def create_saved_job(user, *, job_title, job_description="", job_url="", resume_id=None, company_name=""):
         """Track a job the user chose not to have analysed.
 
         Unticking "curate my resume" used to store nothing and return a
@@ -156,6 +161,7 @@ class ApplicationTrackingService:
         curation = JobResumeCuration.objects.create(
             user=user,
             job_title=title,
+            company_name=(company_name or "").strip()[:200],
             job_description=(job_description or "").strip(),
             job_url=(job_url or "").strip()[:MAX_URL_LENGTH] if key else "",
             resume_id=resume_id,

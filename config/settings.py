@@ -104,6 +104,7 @@ INSTALLED_APPS = [
      "resumes",
     "billing",
     "blog",
+    "inbox",
     "ai_jobs",
 ]
 
@@ -436,6 +437,14 @@ CELERY_BEAT_SCHEDULE = {
         "task": "resumes.tasks.job_import_canary_task",
         "schedule": 86400.0,
     },
+    "inbound-email-cleanup-daily": {
+        "task": "inbox.tasks.inbound_email_cleanup_task",
+        "schedule": 86400.0,
+    },
+    "requeue-stalled-inbound-emails": {
+        "task": "inbox.tasks.requeue_stalled_inbound_emails_task",
+        "schedule": 300.0,
+    },
 }
 
 # LLM configuration.  These are deliberately kept separate from the request
@@ -527,6 +536,22 @@ JOB_IMPORT_TIME_BUDGET_SECONDS = float(os.getenv("JOB_IMPORT_TIME_BUDGET_SECONDS
 JOB_IMPORT_CACHE_SECONDS = int(os.getenv("JOB_IMPORT_CACHE_SECONDS", str(24 * 60 * 60)))
 # Import attempts older than this are deleted by the daily cleanup.
 JOB_IMPORT_ATTEMPT_RETENTION_DAYS = int(os.getenv("JOB_IMPORT_ATTEMPT_RETENTION_DAYS", "90"))
+# --- Recruiter email tracking (inbox app) ---
+# Mail to track-<token>@ and reply-<token>@ this domain is delivered by
+# Cloudflare Email Routing to the site's Worker, which signs it with
+# INBOUND_EMAIL_SECRET and posts it to /api/inbox/inbound/.
+INBOUND_EMAIL_DOMAIN = os.getenv("INBOUND_EMAIL_DOMAIN", "intelliresume.online")
+INBOUND_EMAIL_SECRET = os.getenv("INBOUND_EMAIL_SECRET", "")
+# Off until receiving has been verified end to end: while off, Direct Apply
+# keeps Reply-To as the user's own address only, and the app says tracking
+# isn't live yet. Also switchable from the admin Configuration tab.
+INBOUND_EMAIL_ENABLED = os.getenv("INBOUND_EMAIL_ENABLED", "False") == "True"
+INBOUND_EMAIL_MAX_BYTES = int(os.getenv("INBOUND_EMAIL_MAX_BYTES", str(10 * 1024 * 1024)))
+INBOUND_EMAIL_DAILY_LIMIT = int(os.getenv("INBOUND_EMAIL_DAILY_LIMIT", "200"))
+INBOUND_EMAIL_RETENTION_DAYS = int(os.getenv("INBOUND_EMAIL_RETENTION_DAYS", "180"))
+# How many jobs a Free account can track recruiter email for.
+REPLY_TRACKING_FREE_JOB_LIMIT = int(os.getenv("REPLY_TRACKING_FREE_JOB_LIMIT", "5"))
+
 # Where operational alerts (the daily job-import check) are sent.
 OPS_ALERT_EMAIL = os.getenv("OPS_ALERT_EMAIL", "sales@patrixel.com")
 

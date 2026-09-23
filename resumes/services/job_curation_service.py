@@ -30,7 +30,7 @@ class JobCurationService:
         self.user = user
         self.ai_service = ai_service or JobCurationAIService(provider=provider, user=user)
 
-    def create_pending(self, user, job_title, job_description, job_url="", resume_id=None):
+    def create_pending(self, user, job_title, job_description, job_url="", resume_id=None, company_name=""):
         """Creates the curation session row with no AI call made yet.
         Safe to call from the request/response cycle."""
         try:
@@ -39,6 +39,7 @@ class JobCurationService:
                     user=user,
                     resume_id=resume_id,
                     job_title=job_title,
+                    company_name=(company_name or "").strip()[:200],
                     job_description=job_description,
                     job_url=job_url,
                     curate_resume=True,

@@ -34,6 +34,13 @@ class JobCurationRequestSerializer(serializers.Serializer):
     curate_resume = serializers.BooleanField(
         help_text="When true, create a job curation analysis session.",
     )
+    company_name = serializers.CharField(
+        required=False,
+        allow_blank=True,
+        max_length=200,
+        trim_whitespace=True,
+        help_text="The employer, e.g. from a link import. Used to match recruiter emails to this job.",
+    )
     job_url = serializers.URLField(
         required=False,
         allow_blank=True,
@@ -198,6 +205,7 @@ class JobResumeCurationSerializer(serializers.ModelSerializer):
             "id",
             "resume",
             "job_title",
+            "company_name",
             "job_url",
             "curate_resume",
             "status",

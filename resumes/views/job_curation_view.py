@@ -314,6 +314,7 @@ class JobCurationCreateAPIView(APIView):
         job_title = data.get("job_title", "")
         job_description = data.get("job_description", "")
         job_url = data.get("job_url", "")
+        company_name = data.get("company_name", "")
 
         # Import from the link only when the description wasn't pasted.
         # Anything the user typed always wins over the imported values —
@@ -328,6 +329,7 @@ class JobCurationCreateAPIView(APIView):
                 )
             job_description = imported["description"]
             job_title = job_title or imported["title"]
+            company_name = company_name or imported.get("company", "")
 
         if not job_title:
             return Response(
@@ -347,6 +349,7 @@ class JobCurationCreateAPIView(APIView):
                 job_description=job_description,
                 job_url=job_url,
                 resume_id=data.get("resume_id"),
+                company_name=company_name,
             )
             return Response(
                 JobResumeCurationSerializer(curation).data,
@@ -360,6 +363,7 @@ class JobCurationCreateAPIView(APIView):
                 job_description=job_description,
                 job_url=job_url,
                 resume_id=data.get("resume_id"),
+                company_name=company_name,
             )
         except JobCurationDatabaseError as exc:
             return Response(

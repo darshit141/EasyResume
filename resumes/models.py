@@ -161,6 +161,10 @@ class JobResumeCuration(models.Model):
         max_length=200,
     )
 
+    # The employer, when known (link import, extension, Direct Apply). Used
+    # to file recruiter emails under the right job.
+    company_name = models.CharField(max_length=200, blank=True)
+
     job_description = models.TextField()
 
     job_url = models.URLField(
