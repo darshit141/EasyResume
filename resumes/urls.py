@@ -1,6 +1,7 @@
 from django.urls import path
 
 from resumes.views.resume_upload_view import ResumeUploadAPIView
+from resumes.views.job_import_admin_view import AdminJobImportStatsAPIView
 from resumes.views.resume_view import ResumeViewAPIView
 from resumes.views.resume_edit_view import ResumeEditAPIView
 from resumes.views.resume_list_view import ResumeListAPIView
@@ -175,6 +176,11 @@ urlpatterns = [
         "job-curations/import-url/",
         JobUrlPreviewAPIView.as_view(),
         name="job-curation-import-url",
+    ),
+    path(
+        "admin/job-imports/stats/",
+        AdminJobImportStatsAPIView.as_view(),
+        name="admin-job-import-stats",
     ),
     path(
         "job-curations/<int:curation_id>/",

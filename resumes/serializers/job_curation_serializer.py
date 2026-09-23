@@ -121,17 +121,10 @@ class JobCurationRequestSerializer(serializers.Serializer):
         if not value:
             return value
 
-        allowed_domains = get_config_value("ALLOWED_JOB_URL_DOMAINS", settings.ALLOWED_JOB_URL_DOMAINS)
-        # An explicitly empty list means the restriction was intentionally
-        # disabled (see settings.ALLOWED_JOB_URL_DOMAINS) — any URL passes.
-        if not allowed_domains:
-            return value
+        from resumes.services.job_url_fetch_service import is_job_domain_allowed
 
-        hostname = (urlparse(value).hostname or "").lower()
-        is_allowed = any(
-            hostname == domain or hostname.endswith(f".{domain}") for domain in allowed_domains
-        )
-        if not is_allowed:
+        if not is_job_domain_allowed(urlparse(value).hostname):
+            allowed_domains = get_config_value("ALLOWED_JOB_URL_DOMAINS", settings.ALLOWED_JOB_URL_DOMAINS)
             raise serializers.ValidationError(
                 "That link isn't from a supported job site. Supported: "
                 + ", ".join(sorted(allowed_domains))
@@ -150,6 +143,12 @@ class JobUrlPreviewRequestSerializer(serializers.Serializer):
 class JobUrlPreviewResponseSerializer(serializers.Serializer):
     job_title = serializers.CharField(allow_blank=True)
     job_description = serializers.CharField()
+    company = serializers.CharField(allow_blank=True, required=False)
+    location = serializers.CharField(allow_blank=True, required=False)
+    employment_type = serializers.CharField(allow_blank=True, required=False)
+    seniority = serializers.CharField(allow_blank=True, required=False)
+    # Which extraction strategy produced it (linkedin, json_ld, cache, ...).
+    source = serializers.CharField(allow_blank=True, required=False)
 
 
 class JobAnalysisSerializer(serializers.Serializer):

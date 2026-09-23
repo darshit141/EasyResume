@@ -191,7 +191,7 @@ class RazorpaySyncService:
         from billing.services.gst_invoice_service import GSTInvoiceService
 
         issued_at = _payment_time(payment)
-        return GSTInvoiceService.issue(
+        invoice = GSTInvoiceService.issue(
             user=subscription.user,
             payment_id=payment_id,
             razorpay_subscription_id=entity.get("id") or subscription.razorpay_subscription_id,
@@ -201,16 +201,38 @@ class RazorpaySyncService:
             issued_at=issued_at,
         )
 
+        from billing.services.dunning_mailer import send_payment_succeeded_email
+
+        send_payment_succeeded_email(
+            subscription.user,
+            amount_minor=invoice.total,
+            currency=invoice.currency,
+            plan_id=subscription.plan_id,
+            billing_period=subscription.billing_period or "monthly",
+            reference=invoice.number,
+            processor="razorpay",
+        )
+
+        return invoice
+
     # -- side effects ---------------------------------------------------
 
     @staticmethod
     def _notify_payment_failed(subscription, entity, payment):
         from billing.services.dunning_mailer import send_payment_failed_email
 
+        amount = payment.get("amount")
+        reason = payment.get("error_description") or None
+
         send_payment_failed_email(
             subscription.user,
             {"id": payment.get("id") or entity.get("id")},
             processor="razorpay",
+            amount_minor=amount if amount else None,
+            currency=(payment.get("currency") or "INR") if amount else None,
+            plan_id=subscription.plan_id,
+            billing_period=subscription.billing_period,
+            reason=reason,
         )
         logger.warning(
             "Razorpay renewal failed for user_id=%s subscription=%s",
