@@ -14,12 +14,12 @@ Two things are deliberately *not* automated:
   page and mailing it unattended is how a helpful tool becomes a spam
   cannon, and a wrong guess sends someone's real application into a void.
   The user supplies the address.
-* We never mark an application as replied-to on our own. Detecting replies
-  would mean reading the user's mailbox, which under Google's scope rules
-  is a *restricted* scope (`gmail.readonly`) carrying an annual third-party
-  security assessment. Until that is worth paying for, replies go straight
-  to the candidate's own inbox via `Reply-To` and the tracker status stays
-  user-driven, which is honest rather than half-working.
+* We never read the user's mailbox (Google's `gmail.readonly` is a
+  restricted scope with an annual paid security assessment). Replies are
+  tracked instead by giving each application its own reply address on our
+  domain (see the inbox app), listed in Reply-To *alongside* the user's
+  own address, so the recruiter's reply always reaches the candidate
+  directly even if our receiving side is down.
 """
 
 import logging
@@ -200,6 +200,9 @@ class JobApplicationService:
         EntitlementsService.check_can_send_application(user)
 
         curation = application.curation
+        if application.company_name and not curation.company_name:
+            curation.company_name = application.company_name[:200]
+            curation.save(update_fields=["company_name", "updated_at"])
 
         body = application.body
         if application.include_cover_letter and curation.cover_letter_data:
@@ -215,8 +218,10 @@ class JobApplicationService:
             to=[application.recipient_email],
             # The employer must be able to reply to the candidate, not to us.
             # Without this the entire conversation would dead-end in a
-            # no-reply mailbox and the user would never hear back.
-            reply_to=[user.email],
+            # no-reply mailbox and the user would never hear back. When
+            # reply tracking is live, our per-application address is added
+            # next to theirs so the reply is also filed against this job.
+            reply_to=_reply_to(user, application),
         )
 
         filename = ""
@@ -357,3 +362,17 @@ def _render_cover_letter(cover_letter_data):
         cover_letter_data.get("signature_name", ""),
     ]
     return "\n\n".join(part.strip() for part in parts if isinstance(part, str) and part.strip())
+
+
+def _reply_to(user, application):
+    from inbox.services.addresses import email_for, receiving_live, reply_address_for
+    from inbox.services.processing import tracking_allowed
+
+    if not (receiving_live() and tracking_allowed(user)):
+        return [user.email]
+    try:
+        alias = email_for("reply", reply_address_for(application).token)
+    except Exception:  # noqa: BLE001 - tracking must never block sending an application
+        logger.exception("Could not allocate a reply address for application %s", application.id)
+        return [user.email]
+    return [user.email, alias]

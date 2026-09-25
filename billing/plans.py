@@ -102,7 +102,6 @@ FREE_PLAN = {
         "Up to 5 resumes",
         "2 job-specific tailored resumes / month",
         "PDF download",
-        "Choice of AI provider (Ollama, Groq, Gemini)",
         f"{FREE_AI_CALLS_PER_MONTH} AI-assisted actions / month",
         "Supported by ads",
     ],

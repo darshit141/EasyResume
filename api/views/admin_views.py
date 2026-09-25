@@ -12,6 +12,17 @@ from api.utils.audit import mask_secret_for_audit, record_admin_action
 from api.utils.secrets import encrypt_value, is_secret_key
 from api.serializers.admin_serializers import AdminAuditLogSerializer, AdminUserSerializer
 
+# Dropdown options for settings with a fixed set of values. They are served
+# from here, to staff only, rather than hardcoded in the admin page, so the
+# names of the vendors behind the product never ship in the public bundle.
+_LLM_PROVIDER_CHOICES = [
+    {"value": "ollama", "label": "Ollama (Local/Self-hosted)"},
+    {"value": "groq", "label": "Groq (hosted, fast JSON completions)"},
+    {"value": "gemini", "label": "Google Gemini (hosted, native JSON schema)"},
+    {"value": "kira", "label": "Kira (hosted, large context, high limits)"},
+    {"value": "openrouter", "label": "OpenRouter (hosted, hundreds of models, Pro/Max only)"},
+]
+
 # Every AI setting - provider, models, fallbacks and the provider API keys - is
 # editable here and takes effect on the next request, so a discontinued model
 # or a revoked token is fixed from the admin panel instead of by a deploy.
@@ -26,12 +37,14 @@ DEFAULT_CONFIGS = [
         "category": "llm",
         "value_type": "string",
         "description": "Default LLM provider (ollama, groq, gemini, kira, openrouter)",
+        "choices": _LLM_PROVIDER_CHOICES,
     },
     {
         "key": "LLM_FALLBACK_PROVIDER",
         "category": "llm",
         "value_type": "string",
         "description": "Provider to retry once with when the default provider fails. Empty = no fallback.",
+        "choices": [{"value": "", "label": "None (no fallback)"}] + _LLM_PROVIDER_CHOICES,
     },
     {
         "key": "AI_PROVIDER_SELECTION_ENABLED",
@@ -282,6 +295,10 @@ DEFAULT_CONFIGS = [
         "category": "ads",
         "value_type": "string",
         "description": "Which rewarded-ad network serves the video: admanager (Google Ad Manager) or partner (a third-party SDK configured via env).",
+        "choices": [
+            {"value": "admanager", "label": "Google Ad Manager (SSV verified)"},
+            {"value": "partner", "label": "Partner SDK (third-party, configured via env)"},
+        ],
     },
     {
         "key": "REWARDED_AD_CREDITS_PER_VIEW",
@@ -311,19 +328,31 @@ DEFAULT_CONFIGS = [
         "key": "REPLY_TRACKING_FREE",
         "category": "limits",
         "value_type": "string",
-        "description": "Reply tracking on the Free plan: none | alias | gmail. Anything unrecognised means none.",
+        "description": "Recruiter email tracking on the Free plan: alias (reply addresses + forwarding address, limited to REPLY_TRACKING_FREE_JOB_LIMIT jobs) or none. Anything unrecognised means none.",
     },
     {
         "key": "REPLY_TRACKING_PRO",
         "category": "limits",
         "value_type": "string",
-        "description": "Reply tracking on Pro: alias (a Reply-To address we own - no mailbox access, misses portal applications), gmail (reads the user's inbox, needs the restricted scope + CASA assessment), or none.",
+        "description": "Recruiter email tracking on Pro: alias (reply addresses on Direct Apply emails plus a personal forwarding address - no mailbox access) or none. gmail is not built yet and behaves as alias.",
     },
     {
         "key": "REPLY_TRACKING_MAX",
         "category": "limits",
         "value_type": "string",
-        "description": "Reply tracking on Max: none | alias | gmail. Set to alias while the Gmail CASA assessment is pending so Max still gets something real.",
+        "description": "Recruiter email tracking on Max: alias or none. gmail is not built yet and behaves as alias.",
+    },
+    {
+        "key": "REPLY_TRACKING_FREE_JOB_LIMIT",
+        "category": "limits",
+        "value_type": "integer",
+        "description": "How many jobs a Free account can track recruiter emails for. Paid plans are unlimited.",
+    },
+    {
+        "key": "INBOUND_EMAIL_ENABLED",
+        "category": "limits",
+        "value_type": "boolean",
+        "description": "Recruiter email receiving is live. Turn on only after Cloudflare Email Routing delivers test mail end to end; while off, Direct Apply replies go only to the user's own address.",
     },
     {
         "key": "PRO_JOB_APPLICATIONS_PER_MONTH",
@@ -470,6 +499,7 @@ class SystemConfigurationListUpdateAPIView(APIView):
                     "updated_at": config.updated_at,
                     "is_custom": True,
                     "is_secret": is_sensitive_key(key),
+                    "choices": default.get("choices"),
                 })
             else:
                 setting_val = getattr(settings, key, None)
@@ -485,6 +515,7 @@ class SystemConfigurationListUpdateAPIView(APIView):
                     "updated_at": None,
                     "is_custom": False,
                     "is_secret": is_sensitive_key(key),
+                    "choices": default.get("choices"),
                 })
         return Response(data, status=status.HTTP_200_OK)
 

@@ -5,7 +5,7 @@ resume curation feature: submitting a job description, analyzing it, comparing i
 against the candidate's profile, reviewing gaps, updating the profile, and
 generating/regenerating a tailored resume.
 
-Everything here is also available live and interactively at `/api/docs/` (Swagger UI,
+In development (or with `API_DOCS_ENABLED=True`), everything here is also available live and interactively at `/api/docs/` (Swagger UI,
 served by `SpectacularSwaggerView`) and as a raw OpenAPI 3 document at `/api/schema/`
 (served by `SpectacularAPIView`). This document adds the workflow narrative and
 frontend integration guidance that a raw OpenAPI document doesn't carry well; the two

@@ -44,14 +44,16 @@ PAID_PLAN_IDS = ("pro", "max")
 
 # How we find out an employer replied. Two real strategies, plus off:
 #
-#   "alias"  Each application is sent with its own Reply-To address we own,
-#            so the reply lands on our server. Costs inbound mail
-#            infrastructure. Cannot see replies to applications submitted
-#            through a company's own portal, because we never sent those.
+#   "alias"  Mail reaches our own domain: each Direct Apply email carries a
+#            Reply-To address unique to it, and users forward the rest
+#            (portal and LinkedIn applications) to a personal tracking
+#            address with a Gmail or Outlook filter. No mailbox access.
+#            Implemented in the inbox app.
 #   "gmail"  Read the user's mailbox with their consent, which catches
 #            portal applications too. Needs Google's *restricted*
 #            gmail.readonly scope and therefore an annual third-party
-#            security assessment (CASA) - a recurring bill.
+#            security assessment (CASA) - a recurring bill. Not built yet;
+#            until it is, "gmail" behaves exactly like "alias".
 #
 # Which plan gets which is deliberately NOT hardcoded. It is resolved per
 # request from the admin Configuration tab (REPLY_TRACKING_<PLAN>), so the
@@ -60,7 +62,7 @@ PAID_PLAN_IDS = ("pro", "max")
 # without a code change or a redeploy. The values below are only defaults.
 REPLY_TRACKING_STRATEGIES = ("none", "alias", "gmail")
 REPLY_TRACKING_ENABLED = os.getenv("REPLY_TRACKING_ENABLED", "True") == "True"
-REPLY_TRACKING_FREE = os.getenv("REPLY_TRACKING_FREE", "none")
+REPLY_TRACKING_FREE = os.getenv("REPLY_TRACKING_FREE", "alias")
 REPLY_TRACKING_PRO = os.getenv("REPLY_TRACKING_PRO", "alias")
 REPLY_TRACKING_MAX = os.getenv("REPLY_TRACKING_MAX", "gmail")
 
