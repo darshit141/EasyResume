@@ -11,7 +11,9 @@ from drf_spectacular.views import (
 from blog.views import RobotsTxtView, SitemapXMLView
 
 urlpatterns = [
-    path("admin/", admin.site.urls),
+    # Served from a private path in production (DJANGO_ADMIN_URL) so the
+    # well-known /admin/ login page doesn't advertise what the backend runs on.
+    path(settings.ADMIN_URL, admin.site.urls),
 
     # Search engines fetch these from the site root, not from /api/ — see
     # blog/views/seo_view.py for why. Production nginx proxies both paths
@@ -37,21 +39,15 @@ urlpatterns = [
 
     # Background AI job status polling
     path("api/ai-jobs/", include("ai_jobs.urls")),
-
-    # OpenAPI Schema
-    path(
-        "api/schema/",
-        SpectacularAPIView.as_view(),
-        name="schema",
-    ),
-
-    # Swagger UI
-    path(
-        "api/docs/",
-        SpectacularSwaggerView.as_view(url_name="schema"),
-        name="swagger-ui",
-    ),
 ]
+
+# The OpenAPI schema and Swagger UI map every endpoint, so they are a
+# development aid only: off in production unless API_DOCS_ENABLED says so.
+if settings.API_DOCS_ENABLED:
+    urlpatterns += [
+        path("api/schema/", SpectacularAPIView.as_view(), name="schema"),
+        path("api/docs/", SpectacularSwaggerView.as_view(url_name="schema"), name="swagger-ui"),
+    ]
 
 if settings.DEBUG:
     urlpatterns += static(

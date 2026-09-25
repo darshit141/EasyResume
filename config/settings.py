@@ -331,6 +331,13 @@ SIMPLE_JWT = {
 # Custom User Model
 AUTH_USER_MODEL = "authentication.User"
 
+# Path of the Django admin site. Production sets a private one so the login
+# page isn't at the well-known /admin/. Must end with a slash.
+ADMIN_URL = os.getenv("DJANGO_ADMIN_URL", "admin/").strip("/") + "/"
+
+# Swagger UI and the OpenAPI schema. On by default only when DEBUG is.
+API_DOCS_ENABLED = os.getenv("API_DOCS_ENABLED", str(DEBUG)) == "True"
+
 SPECTACULAR_SETTINGS = {
     "TITLE": "IntelliResume API",
     "DESCRIPTION": "API documentation for IntelliResume Backend",
