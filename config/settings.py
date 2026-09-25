@@ -784,7 +784,7 @@ GST_RATE_PERCENT = os.getenv("GST_RATE_PERCENT", "18")
 GST_SELLER_GSTIN = os.getenv("GST_SELLER_GSTIN", "")
 # Needed only if it can't be read from the GSTIN (the first two digits).
 GST_SELLER_STATE_CODE = os.getenv("GST_SELLER_STATE_CODE", "")
-GST_SELLER_LEGAL_NAME = os.getenv("GST_SELLER_LEGAL_NAME", "IntelliResume Pvt. Ltd.")
+GST_SELLER_LEGAL_NAME = os.getenv("GST_SELLER_LEGAL_NAME", "Patrixel Digital Solutions")
 GST_SELLER_ADDRESS = os.getenv("GST_SELLER_ADDRESS", "")
 # Services Accounting Code printed on each invoice. Deliberately blank: the
 # right code for this service is an accountant's call, not an engineer's.
