@@ -15,7 +15,7 @@ logger = logging.getLogger(__name__)
 
 FEEDBACK_INBOX = "sales@patrixel.com"
 
-CATEGORY_LABELS = {"bug": "Bug report", "feature": "Feature request"}
+CATEGORY_LABELS = {"bug": "Bug report", "feature": "Feature request", "contact": "Contact message"}
 
 
 def send_feedback_email(*, category, message, reporter_email, reporter_name, page_url, user_id):

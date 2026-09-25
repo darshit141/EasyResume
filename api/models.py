@@ -57,6 +57,25 @@ class AnalyticsEvent(models.Model):
         (EVENT_LANDING_PAGE_VIEW, "Landing page view"),
         (EVENT_SIGNUP_COMPLETED, "Signup completed"),
         (EVENT_CHECKOUT_STARTED, "Checkout started"),
+        # Client-side steps the frontend reports. Accepted here so they are
+        # stored rather than rejected with a 400; they are only ever sent
+        # after the visitor has consented to analytics cookies.
+        ("page_view", "Page view"),
+        ("landing_intake_skipped", "Landing intake skipped"),
+        ("landing_intake_completed", "Landing intake completed"),
+        ("landing_explainer_cta", "Landing call-to-action clicked"),
+        ("signup_started", "Signup started"),
+        ("signup_google", "Signup with Google"),
+        ("login_google", "Login with Google"),
+        ("pricing_viewed", "Pricing viewed"),
+        ("resume_uploaded", "Resume uploaded"),
+        ("resume_parsed", "Resume parsed"),
+        ("job_added", "Job added"),
+        ("analysis_started", "Analysis started"),
+        ("analysis_completed", "Analysis completed"),
+        ("resume_generated", "Tailored resume generated"),
+        ("resume_exported", "Resume exported"),
+        ("contact_submitted", "Contact message sent"),
     ]
 
     event_type = models.CharField(max_length=40, choices=EVENT_CHOICES)
