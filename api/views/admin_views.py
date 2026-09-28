@@ -451,6 +451,23 @@ DEFAULT_CONFIGS = [
         "description": "How long (seconds) a successful job-link import is reused for the same link.",
     },
     {
+        "key": "HOMEPAGE_HERO_VISUAL",
+        "category": "site",
+        "value_type": "string",
+        "description": (
+            "Which illustration sits beside the homepage headline. The animated "
+            "example is the interactive match card; the others are still images "
+            "drawn from the product. Takes effect on the next page load, no "
+            "redeploy needed."
+        ),
+        "choices": [
+            {"value": "example", "label": "Animated example match"},
+            {"value": "hero-assembly", "label": "Assembly: profile + job + skills into one resume"},
+            {"value": "hero-evolution", "label": "Evolution: notes to draft to tailored resume"},
+            {"value": "hero-workspace", "label": "Workspace: the resume editor"},
+        ],
+    },
+    {
         "key": "LOGIN_OTP_REQUIRED",
         "category": "security",
         "value_type": "boolean",

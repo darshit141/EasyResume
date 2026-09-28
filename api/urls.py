@@ -18,6 +18,7 @@ from .views.b2b_lead_views import (
     B2BLeadCreateAPIView,
 )
 from .views.feedback_views import FeedbackCreateAPIView
+from .views.site_views import SiteConfigAPIView
 
 urlpatterns = [
     path("health/", health_check, name="health-check"),
@@ -28,6 +29,9 @@ urlpatterns = [
 
     # Feedback
     path("feedback/", FeedbackCreateAPIView.as_view(), name="feedback-create"),
+
+    # Public: presentation settings for the homepage (no auth).
+    path("site/config/", SiteConfigAPIView.as_view(), name="site-config"),
 
     # Leads
     path("leads/b2b/", B2BLeadCreateAPIView.as_view(), name="b2b-lead-create"),

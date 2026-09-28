@@ -678,6 +678,12 @@ PARTNER_REWARDED_SCRIPT_URL = os.getenv("PARTNER_REWARDED_SCRIPT_URL", "")
 PARTNER_REWARDED_PLACEMENT_ID = os.getenv("PARTNER_REWARDED_PLACEMENT_ID", "")
 PARTNER_REWARDED_SHOW_FN = os.getenv("PARTNER_REWARDED_SHOW_FN", "")
 
+# --- Public site presentation --------------------------------------------
+# Which illustration the homepage hero shows. Admin-tunable
+# (SystemConfiguration key HOMEPAGE_HERO_VISUAL); this is the fallback.
+# One of api.views.site_views.HERO_VISUALS.
+HOMEPAGE_HERO_VISUAL = "hero-assembly"
+
 # --- Display (banner) ads -------------------------------------------------
 # The ordinary banner placements on marketing and blog pages, as opposed to
 # the rewarded video above. Provider and ids are admin-tunable
