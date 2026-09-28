@@ -22,8 +22,8 @@
 # `docker stats` first.
 #
 # TLS is terminated by the host's system nginx, which routes port 443 by
-# SNI to a loopback listener for intelliresume.patrixel.com and proxies to
-# the frontend container. That makes https://intelliresume.patrixel.com the
+# SNI to a loopback listener for intelliresume.online and proxies to
+# the frontend container. That makes https://intelliresume.online the
 # only supported way in, so 8090 is bound to loopback rather than published
 # on the public interface — otherwise the whole app, logins included, stays
 # reachable unencrypted on the droplet's IP and silently bypasses the

@@ -109,7 +109,7 @@ deploy:
     # is also the only address this check - or anyone else - can reach the
     # app on, so checking it is strictly better: it proves nginx, TLS and
     # routing all work, not just that the container is up.
-    - curl -fsS "https://intelliresume.patrixel.com/api/ready/" || (echo "readiness check FAILED after deploy" && exit 1)
+    - curl -fsS "https://intelliresume.online/api/ready/" || (echo "readiness check FAILED after deploy" && exit 1)
   environment:
     name: production
     url: http://143.244.132.107:8090
