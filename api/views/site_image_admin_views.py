@@ -6,9 +6,6 @@ POST   admin/site-images/<slot>/upload/   multipart "file" (+ optional "alt_text
 DELETE admin/site-images/<slot>/          back to the default
 """
 
-import io
-
-from PIL import Image, ImageOps, UnidentifiedImageError
 from rest_framework import permissions, status
 from rest_framework.parsers import FormParser, JSONParser, MultiPartParser
 from rest_framework.response import Response
@@ -17,14 +14,8 @@ from rest_framework.views import APIView
 from api.models import AdminAuditLog, SiteImage
 from api.site_images import BUILTIN_LABELS, SLOTS, builtins_for, normalise_builtin
 from api.utils.audit import record_admin_action
+from api.utils.pictures import clean_alt, to_webp
 from api.views.site_views import image_override
-
-MAX_UPLOAD_BYTES = 8 * 1024 * 1024
-# Refuse anything that would decode to more than this many pixels, so a small
-# file can't expand into gigabytes of memory (a decompression bomb).
-MAX_SOURCE_PIXELS = 40_000_000
-MAX_EDGE = 2400
-ALLOWED_FORMATS = {"JPEG", "PNG", "WEBP"}
 
 
 def slot_payload(slot, row):
@@ -48,39 +39,6 @@ def get_slot(slot):
     if slot not in SLOTS:
         return None, Response({"detail": "Unknown image slot."}, status=status.HTTP_404_NOT_FOUND)
     return SiteImage.objects.filter(slot=slot).first(), None
-
-
-def to_webp(upload):
-    """Validate an uploaded picture and re-encode it as WebP.
-
-    Re-encoding drops any metadata the file carried (camera, location) and
-    anything that isn't pixels, so what's served is only ever an image.
-    Returns (bytes, width, height) or raises ValueError with a message for
-    the admin.
-    """
-    if upload.size > MAX_UPLOAD_BYTES:
-        raise ValueError("That file is over 8 MB. Use a smaller picture.")
-    try:
-        with Image.open(upload) as probe:
-            if probe.format not in ALLOWED_FORMATS:
-                raise ValueError("Upload a JPEG, PNG or WebP picture.")
-            if probe.width * probe.height > MAX_SOURCE_PIXELS:
-                raise ValueError("That picture is too large. Keep it under 40 megapixels.")
-        upload.seek(0)
-        with Image.open(upload) as opened:
-            opened.load()
-            image = ImageOps.exif_transpose(opened)
-            image = image.convert("RGBA" if image.mode in ("RGBA", "LA", "P") else "RGB")
-            image.thumbnail((MAX_EDGE, MAX_EDGE), Image.LANCZOS)
-            out = io.BytesIO()
-            image.save(out, "WEBP", quality=85, method=6)
-            return out.getvalue(), image.width, image.height
-    except (UnidentifiedImageError, OSError, Image.DecompressionBombError):
-        raise ValueError("That file isn't a picture we can read. Upload a JPEG, PNG or WebP.")
-
-
-def clean_alt(value):
-    return str(value or "").strip()[:300]
 
 
 class AdminSiteImageListAPIView(APIView):

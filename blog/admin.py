@@ -14,7 +14,13 @@ class PostAdmin(admin.ModelAdmin):
     readonly_fields = ("created_at", "updated_at")
     fieldsets = (
         (None, {"fields": ("title", "slug", "status", "published_at", "author_name")}),
-        ("Content", {"fields": ("excerpt", "body", "cover_image", "tags")}),
+        (
+            "Content",
+            {
+                "fields": ("excerpt", "body", "tags"),
+                "description": "The cover picture is set in the admin panel, under Appearance.",
+            },
+        ),
         (
             "SEO",
             {

@@ -41,7 +41,30 @@ class Post(models.Model):
         help_text="Short summary shown on the blog index and in search results.",
     )
     body = models.TextField(help_text="Post content in Markdown.")
-    cover_image = models.ImageField(upload_to="blog/", blank=True, null=True)
+    # The cover picture is set from the admin panel's Appearance tab. Blank
+    # source means automatic: an illustration matched to the post's topic
+    # (blog.covers). An upload is kept as WebP bytes, like the site's other
+    # pictures, because the media folder isn't served publicly.
+    COVER_AUTO = ""
+    COVER_BUILTIN = "builtin"
+    COVER_CUSTOM = "custom"
+    COVER_HIDDEN = "hidden"
+    COVER_CHOICES = [
+        (COVER_AUTO, "Automatic"),
+        (COVER_BUILTIN, "One of the bundled illustrations"),
+        (COVER_CUSTOM, "An uploaded picture"),
+        (COVER_HIDDEN, "Hidden"),
+    ]
+    cover_source = models.CharField(max_length=10, choices=COVER_CHOICES, blank=True, default=COVER_AUTO)
+    cover_builtin = models.CharField(max_length=60, blank=True)
+    cover_data = models.BinaryField(null=True, blank=True, editable=False)
+    cover_width = models.PositiveIntegerField(null=True, blank=True, editable=False)
+    cover_height = models.PositiveIntegerField(null=True, blank=True, editable=False)
+    # Random per upload: busts caches, and is the only way to reach a draft's
+    # uploaded cover before the post is published.
+    cover_version = models.CharField(max_length=16, blank=True, editable=False)
+    cover_alt = models.CharField(max_length=300, blank=True)
+    cover_updated_at = models.DateTimeField(null=True, blank=True, editable=False)
     tags = models.CharField(
         max_length=200,
         blank=True,

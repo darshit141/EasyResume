@@ -37,7 +37,7 @@ class PostListAPIView(ListAPIView):
     pagination_class = None
 
     def get_queryset(self):
-        queryset = Post.published.all()
+        queryset = Post.published.defer("cover_data")
         tag = self.request.query_params.get("tag")
         if tag:
             # tags is a flat comma-separated string, so this is a substring
@@ -71,7 +71,7 @@ class PostDetailAPIView(RetrieveAPIView):
     # 404 until the process restarted. DRF's `.all()` re-clone does not
     # re-run the manager, so only rebuilding it per request fixes this.
     def get_queryset(self):
-        return Post.published.all()
+        return Post.published.defer("cover_data")
 
 
 @extend_schema(
