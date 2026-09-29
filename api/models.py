@@ -173,6 +173,13 @@ class AdminAuditLog(models.Model):
     ACTION_USER_2FA_RESET = "user_2fa_reset"
     ACTION_SITE_IMAGE_UPDATED = "site_image_updated"
     ACTION_SITE_IMAGE_RESET = "site_image_reset"
+    ACTION_BLOG_POST_CREATED = "blog_post_created"
+    ACTION_BLOG_POST_UPDATED = "blog_post_updated"
+    ACTION_BLOG_POST_PUBLISHED = "blog_post_published"
+    ACTION_BLOG_POST_UNPUBLISHED = "blog_post_unpublished"
+    ACTION_BLOG_POST_DELETED = "blog_post_deleted"
+    ACTION_SUBSCRIBER_UPDATED = "subscriber_updated"
+    ACTION_SUBSCRIBERS_EXPORTED = "subscribers_exported"
     ACTION_CHOICES = [
         (ACTION_CONFIG_UPDATED, "Configuration updated"),
         (ACTION_CONFIG_RESET, "Configuration reset to defaults"),
@@ -184,6 +191,13 @@ class AdminAuditLog(models.Model):
         (ACTION_USER_2FA_RESET, "Authenticator app removed"),
         (ACTION_SITE_IMAGE_UPDATED, "Site image changed"),
         (ACTION_SITE_IMAGE_RESET, "Site image reset to default"),
+        (ACTION_BLOG_POST_CREATED, "Blog post created"),
+        (ACTION_BLOG_POST_UPDATED, "Blog post edited"),
+        (ACTION_BLOG_POST_PUBLISHED, "Blog post published or scheduled"),
+        (ACTION_BLOG_POST_UNPUBLISHED, "Blog post moved back to draft"),
+        (ACTION_BLOG_POST_DELETED, "Blog post deleted"),
+        (ACTION_SUBSCRIBER_UPDATED, "Newsletter subscriber changed"),
+        (ACTION_SUBSCRIBERS_EXPORTED, "Newsletter subscribers exported"),
     ]
 
     actor = models.ForeignKey(

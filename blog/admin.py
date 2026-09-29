@@ -5,6 +5,8 @@ from blog.models import NewsletterSubscriber, Post
 
 @admin.register(Post)
 class PostAdmin(admin.ModelAdmin):
+    # Posts are normally written in the admin panel's Blog tab; this stays as
+    # a fallback for raw fixes.
     list_display = ("title", "status", "published_at", "author_name", "updated_at")
     list_filter = ("status", "published_at")
     search_fields = ("title", "excerpt", "body", "tags")
