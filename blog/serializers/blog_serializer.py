@@ -1,5 +1,6 @@
 from rest_framework import serializers
 
+from blog.covers import cover_payload
 from blog.models import NewsletterSubscriber, Post
 
 
@@ -9,6 +10,7 @@ class PostListSerializer(serializers.ModelSerializer):
 
     tags = serializers.ListField(source="tag_list", child=serializers.CharField(), read_only=True)
     reading_minutes = serializers.IntegerField(read_only=True)
+    cover = serializers.SerializerMethodField()
 
     class Meta:
         model = Post
@@ -16,17 +18,21 @@ class PostListSerializer(serializers.ModelSerializer):
             "slug",
             "title",
             "excerpt",
-            "cover_image",
+            "cover",
             "tags",
             "author_name",
             "published_at",
             "reading_minutes",
         ]
 
+    def get_cover(self, post):
+        return cover_payload(post)
+
 
 class PostDetailSerializer(serializers.ModelSerializer):
     tags = serializers.ListField(source="tag_list", child=serializers.CharField(), read_only=True)
     reading_minutes = serializers.IntegerField(read_only=True)
+    cover = serializers.SerializerMethodField()
     seo_title = serializers.SerializerMethodField()
     seo_description = serializers.SerializerMethodField()
 
@@ -37,7 +43,7 @@ class PostDetailSerializer(serializers.ModelSerializer):
             "title",
             "excerpt",
             "body",
-            "cover_image",
+            "cover",
             "tags",
             "author_name",
             "published_at",
@@ -46,6 +52,9 @@ class PostDetailSerializer(serializers.ModelSerializer):
             "seo_title",
             "seo_description",
         ]
+
+    def get_cover(self, post):
+        return cover_payload(post)
 
     # SEO fields fall back to the human-facing copy so a post is never
     # published with an empty <title> or meta description.
