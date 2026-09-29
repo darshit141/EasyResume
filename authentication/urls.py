@@ -15,6 +15,11 @@ from authentication.views import (
     PolicyAcceptanceAPIView,
     CookieConsentAPIView,
     SafeTokenRefreshView,
+    TwoFactorBackupCodesAPIView,
+    TwoFactorConfirmAPIView,
+    TwoFactorDisableAPIView,
+    TwoFactorSetupAPIView,
+    TwoFactorStatusAPIView,
 )
 
 urlpatterns = [
@@ -93,4 +98,9 @@ urlpatterns = [
         CookieConsentAPIView.as_view(),
         name="cookie-consent",
     ),
+    path("2fa/", TwoFactorStatusAPIView.as_view(), name="two-factor-status"),
+    path("2fa/totp/setup/", TwoFactorSetupAPIView.as_view(), name="two-factor-setup"),
+    path("2fa/totp/confirm/", TwoFactorConfirmAPIView.as_view(), name="two-factor-confirm"),
+    path("2fa/totp/disable/", TwoFactorDisableAPIView.as_view(), name="two-factor-disable"),
+    path("2fa/backup-codes/", TwoFactorBackupCodesAPIView.as_view(), name="two-factor-backup-codes"),
 ]

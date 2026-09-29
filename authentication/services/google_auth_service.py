@@ -39,9 +39,8 @@ from django.db import IntegrityError, transaction
 from google.auth.transport import requests as google_requests
 from google.oauth2 import id_token as google_id_token
 from rest_framework import status
-from rest_framework_simplejwt.tokens import RefreshToken
 
-from authentication.models import LoginOTP, User
+from authentication.models import User
 
 logger = logging.getLogger(__name__)
 
@@ -127,19 +126,26 @@ class GoogleAuthService:
                 http_status=status.HTTP_403_FORBIDDEN,
             )
 
-        # Any OTP left over from an abandoned password login must not stay
-        # replayable against the verify-otp endpoint once a session exists.
-        LoginOTP.objects.filter(user=user).delete()
+        # A user who added an authenticator app is asked for it here too -
+        # otherwise the Google button would be a way round their 2FA. With
+        # no authenticator this also clears any code left over from an
+        # abandoned password login, so it can't be replayed later.
+        from authentication.services import auth_security
 
-        refresh = RefreshToken.for_user(user)
+        challenge = auth_security.start_second_factor(user, first_factor="google")
+        if challenge is not None:
+            logger.info("Google sign-in awaiting second factor user_id=%s", user.id)
+            return {"user": user, "created": created, "challenge": challenge}
+
+        tokens = auth_security.issue_tokens(user)
         logger.info(
             "Google sign-in succeeded user_id=%s created=%s", user.id, created
         )
         return {
             "user": user,
             "created": created,
-            "access": str(refresh.access_token),
-            "refresh": str(refresh),
+            "access": tokens["access"],
+            "refresh": tokens["refresh"],
         }
 
     @staticmethod

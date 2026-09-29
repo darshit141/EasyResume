@@ -66,6 +66,23 @@ class GoogleSignInAPIView(APIView):
             )
 
         user = result["user"]
+        challenge = result.get("challenge")
+        if challenge is not None:
+            # Same contract as password login's two-factor branch: the
+            # client shows the authenticator prompt and finishes at
+            # auth/login/verify-otp/.
+            return Response(
+                {
+                    "success": True,
+                    "otp_required": True,
+                    "otp_method": challenge["method"],
+                    "created": result["created"],
+                    "message": challenge["message"],
+                    "email": user.email,
+                    "expires_in_seconds": challenge.get("expires_in_seconds"),
+                },
+                status=status.HTTP_200_OK,
+            )
         return Response(
             {
                 "success": True,

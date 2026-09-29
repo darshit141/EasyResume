@@ -88,3 +88,30 @@ class FeedbackAPITests(TestCase):
             )
 
         self.assertEqual(response.status_code, 502)
+
+    def test_contact_message_from_a_visitor_is_sent_with_their_name(self):
+        response = self.client.post(
+            self.url,
+            {
+                "category": "contact",
+                "name": "Sam Rivera",
+                "email": "sam@example.com",
+                "message": "Do you offer a plan for career coaches?",
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 201)
+        sent = mail.outbox[0]
+        self.assertIn("Contact message", sent.subject)
+        self.assertIn("Sam Rivera", sent.body)
+        self.assertEqual(sent.reply_to, ["sam@example.com"])
+
+    def test_contact_message_without_an_email_is_rejected(self):
+        response = self.client.post(
+            self.url, {"category": "contact", "message": "Please call me back."}, format="json"
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("email", response.data)
+        self.assertEqual(len(mail.outbox), 0)

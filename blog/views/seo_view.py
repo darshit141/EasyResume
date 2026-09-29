@@ -29,8 +29,12 @@ from blog.models import Post
 # care about routes it can't usefully land on anyway.
 _STATIC_PAGES = (
     ("/", "1.0", "weekly"),
-    ("/about", "0.6", "monthly"),
+    ("/how-it-works", "0.8", "monthly"),
+    ("/features", "0.8", "monthly"),
     ("/pricing", "0.8", "weekly"),
+    ("/faq", "0.6", "monthly"),
+    ("/about", "0.6", "monthly"),
+    ("/contact", "0.4", "yearly"),
     ("/for-career-coaches", "0.5", "monthly"),
     ("/blog", "0.7", "daily"),
     ("/signup", "0.6", "monthly"),
@@ -82,6 +86,8 @@ class RobotsTxtView(View):
                 # shell, not content, and every route under it 401s for a
                 # crawler anyway.
                 "Disallow: /app/\n"
+                # A confirmation page with nothing to find on its own.
+                "Disallow: /thank-you\n"
                 f"\nSitemap: {base}/sitemap.xml\n"
             )
         return HttpResponse(body, content_type="text/plain")

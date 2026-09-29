@@ -40,6 +40,7 @@ def is_secret_key(key):
 # versa. The strings are part of the stored format and must never change.
 DOMAIN_SYSTEM_CONFIGURATION = "system-configuration"
 DOMAIN_USER_PROVIDER_KEY = "user-provider-key"
+DOMAIN_TOTP_SECRET = "totp-secret"
 
 
 def _fernet(domain=DOMAIN_SYSTEM_CONFIGURATION):

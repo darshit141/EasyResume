@@ -451,6 +451,40 @@ DEFAULT_CONFIGS = [
         "description": "How long (seconds) a successful job-link import is reused for the same link.",
     },
     {
+        "key": "SITE_THEME",
+        "category": "appearance",
+        "value_type": "string",
+        "description": (
+            "The brand colour across the whole site: buttons, links, highlights "
+            "and focus rings, in both light and dark mode. Every option keeps "
+            "text readable (WCAG AA contrast). Takes effect on the next page "
+            "load, no redeploy needed."
+        ),
+        "choices": [
+            {"value": "indigo", "label": "Indigo (default)"},
+            {"value": "ocean", "label": "Ocean blue"},
+            {"value": "emerald", "label": "Emerald green"},
+            {"value": "violet", "label": "Violet"},
+            {"value": "rose", "label": "Rose"},
+            {"value": "sunset", "label": "Sunset orange"},
+        ],
+    },
+    {
+        "key": "SITE_DEFAULT_COLOR_MODE",
+        "category": "appearance",
+        "value_type": "string",
+        "description": (
+            "Light or dark for a visitor who hasn't picked one themselves. "
+            "\"Match their device\" follows the visitor's system setting. A "
+            "visitor's own choice from the theme toggle always wins."
+        ),
+        "choices": [
+            {"value": "system", "label": "Match their device"},
+            {"value": "light", "label": "Light"},
+            {"value": "dark", "label": "Dark"},
+        ],
+    },
+    {
         "key": "LOGIN_OTP_REQUIRED",
         "category": "security",
         "value_type": "boolean",
@@ -461,6 +495,73 @@ DEFAULT_CONFIGS = [
             "take over an account. Takes effect on the next login attempt, no "
             "redeploy needed."
         ),
+    },
+    {
+        "key": "LOGIN_MAX_FAILED_ATTEMPTS",
+        "category": "security",
+        "value_type": "integer",
+        "description": (
+            "Wrong passwords in a row before an account is locked. While locked, "
+            "every password is refused, right or wrong. 0 turns the lockout off. "
+            "Allowed range 0-100."
+        ),
+    },
+    {
+        "key": "LOGIN_LOCKOUT_MINUTES",
+        "category": "security",
+        "value_type": "integer",
+        "description": (
+            "How long a locked account stays locked. Kept short on purpose so an "
+            "attacker can't lock a real user out for good; resetting the password "
+            "unlocks it straight away. Allowed range 1-1440."
+        ),
+    },
+    {
+        "key": "OTP_MAX_ATTEMPTS",
+        "category": "security",
+        "value_type": "integer",
+        "description": (
+            "Wrong guesses allowed on one sign-in or password-reset code (and on an "
+            "authenticator prompt) before the code is void and a new one is needed. "
+            "Allowed range 1-20."
+        ),
+    },
+    {
+        "key": "OTP_EXPIRY_MINUTES",
+        "category": "security",
+        "value_type": "integer",
+        "description": (
+            "How long an emailed code (sign-in or password reset) stays valid, "
+            "and how long the authenticator prompt waits. The email states this "
+            "number. Allowed range 1-60."
+        ),
+    },
+    {
+        "key": "OTP_RESEND_COOLDOWN_SECONDS",
+        "category": "security",
+        "value_type": "integer",
+        "description": (
+            "Minimum seconds between two emailed codes to the same account. Asking "
+            "again sooner keeps the code already sent. Allowed range 0-3600."
+        ),
+    },
+    {
+        "key": "TOTP_2FA_ENABLED",
+        "category": "security",
+        "value_type": "boolean",
+        "description": (
+            "Let users add an authenticator app (Google Authenticator, 1Password, "
+            "Authy...) from Settings. Users who have one are asked for its code at "
+            "every sign-in, including Google sign-in, instead of the emailed code. "
+            "Turning this off stops new setups and stops asking, but keeps each "
+            "user's setup so turning it back on restores it."
+        ),
+    },
+    {
+        "key": "TOTP_ISSUER_NAME",
+        "category": "security",
+        "value_type": "string",
+        "description": "The name shown next to the account inside the user's authenticator app.",
     },
 ]
 
@@ -557,6 +658,11 @@ class SystemConfigurationListUpdateAPIView(APIView):
                 if value_str.strip().lower() not in ("true", "false", "yes", "no", "1", "0", "t", "f", "y", "n"):
                     errors.append({"key": key, "detail": f"{key} must be a boolean."})
                     continue
+
+            choices = meta.get("choices")
+            if choices and value_str not in {c["value"] for c in choices}:
+                errors.append({"key": key, "detail": f"{key} must be one of the listed options."})
+                continue
                     
         if errors:
             return Response({"errors": errors}, status=status.HTTP_400_BAD_REQUEST)
@@ -685,6 +791,50 @@ class AdminUserToggleActiveAPIView(APIView):
             f"user:{user.id}",
             detail={"user_email": user.email},
         )
+
+        annotated_user = User.objects.annotate(resume_count=Count("resumes")).get(id=user_id)
+        return Response(AdminUserSerializer(annotated_user).data, status=status.HTTP_200_OK)
+
+
+class AdminUserSecurityResetAPIView(APIView):
+    """Support tools for sign-in trouble: clear a lockout, or remove the
+    user's authenticator app when they've lost their phone and their backup
+    codes. Body: {"unlock": true} and/or {"remove_two_factor": true}.
+    Only do the second after confirming who you're talking to - it removes
+    their strongest protection."""
+
+    permission_classes = [permissions.IsAdminUser]
+
+    def post(self, request, user_id):
+        from authentication.services import auth_security
+
+        try:
+            user = User.objects.get(id=user_id)
+        except User.DoesNotExist:
+            return Response({"detail": "User not found."}, status=status.HTTP_404_NOT_FOUND)
+
+        unlock = bool(request.data.get("unlock"))
+        remove_two_factor = bool(request.data.get("remove_two_factor"))
+        if not unlock and not remove_two_factor:
+            return Response(
+                {"detail": "Nothing to do: send unlock and/or remove_two_factor."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        if unlock:
+            user.failed_login_attempts = 0
+            user.locked_until = None
+            user.save(update_fields=["failed_login_attempts", "locked_until"])
+            record_admin_action(
+                request, AdminAuditLog.ACTION_USER_UNLOCKED, f"user:{user.id}",
+                detail={"user_email": user.email},
+            )
+        if remove_two_factor:
+            auth_security.disable_totp(user)
+            record_admin_action(
+                request, AdminAuditLog.ACTION_USER_2FA_RESET, f"user:{user.id}",
+                detail={"user_email": user.email},
+            )
 
         annotated_user = User.objects.annotate(resume_count=Count("resumes")).get(id=user_id)
         return Response(AdminUserSerializer(annotated_user).data, status=status.HTTP_200_OK)

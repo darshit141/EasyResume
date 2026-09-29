@@ -14,7 +14,7 @@ logger = logging.getLogger(__name__)
 
 @extend_schema(
     tags=["Feedback"],
-    summary="Report a bug or request a feature",
+    summary="Report a bug, request a feature or send a contact message",
     description=(
         "Forwarded straight to the sales inbox for manual triage — there is "
         "no ticket queue behind this, just an email. Open to a signed-out "
@@ -41,7 +41,16 @@ class FeedbackCreateAPIView(APIView):
         data = serializer.validated_data
         user = request.user if request.user.is_authenticated else None
         reporter_email = user.email if user else data.get("email", "")
-        reporter_name = user.name if user else ""
+        reporter_name = user.name if user else data.get("name", "")
+
+        # A contact message is a question that needs an answer, so an
+        # anonymous sender has to leave somewhere to send it. A bug report
+        # is still useful without one.
+        if data["category"] == "contact" and not reporter_email:
+            return Response(
+                {"email": ["Please enter your email so we can reply."]},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
 
         try:
             send_feedback_email(

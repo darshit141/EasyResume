@@ -7,6 +7,7 @@ from .views.admin_views import (
     AdminUserListAPIView,
     AdminUserToggleActiveAPIView,
     AdminUserToggleStaffAPIView,
+    AdminUserSecurityResetAPIView,
     AdminStatsAPIView,
     AdminAuditLogListAPIView,
 )
@@ -18,6 +19,12 @@ from .views.b2b_lead_views import (
     B2BLeadCreateAPIView,
 )
 from .views.feedback_views import FeedbackCreateAPIView
+from .views.site_views import SiteConfigAPIView, SiteImageFileAPIView
+from .views.site_image_admin_views import (
+    AdminSiteImageDetailAPIView,
+    AdminSiteImageListAPIView,
+    AdminSiteImageUploadAPIView,
+)
 
 urlpatterns = [
     path("health/", health_check, name="health-check"),
@@ -28,6 +35,19 @@ urlpatterns = [
 
     # Feedback
     path("feedback/", FeedbackCreateAPIView.as_view(), name="feedback-create"),
+
+    # Public: presentation settings for the homepage (no auth).
+    path("site/config/", SiteConfigAPIView.as_view(), name="site-config"),
+    path("site/images/<slug:slot>/", SiteImageFileAPIView.as_view(), name="site-image-file"),
+
+    # Admin: site images, slot by slot.
+    path("admin/site-images/", AdminSiteImageListAPIView.as_view(), name="admin-site-images"),
+    path("admin/site-images/<slug:slot>/", AdminSiteImageDetailAPIView.as_view(), name="admin-site-image"),
+    path(
+        "admin/site-images/<slug:slot>/upload/",
+        AdminSiteImageUploadAPIView.as_view(),
+        name="admin-site-image-upload",
+    ),
 
     # Leads
     path("leads/b2b/", B2BLeadCreateAPIView.as_view(), name="b2b-lead-create"),
@@ -46,5 +66,6 @@ urlpatterns = [
     path("admin/business-metrics/", AdminBusinessMetricsAPIView.as_view(), name="admin-business-metrics"),
     path("admin/users/<int:user_id>/toggle-active/", AdminUserToggleActiveAPIView.as_view(), name="admin-user-toggle-active"),
     path("admin/users/<int:user_id>/toggle-staff/", AdminUserToggleStaffAPIView.as_view(), name="admin-user-toggle-staff"),
+    path("admin/users/<int:user_id>/security-reset/", AdminUserSecurityResetAPIView.as_view(), name="admin-user-security-reset"),
     path("admin/audit-log/", AdminAuditLogListAPIView.as_view(), name="admin-audit-log"),
 ]

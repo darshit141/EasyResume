@@ -83,8 +83,8 @@ your contact details, summary, skills, experience, education, projects, certific
 achievements are present and parseable, and whether your experience entries lead with
 action verbs and include quantified results.
 
-It is our own heuristic. It is not affiliated with Workday, Greenhouse, Taleo or any other
-vendor, and it cannot tell you how a specific employer's system will treat you. What it
+It is our own heuristic. It is not affiliated with any applicant tracking system vendor,
+and it cannot tell you how a specific employer's system will treat you. What it
 can tell you is whether your resume has the structural problems that make software
 misread it.
 """,
