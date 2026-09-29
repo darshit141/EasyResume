@@ -26,22 +26,16 @@ class ForgotPasswordAPIView(APIView):
 
         if serializer.is_valid():
 
-            otp = ForgotPasswordService.send_otp(
+            ForgotPasswordService.send_otp(
                 serializer.validated_data["email"]
             )
 
-            if otp is None:
-                return Response(
-                    {
-                        "message": "User with this email does not exist."
-                    },
-                    status=status.HTTP_404_NOT_FOUND,
-                )
-
-            # Temporary response until email sending is implemented
+            # The same answer whether or not the email has an account:
+            # "User does not exist" would turn this endpoint into a free
+            # lookup of who is signed up.
             return Response(
                 {
-                    "message": "OTP sent successfully."
+                    "message": "If an account exists for this email, we've sent a code to it."
                 },
                 status=status.HTTP_200_OK,
             )

@@ -65,6 +65,39 @@ class User(AbstractBaseUser, PermissionsMixin):
         default=False,
     )
 
+    # Brute-force lockout (see settings.LOGIN_MAX_FAILED_ATTEMPTS). The
+    # counter is consecutive wrong passwords; any successful sign-in or a
+    # password reset puts it back to zero.
+    failed_login_attempts = models.PositiveIntegerField(
+        default=0,
+    )
+
+    locked_until = models.DateTimeField(
+        null=True,
+        blank=True,
+    )
+
+    # Authenticator-app two-factor. The shared secret is stored encrypted
+    # (api.utils.secrets, its own key domain): a database dump must not be
+    # enough to generate anyone's codes. A secret with totp_enabled False is
+    # a setup the user started but never confirmed with a code.
+    totp_secret = models.CharField(
+        max_length=255,
+        blank=True,
+        default="",
+    )
+
+    totp_enabled = models.BooleanField(
+        default=False,
+    )
+
+    # The 30-second time step of the last accepted code, so the same code
+    # can't be replayed within its validity window.
+    totp_last_step = models.BigIntegerField(
+        null=True,
+        blank=True,
+    )
+
     date_joined = models.DateTimeField(
         default=timezone.now,
     )
@@ -99,6 +132,12 @@ class PasswordResetOTP(models.Model):
 
     is_verified = models.BooleanField(
         default=False,
+    )
+
+    # Wrong guesses against this code. At settings.OTP_MAX_ATTEMPTS the code
+    # is deleted and the user has to request a new one.
+    attempts = models.PositiveSmallIntegerField(
+        default=0,
     )
 
     expires_at = models.DateTimeField()
@@ -183,8 +222,20 @@ class CookieConsent(models.Model):
 
 class LoginOTP(models.Model):
     """
-    Model to store login OTPs.
+    A pending second-factor challenge. It exists only once the first factor
+    (password or Google) has passed, which is what lets the verify step
+    trust an email address on its own.
+
+    METHOD_EMAIL carries the emailed code in ``otp``; METHOD_TOTP leaves it
+    blank and the code is checked against the user's authenticator app.
     """
+
+    METHOD_EMAIL = "email"
+    METHOD_TOTP = "totp"
+    METHOD_CHOICES = [
+        (METHOD_EMAIL, "Emailed code"),
+        (METHOD_TOTP, "Authenticator app"),
+    ]
 
     user = models.ForeignKey(
         User,
@@ -194,6 +245,18 @@ class LoginOTP(models.Model):
 
     otp = models.CharField(
         max_length=6,
+        blank=True,
+    )
+
+    method = models.CharField(
+        max_length=10,
+        choices=METHOD_CHOICES,
+        default=METHOD_EMAIL,
+    )
+
+    # Wrong guesses against this challenge; see PasswordResetOTP.attempts.
+    attempts = models.PositiveSmallIntegerField(
+        default=0,
     )
 
     is_verified = models.BooleanField(
@@ -214,3 +277,33 @@ class LoginOTP(models.Model):
 
     def __str__(self):
         return f"{self.user.email} - Login OTP"
+
+
+class TwoFactorBackupCode(models.Model):
+    """Single-use recovery codes, shown once when the authenticator app is
+    set up, for signing in without the phone. Only a keyed hash is stored:
+    the codes carry ~50 bits of randomness, so a fast HMAC is enough and a
+    slow password hash would only make each sign-in check slower."""
+
+    user = models.ForeignKey(
+        User,
+        on_delete=models.CASCADE,
+        related_name="backup_codes",
+    )
+
+    code_hash = models.CharField(
+        max_length=64,
+        db_index=True,
+    )
+
+    used_at = models.DateTimeField(
+        null=True,
+        blank=True,
+    )
+
+    created_at = models.DateTimeField(
+        auto_now_add=True,
+    )
+
+    def __str__(self):
+        return f"{self.user.email} backup code ({'used' if self.used_at else 'unused'})"

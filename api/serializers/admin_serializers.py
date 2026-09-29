@@ -24,6 +24,8 @@ class AdminUserSerializer(serializers.ModelSerializer):
     resume_count = serializers.IntegerField(read_only=True)
     subscription_status = serializers.SerializerMethodField()
     subscription_plan = serializers.SerializerMethodField()
+    is_locked = serializers.SerializerMethodField()
+    two_factor_enabled = serializers.SerializerMethodField()
 
     class Meta:
         model = User
@@ -38,8 +40,18 @@ class AdminUserSerializer(serializers.ModelSerializer):
             "resume_count",
             "subscription_status",
             "subscription_plan",
+            "is_locked",
+            "two_factor_enabled",
         ]
         read_only_fields = fields
+
+    def get_is_locked(self, obj):
+        from django.utils import timezone
+
+        return bool(obj.locked_until and obj.locked_until > timezone.now())
+
+    def get_two_factor_enabled(self, obj):
+        return bool(obj.totp_enabled and obj.totp_secret)
 
     def get_subscription_status(self, obj):
         try:

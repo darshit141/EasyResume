@@ -31,11 +31,16 @@ class VerifyOTPAPIView(APIView):
             )
 
             if not result["success"]:
+                body = {"message": result["message"]}
+                if result.get("code"):
+                    body["code"] = result["code"]
+                    body["attempts_remaining"] = result.get("attempts_remaining")
+                exhausted = result.get("code") == "OTP_ATTEMPTS_EXCEEDED"
                 return Response(
-                    {
-                        "message": result["message"],
-                    },
-                    status=status.HTTP_400_BAD_REQUEST,
+                    body,
+                    status=(
+                        status.HTTP_429_TOO_MANY_REQUESTS if exhausted else status.HTTP_400_BAD_REQUEST
+                    ),
                 )
 
             return Response(

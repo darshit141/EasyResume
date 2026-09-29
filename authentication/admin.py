@@ -25,6 +25,7 @@ class CustomUserAdmin(UserAdmin):
     readonly_fields = (
         "last_login",
         "date_joined",
+        "totp_enabled",
     )
 
     fieldsets = (
@@ -47,6 +48,16 @@ class CustomUserAdmin(UserAdmin):
                 "is_superuser",
                 "groups",
                 "user_permissions",
+            )
+        }),
+        ("Sign-in security", {
+            # Clearing locked_until unlocks the account. The authenticator
+            # secret itself is never shown; remove it from the admin panel's
+            # user list ("Reset 2FA"), which also deletes the backup codes.
+            "fields": (
+                "failed_login_attempts",
+                "locked_until",
+                "totp_enabled",
             )
         }),
         ("Important Dates", {

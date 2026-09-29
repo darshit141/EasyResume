@@ -169,6 +169,10 @@ class AdminAuditLog(models.Model):
     ACTION_USER_DEACTIVATED = "user_deactivated"
     ACTION_USER_STAFF_GRANTED = "user_staff_granted"
     ACTION_USER_STAFF_REVOKED = "user_staff_revoked"
+    ACTION_USER_UNLOCKED = "user_unlocked"
+    ACTION_USER_2FA_RESET = "user_2fa_reset"
+    ACTION_SITE_IMAGE_UPDATED = "site_image_updated"
+    ACTION_SITE_IMAGE_RESET = "site_image_reset"
     ACTION_CHOICES = [
         (ACTION_CONFIG_UPDATED, "Configuration updated"),
         (ACTION_CONFIG_RESET, "Configuration reset to defaults"),
@@ -176,6 +180,10 @@ class AdminAuditLog(models.Model):
         (ACTION_USER_DEACTIVATED, "User deactivated"),
         (ACTION_USER_STAFF_GRANTED, "Admin access granted"),
         (ACTION_USER_STAFF_REVOKED, "Admin access revoked"),
+        (ACTION_USER_UNLOCKED, "Sign-in lockout cleared"),
+        (ACTION_USER_2FA_RESET, "Authenticator app removed"),
+        (ACTION_SITE_IMAGE_UPDATED, "Site image changed"),
+        (ACTION_SITE_IMAGE_RESET, "Site image reset to default"),
     ]
 
     actor = models.ForeignKey(
@@ -206,3 +214,47 @@ class AdminAuditLog(models.Model):
         who = self.actor_email or "unknown"
         return f"{who}: {self.action} {self.target} @ {self.created_at:%Y-%m-%d %H:%M}"
 
+
+
+class SiteImage(models.Model):
+    """An admin override for one image slot on the public site.
+
+    No row means the slot shows its default (see api.site_images.SLOTS). An
+    uploaded picture is kept here as WebP bytes rather than on disk: the
+    site's media folder isn't served publicly, and these are a dozen small
+    files that change rarely, so the database is the one store every
+    deployment already has.
+    """
+
+    SOURCE_BUILTIN = "builtin"
+    SOURCE_CUSTOM = "custom"
+    SOURCE_HIDDEN = "hidden"
+    SOURCE_CHOICES = [
+        (SOURCE_BUILTIN, "One of the bundled illustrations"),
+        (SOURCE_CUSTOM, "An uploaded picture"),
+        (SOURCE_HIDDEN, "Hidden"),
+    ]
+
+    slot = models.CharField(max_length=60, unique=True)
+    source = models.CharField(max_length=10, choices=SOURCE_CHOICES)
+    builtin = models.CharField(max_length=60, blank=True)
+    image = models.BinaryField(null=True, blank=True, editable=False)
+    content_type = models.CharField(max_length=40, blank=True)
+    width = models.PositiveIntegerField(null=True, blank=True)
+    height = models.PositiveIntegerField(null=True, blank=True)
+    # Replaces the bundled picture's description; blank keeps the default.
+    alt_text = models.CharField(max_length=300, blank=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    updated_by = models.ForeignKey(
+        "authentication.User",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="+",
+    )
+
+    class Meta:
+        ordering = ["slot"]
+
+    def __str__(self):
+        return f"{self.slot}: {self.source} {self.builtin}".strip()

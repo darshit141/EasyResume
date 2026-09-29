@@ -7,4 +7,6 @@ class VerifyLoginOTPSerializer(serializers.Serializer):
     """
 
     email = serializers.EmailField()
-    otp = serializers.CharField(max_length=6)
+    # 6 digits for an emailed or authenticator code; a backup code
+    # ("abcde-fghjk") is longer.
+    otp = serializers.CharField(max_length=20)

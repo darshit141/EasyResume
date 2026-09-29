@@ -21,7 +21,10 @@ from drf_spectacular.utils import (
             description="Login successful. JWT tokens returned."
         ),
         401: OpenApiResponse(
-            description="Invalid OTP or OTP has expired."
+            description="Invalid OTP or OTP has expired. code: OTP_INVALID."
+        ),
+        429: OpenApiResponse(
+            description="Too many wrong codes; the code is void. code: OTP_ATTEMPTS_EXCEEDED."
         ),
         404: OpenApiResponse(
             description="User not found or OTP not found."
@@ -46,12 +49,11 @@ class VerifyLoginOTPAPIView(APIView):
             )
 
             if not result["success"]:
-                return Response(
-                    {
-                        "message": result["message"],
-                    },
-                    status=result["status"],
-                )
+                body = {"message": result["message"]}
+                if result.get("code"):
+                    body["code"] = result["code"]
+                    body["attempts_remaining"] = result.get("attempts_remaining")
+                return Response(body, status=result["status"])
             user = result["user"]
 
             return Response(

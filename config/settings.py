@@ -282,6 +282,34 @@ REST_FRAMEWORK = {
 # actual trade being made, and it is why the default is on.
 LOGIN_OTP_REQUIRED = os.getenv("LOGIN_OTP_REQUIRED", "True") == "True"
 
+# Brute-force limits on sign-in. Every one of these is only the fallback:
+# the live value is read through get_config_value at request time, so an
+# admin can tighten or loosen them from the admin panel without a redeploy.
+#
+# Account lockout: after LOGIN_MAX_FAILED_ATTEMPTS wrong passwords in a row
+# the account refuses every password - right or wrong - for
+# LOGIN_LOCKOUT_MINUTES. Temporary on purpose, so an attacker can't lock a
+# real user out for good, and a password reset clears it. 0 turns it off.
+LOGIN_MAX_FAILED_ATTEMPTS = int(os.getenv("LOGIN_MAX_FAILED_ATTEMPTS", "5"))
+LOGIN_LOCKOUT_MINUTES = int(os.getenv("LOGIN_LOCKOUT_MINUTES", "15"))
+
+# One-time codes (login and password reset). A code is burned after
+# OTP_MAX_ATTEMPTS wrong guesses, so a six-digit code can't be walked
+# through within its lifetime; the user just asks for a new one, which the
+# resend cooldown spaces out.
+OTP_MAX_ATTEMPTS = int(os.getenv("OTP_MAX_ATTEMPTS", "5"))
+OTP_EXPIRY_MINUTES = int(os.getenv("OTP_EXPIRY_MINUTES", "5"))
+OTP_RESEND_COOLDOWN_SECONDS = int(os.getenv("OTP_RESEND_COOLDOWN_SECONDS", "60"))
+
+# Authenticator-app two-factor (TOTP, RFC 6238). When on, users can add an
+# authenticator app from Settings; once they have, every sign-in - password
+# or Google - asks for its code (or a backup code) instead of the emailed
+# one. Turning it off stops new setups and stops asking for the code at
+# sign-in, but keeps each user's enrolment so turning it back on restores it.
+TOTP_2FA_ENABLED = os.getenv("TOTP_2FA_ENABLED", "True") == "True"
+# Label shown next to the account in the user's authenticator app.
+TOTP_ISSUER_NAME = os.getenv("TOTP_ISSUER_NAME", "IntelliResume")
+
 # "Sign in with Google". The client id is the audience every incoming Google
 # ID token is checked against, and that check is the whole security of this
 # feature: an ID token is just a signed assertion from Google, and Google
@@ -679,10 +707,11 @@ PARTNER_REWARDED_PLACEMENT_ID = os.getenv("PARTNER_REWARDED_PLACEMENT_ID", "")
 PARTNER_REWARDED_SHOW_FN = os.getenv("PARTNER_REWARDED_SHOW_FN", "")
 
 # --- Public site presentation --------------------------------------------
-# Which illustration the homepage hero shows. Admin-tunable
-# (SystemConfiguration key HOMEPAGE_HERO_VISUAL); this is the fallback.
-# One of api.views.site_views.HERO_VISUALS.
-HOMEPAGE_HERO_VISUAL = "hero-assembly"
+# The site's brand colour preset and the light/dark mode first-time visitors
+# get. Admin-tunable (SystemConfiguration, "appearance" category); these are
+# the fallbacks. Images are per slot: api.site_images / api.models.SiteImage.
+SITE_THEME = "indigo"
+SITE_DEFAULT_COLOR_MODE = "system"
 
 # --- Display (banner) ads -------------------------------------------------
 # The ordinary banner placements on marketing and blog pages, as opposed to

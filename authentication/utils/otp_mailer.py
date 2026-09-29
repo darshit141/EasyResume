@@ -15,9 +15,11 @@ from django.core.mail import send_mail
 logger = logging.getLogger(__name__)
 
 
-def send_otp_email(to_email, otp, purpose="login"):
+def send_otp_email(to_email, otp, purpose="login", expiry_minutes=5):
     """Send a one-time code to ``to_email``. ``purpose`` is either "login"
-    or "password reset" and only changes the copy, never the code path."""
+    or "password reset" and only changes the copy, never the code path.
+    ``expiry_minutes`` is the admin-configured lifetime, so the email never
+    promises a different window from the one the server enforces."""
 
     subject = (
         "Your IntelliResume login code"
@@ -33,7 +35,8 @@ def send_otp_email(to_email, otp, purpose="login"):
     message = (
         f"{action_text}\n\n"
         f"    {otp}\n\n"
-        "This code expires in 5 minutes. If you didn't request this, you "
+        f"This code expires in {expiry_minutes} minute{'' if expiry_minutes == 1 else 's'}. "
+        "If you didn't request this, you "
         "can safely ignore this email — your account is still secure."
     )
 

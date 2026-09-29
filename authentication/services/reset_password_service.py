@@ -32,16 +32,19 @@ class ResetPasswordService:
         if password_reset_otp is None:
             return {
                 "success": False,
-                "message": "OTP verification required.",
+                "message": "Verify the code from your email first.",
             }
 
         if password_reset_otp.is_expired():
             return {
                 "success": False,
-                "message": "OTP has expired.",
+                "message": "That code has expired. Request a new one.",
             }
 
         user.set_password(password)
+        # Proving control of the mailbox is the way out of a lockout.
+        user.failed_login_attempts = 0
+        user.locked_until = None
         user.save()
 
         # Delete OTP after successful password reset
