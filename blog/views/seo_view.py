@@ -36,8 +36,6 @@ _STATIC_PAGES = (
     ("/about", "0.6", "monthly"),
     ("/contact", "0.4", "yearly"),
     ("/for-career-coaches", "0.5", "monthly"),
-    ("/blog", "0.7", "daily"),
-    ("/signup", "0.6", "monthly"),
     ("/privacy", "0.2", "yearly"),
     ("/terms", "0.2", "yearly"),
 )
@@ -50,7 +48,15 @@ class SitemapXMLView(View):
             f"<url><loc>{base}{path}</loc><changefreq>{freq}</changefreq><priority>{priority}</priority></url>"
             for path, priority, freq in _STATIC_PAGES
         ]
-        for post in Post.published.all():
+        posts = list(Post.published.all())
+        if posts:
+            # The listing is only worth indexing once it lists something; an
+            # empty "No posts yet" page is exactly what search engines
+            # classify as thin content.
+            entries.append(
+                f"<url><loc>{base}/blog</loc><changefreq>daily</changefreq><priority>0.7</priority></url>"
+            )
+        for post in posts:
             entries.append(
                 f"<url><loc>{base}/blog/{post.slug}</loc>"
                 f"<lastmod>{post.updated_at.date().isoformat()}</lastmod>"

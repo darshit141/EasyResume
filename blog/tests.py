@@ -162,8 +162,21 @@ class SitemapAndRobotsTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response["Content-Type"], "application/xml")
         body = response.content.decode()
-        for path in ("/", "/pricing", "/blog", "/about"):
+        for path in ("/", "/how-it-works", "/features", "/pricing", "/faq", "/about", "/contact"):
             self.assertIn(f"<loc>https://example.com{path}</loc>", body)
+
+    def test_sitemap_leaves_out_signup(self):
+        body = self.client.get("/sitemap.xml").content.decode()
+        self.assertNotIn("https://example.com/signup<", body)
+
+    def test_sitemap_lists_the_blog_only_once_it_has_posts(self):
+        """An empty blog listing is thin content, so it stays out of the sitemap."""
+        body = self.client.get("/sitemap.xml").content.decode()
+        self.assertNotIn("<loc>https://example.com/blog</loc>", body)
+
+        _post(status=Post.STATUS_PUBLISHED)
+        body = self.client.get("/sitemap.xml").content.decode()
+        self.assertIn("<loc>https://example.com/blog</loc>", body)
 
     def test_sitemap_includes_only_published_posts(self):
         published = _post(status=Post.STATUS_PUBLISHED)
