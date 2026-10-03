@@ -11,6 +11,8 @@ Idempotent: re-running updates existing posts by slug instead of duplicating.
 from django.core.management.base import BaseCommand
 
 from blog.models import Post
+from blog.seed_posts import POSTS as ARTICLES
+from blog.seed_posts.extensions import EXTENSIONS
 
 POSTS = [
     {
@@ -378,11 +380,30 @@ search advice, they're concrete: you can check each one and know whether you've 
 ]
 
 
+def _extended(data):
+    """The starter post with its extra section inserted before the closing heading."""
+    extra = EXTENSIONS.get(data["slug"])
+    if not extra:
+        return data
+    marker, section = extra
+    body = data["body"]
+    at = body.rfind(marker) if marker else -1
+    section = section.strip("\n") + "\n\n"
+    if at != -1:
+        body = body[:at] + section + body[at:]
+    else:
+        body = body.rstrip("\n") + "\n\n" + section
+    return {**data, "body": body}
+
+
+ALL_POSTS = [*(_extended(post) for post in POSTS), *ARTICLES]
+
+
 class Command(BaseCommand):
-    help = "Create or update the starter blog posts."
+    help = "Create or update the starter and long-form blog posts."
 
     def handle(self, *args, **options):
-        for data in POSTS:
+        for data in ALL_POSTS:
             post, created = Post.objects.update_or_create(
                 slug=data["slug"],
                 defaults={**data, "status": Post.STATUS_PUBLISHED},
@@ -390,4 +411,4 @@ class Command(BaseCommand):
             verb = "Created" if created else "Updated"
             self.stdout.write(self.style.SUCCESS(f"{verb}: {post.title}"))
 
-        self.stdout.write(self.style.SUCCESS(f"\n{len(POSTS)} starter posts ready."))
+        self.stdout.write(self.style.SUCCESS(f"\n{len(ALL_POSTS)} posts ready."))

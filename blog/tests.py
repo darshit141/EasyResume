@@ -1,4 +1,5 @@
 from datetime import timedelta
+from io import StringIO
 
 from django.test import TestCase, override_settings
 from django.utils import timezone
@@ -240,3 +241,39 @@ class FrontendUrlCheckTests(TestCase):
 
     def test_live_domain_passes(self):
         self.assertEqual(self.run_check("https://intelliresume.online"), [])
+
+
+class SeedBlogTests(TestCase):
+    """The shipped articles must be publishable as they are."""
+
+    # Products and vendors the site never names to its users.
+    FORBIDDEN = ("workday", "greenhouse", "taleo", "icims", "jobvite", "openai", "chatgpt", "gemini", "anthropic", "claude")
+
+    def run_seed(self):
+        from django.core.management import call_command
+
+        call_command("seed_blog", stdout=StringIO())
+
+    def test_seeds_long_original_articles(self):
+        self.run_seed()
+        posts = list(Post.objects.all())
+        self.assertGreaterEqual(len(posts), 20)
+        for post in posts:
+            self.assertEqual(post.status, Post.STATUS_PUBLISHED)
+            self.assertGreaterEqual(len(post.body.split()), 800, post.slug)
+            self.assertTrue(post.excerpt and post.seo_description and post.tags, post.slug)
+            self.assertLessEqual(len(post.excerpt), 400, post.slug)
+            self.assertLessEqual(len(post.title), 200, post.slug)
+
+    def test_articles_name_no_vendors(self):
+        self.run_seed()
+        for post in Post.objects.all():
+            text = f"{post.title} {post.excerpt} {post.body}".lower()
+            for word in self.FORBIDDEN:
+                self.assertNotIn(word, text, f"{post.slug} mentions {word}")
+
+    def test_seeding_twice_does_not_duplicate(self):
+        self.run_seed()
+        first = Post.objects.count()
+        self.run_seed()
+        self.assertEqual(Post.objects.count(), first)
