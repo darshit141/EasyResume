@@ -221,3 +221,22 @@ class SitemapAndRobotsTests(TestCase):
 
         self.assertIn("Disallow: /\n", body)
         self.assertNotIn("Sitemap:", body)
+
+
+class FrontendUrlCheckTests(TestCase):
+    def run_check(self, url):
+        from django.test import override_settings
+
+        from blog.checks import frontend_url_is_public
+
+        with override_settings(FRONTEND_URL=url):
+            return [w.id for w in frontend_url_is_public(None)]
+
+    def test_localhost_is_flagged(self):
+        self.assertEqual(self.run_check("http://localhost:5173"), ["blog.W001"])
+
+    def test_retired_domain_is_flagged(self):
+        self.assertEqual(self.run_check("https://intelliresume.patrixel.com"), ["blog.W002"])
+
+    def test_live_domain_passes(self):
+        self.assertEqual(self.run_check("https://intelliresume.online"), [])
