@@ -8,7 +8,7 @@ POSTS = [
         ),
         "tags": "interview prep, job search",
         "seo_description": (
-            "How to answer behavioural interview questions with the STAR method: structure, a worked "
+            "Answer behavioural interview questions with the STAR method: structure, a worked "
             "example, how to build a story bank, and the mistakes that weaken answers."
         ),
         "body": r"""
@@ -243,7 +243,7 @@ It is easy to lose track when you are applying to many roles. Keep a simple list
         ),
         "tags": "resume tips, students",
         "seo_description": (
-            "A step-by-step guide to writing a first resume with no formal work experience, using "
+            "A step-by-step guide to a first resume with no formal work experience, using "
             "projects, volunteering, education and skills, with examples and a layout to follow."
         ),
         "body": r"""
@@ -331,8 +331,8 @@ Read the job description and put the most relevant parts of your background firs
         ),
         "tags": "job search, resume tips",
         "seo_description": (
-            "Learn to read a job description critically: separate real requirements from wish lists, "
-            "spot the signals in the wording, and decide when to apply even if you do not match every point."
+            "Read a job description critically: separate real requirements from wish lists, "
+            "spot the signals in the wording, and decide when to apply without a perfect fit."
         ),
         "body": r"""
 A job description is not a precise specification. It is a document written, usually, by a hiring manager, a recruiter, and sometimes a committee, drawing on a template, an older posting, and a wish list. Reading it well is one of the most useful skills in a job search, because it shapes every decision that follows: whether to apply, what to put on your resume, and what to prepare for the interview.

@@ -99,8 +99,8 @@ Afterwards, write down what you were asked and how you answered while it is fres
         ),
         "tags": "job offers, salary",
         "seo_description": (
-            "A beginner-friendly guide to negotiating a job offer: researching pay, responding to the "
-            "salary question, making a counteroffer, and considering the whole package."
+            "A beginner-friendly guide to negotiating a job offer: researching pay, answering the "
+            "salary question, making a counteroffer, and weighing the whole package."
         ),
         "body": r"""
 Receiving a job offer is a moment of relief, and it is also the point of greatest leverage you will have. The employer has spent time and money choosing you; they want you to say yes. Yet many people accept immediately, worried that asking for more will cost them the job. In most cases, a polite and well-supported request does not. Negotiation is a normal part of hiring, and employers expect it.
