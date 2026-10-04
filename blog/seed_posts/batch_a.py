@@ -153,7 +153,7 @@ When you have a draft, read it aloud and ask two questions. First, could this se
         "tags": "resume tips, writing",
         "seo_description": (
             "Turn duty-style resume bullets into achievement statements with a simple structure, "
-            "examples across several fields, and advice for roles where numbers are hard to find."
+            "examples from several fields, and tips for roles without clear numbers."
         ),
         "body": r"""
 Compare two bullets from the same role.

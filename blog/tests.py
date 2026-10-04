@@ -263,7 +263,12 @@ class SeedBlogTests(TestCase):
             self.assertGreaterEqual(len(post.body.split()), 800, post.slug)
             self.assertTrue(post.excerpt and post.seo_description and post.tags, post.slug)
             self.assertLessEqual(len(post.excerpt), 400, post.slug)
-            self.assertLessEqual(len(post.title), 200, post.slug)
+            # SQLite ignores column widths but production Postgres rejects overflow.
+            for field in post._meta.fields:
+                limit = getattr(field, "max_length", None)
+                value = getattr(post, field.name)
+                if limit and isinstance(value, str):
+                    self.assertLessEqual(len(value), limit, f"{post.slug}.{field.name}")
 
     def test_articles_name_no_vendors(self):
         self.run_seed()
