@@ -140,3 +140,17 @@ class RazorpayPlanIdsFromAdminTests(TestCase):
         _store("RAZORPAY_PLAN_ID_PRO_INR_MONTHLY", "plan_admin_pro_m")
         self.assertEqual(get_price("pro", "INR", "monthly")["processor_price_id"], "plan_admin_pro_m")
         self.assertEqual(find_plan_by_razorpay_plan_id("plan_admin_pro_m"), ("pro", "INR", "monthly"))
+
+
+class FreePlanQuotasMatchAdminTests(TestCase):
+    def _free_features(self):
+        response = APIClient().get(PLANS_URL)
+        return next(p for p in response.json() if p["id"] == "free")["features"]
+
+    def test_pricing_page_quotes_the_enforced_free_limits(self):
+        _store("FREE_TAILORED_RESUMES_PER_MONTH", "15", value_type="integer")
+        _store("FREE_AI_CALLS_PER_MONTH", "15", value_type="integer")
+        features = self._free_features()
+        self.assertIn("15 job-specific tailored resumes / month", features)
+        self.assertIn("15 AI-assisted actions / month", features)
+        self.assertNotIn("2 job-specific tailored resumes / month", features)

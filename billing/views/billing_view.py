@@ -21,6 +21,7 @@ from billing.plans import (
     customer_currency,
     default_currency,
     normalize_currency,
+    plan_features,
 )
 from billing.serializers.billing_serializer import (
     BillingErrorSerializer,
@@ -108,7 +109,7 @@ def _resolve_plan(plan, currency, tax_note=""):
     return {
         "id": plan["id"],
         "name": plan["name"],
-        "features": plan["features"],
+        "features": plan_features(plan),
         "currency": currency,
         "monthly": _price_option(plan["id"], currency, "monthly", tax_note),
         "annual": _price_option(plan["id"], currency, "annual", tax_note),

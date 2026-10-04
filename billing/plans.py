@@ -104,7 +104,7 @@ FREE_PLAN = {
         "PDF download",
         f"{FREE_AI_CALLS_PER_MONTH} AI-assisted actions / month",
         "Supported by ads",
-    ],
+    ],  # the two quota lines are rewritten per request: see plan_features()
     # No prices — free forever, nothing to check out.
     "prices": {},
 }
@@ -196,6 +196,29 @@ MAX_PLAN = {
 }
 
 PLANS = [FREE_PLAN, PRO_PLAN, MAX_PLAN]
+
+
+def plan_features(plan):
+    """The feature list to show for `plan`.
+
+    The free plan's two quotas are admin-editable at runtime, so the lines
+    quoting them are built from the live values. The static text above would
+    otherwise keep advertising the code defaults after an operator changed
+    them, and the pricing page would contradict what the app enforces.
+    """
+    if plan["id"] != "free":
+        return plan["features"]
+    from billing.entitlements import entitlements_for
+
+    live = entitlements_for("free", False)
+    return [
+        f"{live['tailored_resumes_per_month']} job-specific tailored resumes / month"
+        if feature.endswith("tailored resumes / month")
+        else f"{live['ai_calls_per_month']} AI-assisted actions / month"
+        if feature.endswith("AI-assisted actions / month")
+        else feature
+        for feature in plan["features"]
+    ]
 PLANS_BY_ID = {plan["id"]: plan for plan in PLANS}
 
 
