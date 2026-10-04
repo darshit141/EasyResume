@@ -1,0 +1,109 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "homefixer-admin",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": [
+        "--prefix",
+        "D:/Patrixel Projects/HomeFixer/homefixer_react",
+        "run",
+        "dev"
+      ],
+      "port": 3000
+    },
+    {
+      "name": "intelliresume-backend",
+      "runtimeExecutable": "D:/Patrixel Projects/intelliresume-backend/venv/Scripts/python.exe",
+      "runtimeArgs": [
+        "manage.py",
+        "runserver",
+        "8010"
+      ],
+      "port": 8010
+    },
+    {
+      "name": "intelliresume-frontend",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": [
+        "--prefix",
+        "D:/Patrixel Projects/intelliresume-react",
+        "run",
+        "dev"
+      ],
+      "port": 5173
+    },
+    {
+      "name": "intelliresume-frontend-live",
+      "runtimeExecutable": "node",
+      "runtimeArgs": [
+        "D:/Patrixel Projects/intelliresume-react/node_modules/vite/bin/vite.js",
+        "D:/Patrixel Projects/intelliresume-react",
+        "--config",
+        "D:/Patrixel Projects/intelliresume-react/vite.live.config.js",
+        "--mode",
+        "live"
+      ],
+      "port": 5174
+    },
+    {
+      "name": "intelliresume-backend-eager",
+      "runtimeExecutable": "D:/Patrixel Projects/intelliresume-backend/venv/Scripts/python.exe",
+      "runtimeArgs": [
+        "-c",
+        "import os,runpy,sys;os.chdir(r'D:/Patrixel Projects/intelliresume-backend');sys.path.insert(0,os.getcwd());os.environ['CELERY_TASK_ALWAYS_EAGER']='true';sys.argv=['manage.py','runserver','8010','--noreload'];runpy.run_path('manage.py',run_name='__main__')"
+      ],
+      "port": 8010
+    },
+    {
+      "name": "intelliresume-backend-ai",
+      "runtimeExecutable": "D:/Patrixel Projects/intelliresume-backend/venv/Scripts/python.exe",
+      "runtimeArgs": [
+        "-c",
+        "import os,runpy,sys;os.chdir(r'D:/Patrixel Projects/intelliresume-backend');sys.path.insert(0,os.getcwd());os.environ['CELERY_TASK_ALWAYS_EAGER']='true';sys.argv=['manage.py','runserver','8011','--noreload'];runpy.run_path('manage.py',run_name='__main__')"
+      ],
+      "port": 8011
+    },
+    {
+      "name": "intelliresume-frontend-ai",
+      "runtimeExecutable": "node",
+      "runtimeArgs": [
+        "D:/Patrixel Projects/intelliresume-react/node_modules/vite/bin/vite.js",
+        "D:/Patrixel Projects/intelliresume-react",
+        "--mode",
+        "ai",
+        "--port",
+        "5175",
+        "--strictPort"
+      ],
+      "port": 5175
+    },
+    {
+      "name": "hireall-backend",
+      "runtimeExecutable": "D:/Patrixel Projects/hireall/backend/.venv/Scripts/python.exe",
+      "runtimeArgs": [
+        "-c",
+        "import os,runpy,sys;os.chdir(r'D:/Patrixel Projects/hireall/backend');sys.path.insert(0,os.getcwd());sys.argv=['manage.py','runserver','8020','--noreload'];runpy.run_path('manage.py',run_name='__main__')"
+      ],
+      "port": 8020
+    },
+    {
+      "name": "hireall-frontend",
+      "runtimeExecutable": "node",
+      "runtimeArgs": [
+        "-e",
+        "process.env.HIREALL_API_ORIGIN='http://127.0.0.1:8020';process.chdir('D:/Patrixel Projects/hireall/frontend');process.argv=[process.argv[0],'vite','--port','5180','--strictPort'];import('file:///D:/Patrixel%20Projects/hireall/frontend/node_modules/vite/bin/vite.js')"
+      ],
+      "port": 5180
+    },
+    {
+      "name": "hireall-preview",
+      "runtimeExecutable": "node",
+      "runtimeArgs": [
+        "-e",
+        "process.env.HIREALL_API_ORIGIN='http://127.0.0.1:8020';process.chdir('D:/Patrixel Projects/hireall/frontend');process.argv=[process.argv[0],'vite','preview','--port','5181','--strictPort'];import('file:///D:/Patrixel%20Projects/hireall/frontend/node_modules/vite/bin/vite.js')"
+      ],
+      "port": 5181
+    }
+  ]
+}
