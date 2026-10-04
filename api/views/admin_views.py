@@ -227,6 +227,78 @@ DEFAULT_CONFIGS = [
         ),
     },
     {
+        "key": "RAZORPAY_KEY_ID",
+        "category": "payments",
+        "value_type": "string",
+        "description": (
+            "Razorpay Key ID (starts with rzp_live_ or rzp_test_). Identifies your account to "
+            "checkout; it is public by design. Rupee payments (UPI AutoPay, cards, netbanking) "
+            "stay unavailable until this and the Key Secret are both set."
+        ),
+    },
+    {
+        "key": "RAZORPAY_KEY_SECRET",
+        "category": "payments",
+        "value_type": "string",
+        "description": "Razorpay Key Secret. Stored encrypted; never shown again after saving.",
+    },
+    {
+        "key": "RAZORPAY_WEBHOOK_SECRET",
+        "category": "payments",
+        "value_type": "string",
+        "description": (
+            "Secret you choose when adding the webhook in the Razorpay Dashboard "
+            "(URL: <api>/api/billing/razorpay/webhook/). Stored encrypted. Without it, renewals "
+            "and failed payments are not picked up automatically."
+        ),
+    },
+    {
+        "key": "RAZORPAY_PLAN_ID_PRO_INR_MONTHLY",
+        "category": "payments",
+        "value_type": "string",
+        "description": (
+            "Razorpay Plan id (plan_...) for Pro monthly in rupees. Create the plan in the Razorpay "
+            "Dashboard with the same amount shown on the pricing page, then paste its id here."
+        ),
+    },
+    {
+        "key": "RAZORPAY_PLAN_ID_PRO_INR_ANNUAL",
+        "category": "payments",
+        "value_type": "string",
+        "description": (
+            "Razorpay Plan id (plan_...) for Pro annual in rupees. Create the plan in the Razorpay "
+            "Dashboard with the same amount shown on the pricing page, then paste its id here."
+        ),
+    },
+    {
+        "key": "RAZORPAY_PLAN_ID_MAX_INR_MONTHLY",
+        "category": "payments",
+        "value_type": "string",
+        "description": (
+            "Razorpay Plan id (plan_...) for Max monthly in rupees. Create the plan in the Razorpay "
+            "Dashboard with the same amount shown on the pricing page, then paste its id here."
+        ),
+    },
+    {
+        "key": "RAZORPAY_PLAN_ID_MAX_INR_ANNUAL",
+        "category": "payments",
+        "value_type": "string",
+        "description": (
+            "Razorpay Plan id (plan_...) for Max annual in rupees. Create the plan in the Razorpay "
+            "Dashboard with the same amount shown on the pricing page, then paste its id here."
+        ),
+    },
+    {
+        "key": "STRIPE_ENABLED",
+        "category": "payments",
+        "value_type": "boolean",
+        "description": (
+            "Turn on euro and pound checkout through Stripe. Off for the India launch: only "
+            "rupee payments through Razorpay are offered. Stripe keys are still read from the "
+            "server environment."
+        ),
+    },
+    {
         "key": "GST_ENABLED",
         "category": "tax",
         "value_type": "boolean",

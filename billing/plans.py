@@ -213,6 +213,37 @@ def get_plan(plan_id):
     return PLANS_BY_ID.get(plan_id)
 
 
+def stripe_enabled():
+    """Whether euro/pound checkout (Stripe) is switched on. Read live so the
+    admin Payments switch applies to the next request."""
+    from api.utils.config import get_config_value
+
+    return bool(get_config_value("STRIPE_ENABLED", False))
+
+
+def available_currencies():
+    """The currencies a customer can pay in right now, in display order."""
+    if stripe_enabled():
+        return list(SUPPORTED_CURRENCIES)
+    return [c for c in SUPPORTED_CURRENCIES if CURRENCY_PROCESSORS[c] != PROCESSOR_STRIPE]
+
+
+def default_currency():
+    """What a visitor sees first: the catalog default when Stripe is on, else
+    the first currency that can actually be paid."""
+    available = available_currencies()
+    return DEFAULT_CURRENCY if DEFAULT_CURRENCY in available else available[0]
+
+
+def customer_currency(currency):
+    """`normalize_currency`, further limited to what is purchasable now.
+
+    A currency that can't be paid falls back to the default instead of
+    quoting prices nobody can check out with."""
+    currency = normalize_currency(currency)
+    return currency if currency in available_currencies() else default_currency()
+
+
 def normalize_currency(currency):
     currency = (currency or DEFAULT_CURRENCY).upper()
     return currency if currency in SUPPORTED_CURRENCIES else DEFAULT_CURRENCY
@@ -273,9 +304,25 @@ def find_plan_by_razorpay_plan_id(razorpay_plan_id):
             if CURRENCY_PROCESSORS.get(currency) != PROCESSOR_RAZORPAY:
                 continue
             for billing_period, price in periods.items():
-                if price.get("processor_price_id") == razorpay_plan_id:
+                if _catalog_processor_id(plan["id"], currency, billing_period, price) == razorpay_plan_id:
                     return plan["id"], currency, billing_period
     return None
+
+
+def _catalog_processor_id(plan_id, currency, billing_period, price):
+    """The processor id a built-in catalog price checks out with.
+
+    A Razorpay Plan id can be typed into the admin Configuration tab
+    (RAZORPAY_PLAN_ID_<PLAN>_INR_<PERIOD>); that wins over the environment
+    value baked into the catalog at import time, so the id can be added
+    after launch without a redeploy. Stripe ids are unchanged."""
+    if CURRENCY_PROCESSORS.get(currency) != PROCESSOR_RAZORPAY:
+        return price.get("stripe_price_id", "")
+    from api.utils.config import get_config_value
+
+    key = f"RAZORPAY_PLAN_ID_{plan_id.upper()}_{currency}_{billing_period.upper()}"
+    stored = get_config_value(key, "")
+    return (stored.strip() if isinstance(stored, str) else "") or price.get("processor_price_id", "")
 
 
 def catalog_price(plan_id, currency, billing_period):
@@ -371,10 +418,7 @@ def _base_price(plan_id, currency, billing_period):
         # For Stripe currencies `stripe_price_id` stays the key that counts:
         # it is the name every existing override, test and admin screen
         # uses, so reading anything else would silently ignore them.
-        if CURRENCY_PROCESSORS.get(currency) == PROCESSOR_RAZORPAY:
-            processor_price_id = catalog.get("processor_price_id", "")
-        else:
-            processor_price_id = catalog.get("stripe_price_id", "")
+        processor_price_id = _catalog_processor_id(plan_id, currency, billing_period, catalog)
         return {"amount_cents": catalog["amount_cents"], "processor_price_id": processor_price_id}
     if CURRENCY_PROCESSORS.get(currency) == PROCESSOR_RAZORPAY:
         processor_price_id = row.razorpay_plan_id

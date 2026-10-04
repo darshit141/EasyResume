@@ -3,6 +3,7 @@ from billing.views.billing_view import (
     CreateCheckoutSessionAPIView,
     CreatePortalSessionAPIView,
     EntitlementsAPIView,
+    PaymentOptionsAPIView,
     PlanListAPIView,
     StripeWebhookAPIView,
     SubscriptionStatusAPIView,

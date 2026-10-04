@@ -9,6 +9,7 @@ from billing.views import (
     CreditsStatusAPIView,
     DisplayAdConfigAPIView,
     EntitlementsAPIView,
+    PaymentOptionsAPIView,
     PlanListAPIView,
     RewardedAdCallbackAPIView,
     RewardedAdTicketAPIView,
@@ -26,6 +27,7 @@ from billing.views import (
 
 urlpatterns = [
     path("plans/", PlanListAPIView.as_view(), name="billing-plans"),
+    path("payment-options/", PaymentOptionsAPIView.as_view(), name="billing-payment-options"),
     path("subscription/", SubscriptionStatusAPIView.as_view(), name="billing-subscription"),
     path("entitlements/", EntitlementsAPIView.as_view(), name="billing-entitlements"),
     path("credits/", CreditsStatusAPIView.as_view(), name="billing-credits"),
