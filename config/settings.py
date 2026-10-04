@@ -66,6 +66,9 @@ CSRF_TRUSTED_ORIGINS = [
 # plain http:// keeps working unchanged).
 if not DEBUG:
     SECURE_SSL_REDIRECT = os.getenv("SECURE_SSL_REDIRECT", "True") == "True"
+    # nginx terminates TLS and tells Django so; without this every request looks
+    # like plain http, and the HSTS header below would never be sent.
+    SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
     SESSION_COOKIE_SECURE = True
     CSRF_COOKIE_SECURE = True
     SECURE_CONTENT_TYPE_NOSNIFF = True
@@ -228,7 +231,7 @@ REST_FRAMEWORK = {
     ),
     "DEFAULT_SCHEMA_CLASS": "drf_spectacular.openapi.AutoSchema",
     "DEFAULT_THROTTLE_CLASSES": [] if RUNNING_TESTS else [
-        "rest_framework.throttling.ScopedRateThrottle",
+        "api.throttles.ClientIPScopedRateThrottle",
     ],
     "DEFAULT_THROTTLE_RATES": {
         # Brute-forceable auth endpoints (login, register, OTP, password reset).

@@ -36,6 +36,23 @@ def _status_payload(user, policy):
     }
 
 
+def _locked_response(user):
+    """429 while the account is locked from too many wrong passwords/codes."""
+    seconds = auth_security.lockout_seconds_remaining(user)
+    if not seconds:
+        return None
+    return Response(auth_security.locked_out_payload(seconds), status=status.HTTP_429_TOO_MANY_REQUESTS)
+
+
+def _wrong_attempt(user, body):
+    """Count one wrong password or code. If that tips the account into a
+    lockout, answer with the lockout instead of the plain 400."""
+    seconds = auth_security.record_failed_login(user)
+    if seconds:
+        return Response(auth_security.locked_out_payload(seconds), status=status.HTTP_429_TOO_MANY_REQUESTS)
+    return Response(body, status=status.HTTP_400_BAD_REQUEST)
+
+
 class TwoFactorStatusAPIView(APIView):
     permission_classes = [permissions.IsAuthenticated]
 
@@ -81,14 +98,17 @@ class TwoFactorConfirmAPIView(APIView):
                 {"message": "Authenticator apps aren't available right now.", "code": "TOTP_UNAVAILABLE"},
                 status=status.HTTP_403_FORBIDDEN,
             )
+        locked = _locked_response(user)
+        if locked:
+            return locked
         codes = auth_security.confirm_totp_setup(user, serializer.validated_data["code"])
         if codes is None:
-            return Response(
+            return _wrong_attempt(
+                user,
                 {
                     "message": "That code didn't match. Check the time on your phone is set automatically, then try the newest code.",
                     "code": "OTP_INVALID",
                 },
-                status=status.HTTP_400_BAD_REQUEST,
             )
         payload = _status_payload(user, policy)
         payload["backup_codes"] = codes
@@ -108,18 +128,17 @@ class TwoFactorDisableAPIView(APIView):
 
         # Someone at an unlocked laptop must not be able to strip 2FA: ask
         # for the password (when the account has one) and a current code.
+        locked = _locked_response(user)
+        if locked:
+            return locked
         if user.has_usable_password() and not user.check_password(
             serializer.validated_data.get("password") or ""
         ):
-            return Response(
-                {"message": "Your password isn't right.", "code": "PASSWORD_INVALID"},
-                status=status.HTTP_400_BAD_REQUEST,
+            return _wrong_attempt(
+                user, {"message": "Your password isn't right.", "code": "PASSWORD_INVALID"}
             )
         if auth_security.verify_second_factor_code(user, serializer.validated_data["code"]) is None:
-            return Response(
-                {"message": "That code isn't right.", "code": "OTP_INVALID"},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
+            return _wrong_attempt(user, {"message": "That code isn't right.", "code": "OTP_INVALID"})
         auth_security.disable_totp(user)
         return Response(_status_payload(user, auth_security.get_policy()))
 
@@ -137,10 +156,13 @@ class TwoFactorBackupCodesAPIView(APIView):
                 {"message": "Set up an authenticator app first.", "code": "TOTP_NOT_ENABLED"},
                 status=status.HTTP_400_BAD_REQUEST,
             )
+        locked = _locked_response(user)
+        if locked:
+            return locked
         if auth_security.verify_second_factor_code(user, serializer.validated_data["code"]) != "totp":
-            return Response(
+            return _wrong_attempt(
+                user,
                 {"message": "Enter the current code from your authenticator app.", "code": "OTP_INVALID"},
-                status=status.HTTP_400_BAD_REQUEST,
             )
         payload = _status_payload(user, auth_security.get_policy())
         payload["backup_codes"] = auth_security.regenerate_backup_codes(user)
