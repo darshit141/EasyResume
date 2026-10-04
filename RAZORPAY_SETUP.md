@@ -12,9 +12,13 @@ Razorpay supports UPI AutoPay, cards (standing instructions) and bank
 e-mandates for recurring billing, which is what an Indian subscriber expects
 at checkout.
 
-EUR and GBP stay on Stripe, unchanged. Checkout routes by currency
-(`billing/plans.py` → `CURRENCY_PROCESSORS`); nothing else in the app needs to
-know which processor a customer is on.
+**Launch status: Stripe is switched off.** The first launch is India-only, so
+Pricing offers rupees only and a euro/pound checkout request is refused
+(`CURRENCY_UNAVAILABLE`). The Stripe code is untouched; turn it back on with
+**Configuration → Payments → `STRIPE_ENABLED`** (or the env var) and set the
+Stripe keys. Checkout routes by currency (`billing/plans.py` →
+`CURRENCY_PROCESSORS`); nothing else in the app needs to know which processor a
+customer is on.
 
 > **If the business is actually registered outside India**, this changes. A
 > foreign Stripe account *can* take UPI in INR, and GST on B2C sales into
@@ -29,12 +33,11 @@ know which processor a customer is on.
 
 1. Create or log into a Razorpay account and enable **Subscriptions**.
 2. Settings → API Keys → generate a key pair (test mode first).
-3. Put them in the environment — never in the admin panel:
-
-   ```
-   RAZORPAY_KEY_ID=rzp_test_...
-   RAZORPAY_KEY_SECRET=...
-   ```
+3. Enter them in the admin panel: **Configuration → Payments →
+   `RAZORPAY_KEY_ID` and `RAZORPAY_KEY_SECRET`**. The secret is stored
+   encrypted and never shown again. They apply to the next request, with no
+   redeploy. (The same names in the server environment still work as a
+   fallback; a value saved in the panel wins.)
 
 ### 2. Create the plans
 
@@ -42,16 +45,17 @@ Subscriptions → Plans → create one plan per price. **The plan amount must be
 the GST-inclusive price exactly as shown on the pricing page**, because INR
 prices include tax and Razorpay charges exactly what the plan says.
 
-| Env var | Plan | Period | Default amount |
+| Admin setting / env var | Plan | Period | Default amount |
 |---|---|---|---|
 | `RAZORPAY_PLAN_ID_PRO_INR_MONTHLY` | Pro | monthly | ₹499 |
 | `RAZORPAY_PLAN_ID_PRO_INR_ANNUAL` | Pro | yearly | ₹3,999 |
 | `RAZORPAY_PLAN_ID_MAX_INR_MONTHLY` | Max | monthly | ₹999 |
 | `RAZORPAY_PLAN_ID_MAX_INR_ANNUAL` | Max | yearly | ₹7,999 |
 
+Paste each plan id into **Configuration → Payments** under the name above.
 Until a plan id is set, that combination shows as not purchasable rather than
 charging the wrong amount. Prices and plan ids can also be set per row in
-Django admin → **Plan prices** (`razorpay_plan_id`), which wins over the env.
+Django admin → **Plan prices** (`razorpay_plan_id`), which wins over both.
 
 Every recurring INR price must stay at or below **₹15,000**: that is RBI's cap
 on a UPI AutoPay debit without fresh authentication, and a test enforces it.
@@ -67,7 +71,7 @@ with these events:
   `subscription.resumed`, `subscription.updated`
 - `refund.processed`
 
-Copy the secret into `RAZORPAY_WEBHOOK_SECRET`. Without it every webhook is
+Copy the secret into **Configuration → Payments → `RAZORPAY_WEBHOOK_SECRET`**. Without it every webhook is
 rejected — deliberately, since an unverifiable webhook must never grant
 access.
 
@@ -92,7 +96,7 @@ section (env values are only the defaults):
 
 ### 5. Test the purchase (test mode)
 
-1. Restart the backend, open Pricing, pick **₹ INR** (Indian time-zone
+1. Open Pricing, pick **₹ INR** (Indian time-zone
    visitors land on it automatically).
 2. Subscribe → enter a state (and optionally a GSTIN) → Razorpay Checkout
    opens.

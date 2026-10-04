@@ -9,7 +9,7 @@ import stripe
 from django.conf import settings
 
 from billing.models import Subscription
-from billing.plans import DEFAULT_CURRENCY, get_plan, get_price
+from billing.plans import DEFAULT_CURRENCY, get_plan, get_price, stripe_enabled
 
 
 class BillingError(Exception):
@@ -43,7 +43,9 @@ class NoStripeCustomerError(BillingError):
 class StripeService:
     @staticmethod
     def _require_configured():
-        if not settings.STRIPE_SECRET_KEY:
+        # Switched off (India launch): behave exactly like an unconfigured
+        # server so no Stripe call is ever attempted.
+        if not stripe_enabled() or not settings.STRIPE_SECRET_KEY:
             raise StripeNotConfiguredError()
         stripe.api_key = settings.STRIPE_SECRET_KEY
 

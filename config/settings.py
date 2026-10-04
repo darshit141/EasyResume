@@ -791,6 +791,13 @@ CURRENT_PRIVACY_POLICY_VERSION = os.getenv("CURRENT_PRIVACY_POLICY_VERSION", "20
 CURRENT_TERMS_OF_SERVICE_VERSION = os.getenv("CURRENT_TERMS_OF_SERVICE_VERSION", "2026-08-21")
 CURRENT_COOKIE_POLICY_VERSION = os.getenv("CURRENT_COOKIE_POLICY_VERSION", "2026-08-21")
 
+# Stripe is switched off for the India launch: rupee checkout runs through
+# Razorpay only (UPI, cards, netbanking). The Stripe code stays in place and
+# turns back on with STRIPE_ENABLED=True (or the same switch in the admin
+# Payments section) once euro/pound sales are wanted. Tests run with it on so
+# the Stripe paths stay covered.
+STRIPE_ENABLED = os.getenv("STRIPE_ENABLED", "True" if RUNNING_TESTS else "False") == "True"
+
 # Stripe billing. Empty by default — billing endpoints return a clean,
 # explicit "not configured" error rather than crashing until real keys are
 # set. Use test-mode keys (sk_test_.../pk_test_...) during development;
@@ -807,7 +814,8 @@ STRIPE_AUTOMATIC_TAX_ENABLED = os.getenv("STRIPE_AUTOMATIC_TAX_ENABLED", "False"
 # Razorpay takes INR payments — UPI AutoPay, cards and bank e-mandates —
 # because Stripe is invite-only for Indian businesses and offers neither UPI
 # nor Stripe Tax to them (see billing/plans.py). Credentials live in the
-# environment, never in the admin panel, exactly as Stripe's do. Blank means
+# environment or, preferably, the admin Payments section (stored encrypted,
+# no redeploy). Blank means
 # INR checkout reports RAZORPAY_NOT_CONFIGURED instead of failing obscurely.
 RAZORPAY_KEY_ID = os.getenv("RAZORPAY_KEY_ID", "")
 RAZORPAY_KEY_SECRET = os.getenv("RAZORPAY_KEY_SECRET", "")

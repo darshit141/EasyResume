@@ -17,6 +17,9 @@ from billing.plans import (
     published_plans,
     format_price_display,
     get_price,
+    available_currencies,
+    customer_currency,
+    default_currency,
     normalize_currency,
 )
 from billing.serializers.billing_serializer import (
@@ -142,12 +145,29 @@ class PlanListAPIView(APIView):
     permission_classes = [AllowAny]
 
     def get(self, request):
-        currency = normalize_currency(request.query_params.get("currency"))
+        currency = customer_currency(request.query_params.get("currency"))
         # Read once per request: the note depends on live GST settings, and
         # every price on the page should say the same thing.
         tax_note = GSTService.price_tax_note(currency)
         resolved = [_resolve_plan(plan, currency, tax_note) for plan in published_plans()]
         return Response(PlanSerializer(resolved, many=True).data)
+
+
+@extend_schema(
+    tags=["Billing"],
+    summary="Which currencies can be paid in right now",
+    description=(
+        "Public. Lists the currencies checkout currently accepts and the one to show first. "
+        "Stripe (EUR/GBP) is off for the India launch, so this is rupees only until it is "
+        "switched back on in the admin Payments section."
+    ),
+    responses={status.HTTP_200_OK: OpenApiResponse(description="currencies, default_currency")},
+)
+class PaymentOptionsAPIView(APIView):
+    permission_classes = [AllowAny]
+
+    def get(self, request):
+        return Response({"currencies": available_currencies(), "default_currency": default_currency()})
 
 
 @extend_schema(
@@ -215,6 +235,11 @@ class CreateCheckoutSessionAPIView(APIView):
             return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
         currency = normalize_currency(serializer.validated_data.get("currency"))
+        if currency not in available_currencies():
+            return Response(
+                {"detail": "That currency isn't available for payment yet.", "code": "CURRENCY_UNAVAILABLE"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
         try:
             if processor_for(currency) == PROCESSOR_RAZORPAY:
                 result = RazorpayService.start_checkout(

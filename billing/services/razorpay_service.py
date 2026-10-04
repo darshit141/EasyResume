@@ -27,6 +27,7 @@ import requests
 from django.conf import settings
 from django.db import transaction
 
+from api.utils.config import get_config_value
 from billing.models import Subscription
 from billing.plans import (
     PROCESSOR_RAZORPAY,
@@ -76,12 +77,22 @@ class PaymentVerificationError(BillingError):
     message = "We couldn't verify that payment. If you were charged, it will be applied automatically within a few minutes."
 
 
+def _key_id():
+    # Read through the admin-editable config (falling back to the
+    # environment) so keys can be added or rotated without a redeploy.
+    return (get_config_value("RAZORPAY_KEY_ID", "") or "").strip()
+
+
+def _key_secret():
+    return (get_config_value("RAZORPAY_KEY_SECRET", "") or "").strip()
+
+
 class RazorpayService:
     # -- plumbing ---------------------------------------------------------
 
     @staticmethod
     def configured():
-        return bool(settings.RAZORPAY_KEY_ID and settings.RAZORPAY_KEY_SECRET)
+        return bool(_key_id() and _key_secret())
 
     @classmethod
     def _require_configured(cls):
@@ -97,7 +108,7 @@ class RazorpayService:
                 method,
                 url,
                 json=payload,
-                auth=(settings.RAZORPAY_KEY_ID, settings.RAZORPAY_KEY_SECRET),
+                auth=(_key_id(), _key_secret()),
                 timeout=_TIMEOUT_SECONDS,
             )
         except requests.RequestException as exc:
@@ -172,7 +183,7 @@ class RazorpayService:
         Compared in constant time. A missing secret fails closed: an
         unverifiable webhook must never be allowed to grant access.
         """
-        secret = settings.RAZORPAY_WEBHOOK_SECRET
+        secret = get_config_value("RAZORPAY_WEBHOOK_SECRET", "")
         if not secret or not signature:
             return False
         return hmac.compare_digest(cls._hmac_hex(secret, raw_body), signature)
@@ -182,7 +193,7 @@ class RazorpayService:
         """Razorpay signs a subscription checkout result as
         HMAC-SHA256("<payment_id>|<subscription_id>") with the API key
         secret. The order matters and differs from one-off order payments."""
-        secret = settings.RAZORPAY_KEY_SECRET
+        secret = _key_secret()
         if not secret or not signature or not payment_id or not razorpay_subscription_id:
             return False
         message = f"{payment_id}|{razorpay_subscription_id}".encode("utf-8")
@@ -258,7 +269,7 @@ class RazorpayService:
             "razorpay": {
                 # The key id is public by design — it is what identifies the
                 # merchant to Checkout. The secret never leaves the server.
-                "key_id": settings.RAZORPAY_KEY_ID,
+                "key_id": _key_id(),
                 "subscription_id": created["id"],
                 "name": "IntelliResume",
                 "description": f"{plan['name']} — {'monthly' if billing_period == 'monthly' else 'annual'}",
