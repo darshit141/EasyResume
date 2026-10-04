@@ -109,8 +109,8 @@ Set every one of these on your hosting platform (not committed to git —
 |---|---|
 | `SECRET_KEY` | A long random string, unique to production. Generate one, don't reuse the dev value. |
 | `DEBUG` | `False` |
-| `ALLOWED_HOSTS` | Your API domain, e.g. `api.intelliresume.com` |
-| `CORS_ALLOWED_ORIGINS` | Your frontend's origin, e.g. `https://intelliresume.com` |
+| `ALLOWED_HOSTS` | Your API domain, e.g. `api.intelliresume.online` |
+| `CORS_ALLOWED_ORIGINS` | Your frontend's origin, e.g. `https://intelliresume.online` |
 | `CSRF_TRUSTED_ORIGINS` | Same as above |
 | `DATABASE_URL` | From step 1 |
 | `REDIS_URL` | From step 2 |
@@ -171,7 +171,7 @@ factor is on the user's own account.
 
 1. In the [Google Cloud console](https://console.cloud.google.com/apis/credentials),
    create an **OAuth 2.0 Client ID** of type **Web application**.
-2. Add your frontend origin (e.g. `https://intelliresume.com`) under
+2. Add your frontend origin (e.g. `https://intelliresume.online`) under
    *Authorised JavaScript origins*.
 3. Configure the OAuth consent screen. Only the `openid`, `email` and
    `profile` scopes are used — all three are non-sensitive, so this needs
@@ -236,7 +236,7 @@ set it in `.env` or the admin Configuration tab.
 ## 7. Deploy the frontend
 
 - [ ] Set `VITE_API_BASE_URL` to the real backend URL, e.g.
-      `https://api.intelliresume.com/api/`
+      `https://api.intelliresume.online/api/`
 - [ ] Set any of the optional `VITE_*` vars you want (AdSense, socials —
       see `.env.example`); leave them blank to keep those features off
 - [ ] `npm run build`, deploy the resulting `dist/` folder (or let your

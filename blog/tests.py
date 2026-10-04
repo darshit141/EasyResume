@@ -1,4 +1,5 @@
 from datetime import timedelta
+from io import StringIO
 
 from django.test import TestCase, override_settings
 from django.utils import timezone
@@ -162,8 +163,21 @@ class SitemapAndRobotsTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response["Content-Type"], "application/xml")
         body = response.content.decode()
-        for path in ("/", "/pricing", "/blog", "/about"):
+        for path in ("/", "/how-it-works", "/features", "/pricing", "/faq", "/about", "/contact"):
             self.assertIn(f"<loc>https://example.com{path}</loc>", body)
+
+    def test_sitemap_leaves_out_signup(self):
+        body = self.client.get("/sitemap.xml").content.decode()
+        self.assertNotIn("https://example.com/signup<", body)
+
+    def test_sitemap_lists_the_blog_only_once_it_has_posts(self):
+        """An empty blog listing is thin content, so it stays out of the sitemap."""
+        body = self.client.get("/sitemap.xml").content.decode()
+        self.assertNotIn("<loc>https://example.com/blog</loc>", body)
+
+        _post(status=Post.STATUS_PUBLISHED)
+        body = self.client.get("/sitemap.xml").content.decode()
+        self.assertIn("<loc>https://example.com/blog</loc>", body)
 
     def test_sitemap_includes_only_published_posts(self):
         published = _post(status=Post.STATUS_PUBLISHED)
@@ -208,3 +222,58 @@ class SitemapAndRobotsTests(TestCase):
 
         self.assertIn("Disallow: /\n", body)
         self.assertNotIn("Sitemap:", body)
+
+
+class FrontendUrlCheckTests(TestCase):
+    def run_check(self, url):
+        from django.test import override_settings
+
+        from blog.checks import frontend_url_is_public
+
+        with override_settings(FRONTEND_URL=url):
+            return [w.id for w in frontend_url_is_public(None)]
+
+    def test_localhost_is_flagged(self):
+        self.assertEqual(self.run_check("http://localhost:5173"), ["blog.W001"])
+
+    def test_retired_domain_is_flagged(self):
+        self.assertEqual(self.run_check("https://intelliresume.patrixel.com"), ["blog.W002"])
+
+    def test_live_domain_passes(self):
+        self.assertEqual(self.run_check("https://intelliresume.online"), [])
+
+
+class SeedBlogTests(TestCase):
+    """The shipped articles must be publishable as they are."""
+
+    # Products and vendors the site never names to its users.
+    FORBIDDEN = ("workday", "greenhouse", "taleo", "icims", "jobvite", "openai", "chatgpt", "gemini", "anthropic", "claude")
+
+    def run_seed(self):
+        from django.core.management import call_command
+
+        call_command("seed_blog", stdout=StringIO())
+
+    def test_seeds_long_original_articles(self):
+        self.run_seed()
+        posts = list(Post.objects.all())
+        self.assertGreaterEqual(len(posts), 20)
+        for post in posts:
+            self.assertEqual(post.status, Post.STATUS_PUBLISHED)
+            self.assertGreaterEqual(len(post.body.split()), 800, post.slug)
+            self.assertTrue(post.excerpt and post.seo_description and post.tags, post.slug)
+            self.assertLessEqual(len(post.excerpt), 400, post.slug)
+            self.assertLessEqual(len(post.title), 200, post.slug)
+
+    def test_articles_name_no_vendors(self):
+        self.run_seed()
+        for post in Post.objects.all():
+            text = f"{post.title} {post.excerpt} {post.body}".lower()
+            for word in self.FORBIDDEN:
+                self.assertNotIn(word, text, f"{post.slug} mentions {word}")
+
+    def test_seeding_twice_does_not_duplicate(self):
+        self.run_seed()
+        first = Post.objects.count()
+        self.run_seed()
+        self.assertEqual(Post.objects.count(), first)
