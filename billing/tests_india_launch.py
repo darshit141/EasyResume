@@ -44,7 +44,10 @@ class StripeSwitchedOffTests(TestCase):
         self.assertEqual(default_currency(), "INR")
         response = self.client.get(OPTIONS_URL)
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.json(), {"currencies": ["INR"], "default_currency": "INR"})
+        body = response.json()
+        self.assertEqual(body["currencies"], ["INR"])
+        self.assertEqual(body["default_currency"], "INR")
+        self.assertFalse(body["launch_offer"]["active"])
 
     def test_pricing_page_quotes_rupees_even_if_euros_are_asked_for(self):
         for asked in ("EUR", "GBP", None, "nonsense"):

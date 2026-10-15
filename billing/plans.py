@@ -208,7 +208,19 @@ def plan_features(plan):
     """
     if plan["id"] != "free":
         return plan["features"]
+    from billing import launch
     from billing.entitlements import entitlements_for
+
+    if launch.is_active():
+        hours = launch.window_hours()
+        return [
+            f"{launch.tailored_resumes_per_window()} job-specific tailored resumes every {hours} hours",
+            f"{launch.ai_calls_per_window()} AI-assisted actions every {hours} hours",
+            "Word (.docx) and PDF export",
+            "Version history and comparisons",
+            "Full resume layout customisation",
+            "Free during our launch - no card needed",
+        ]
 
     live = entitlements_for("free", False)
     return [

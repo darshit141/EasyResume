@@ -493,6 +493,42 @@ DEFAULT_CONFIGS = [
         "description": "How many job-specific tailored resumes a Free-plan user can generate per month. Pro is unlimited.",
     },
     {
+        "key": "LAUNCH_FREE_ACCESS",
+        "category": "limits",
+        "value_type": "boolean",
+        "description": "Free launch offer. On: every user without a paid plan gets all features free, checkout is closed, and AI use is limited per rolling window (settings below) instead of per month. Existing paid subscribers are unaffected.",
+    },
+    {
+        "key": "LAUNCH_FREE_UNTIL",
+        "category": "limits",
+        "value_type": "string",
+        "description": "Optional last day of the free launch offer, as YYYY-MM-DD. The offer switches off automatically after that day. Leave empty for no end date.",
+    },
+    {
+        "key": "LAUNCH_QUOTA_WINDOW_HOURS",
+        "category": "limits",
+        "value_type": "integer",
+        "description": "Length of the rolling usage window during the free launch offer, in hours (default 12).",
+    },
+    {
+        "key": "LAUNCH_TAILORED_RESUMES_PER_WINDOW",
+        "category": "limits",
+        "value_type": "integer",
+        "description": "Tailored resumes a user can generate per window during the free launch offer (default 3).",
+    },
+    {
+        "key": "LAUNCH_AI_CALLS_PER_WINDOW",
+        "category": "limits",
+        "value_type": "integer",
+        "description": "AI-backed actions per window during the free launch offer, covering every AI feature combined (default 15). One tailored resume uses 3-4.",
+    },
+    {
+        "key": "LAUNCH_SHOW_ADS",
+        "category": "limits",
+        "value_type": "boolean",
+        "description": "Show ads to users during the free launch offer (only when display ads are enabled in the Ads section).",
+    },
+    {
         "key": "ALLOWED_JOB_URL_DOMAINS",
         "category": "limits",
         "value_type": "list",

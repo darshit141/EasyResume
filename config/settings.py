@@ -590,6 +590,20 @@ INBOUND_EMAIL_RETENTION_DAYS = int(os.getenv("INBOUND_EMAIL_RETENTION_DAYS", "18
 # How many jobs a Free account can track recruiter email for.
 REPLY_TRACKING_FREE_JOB_LIMIT = int(os.getenv("REPLY_TRACKING_FREE_JOB_LIMIT", "5"))
 
+# Free launch offer (billing/launch.py). While on, every unpaid account gets
+# the paid feature set free, checkout is closed, and AI use is metered over a
+# short rolling window instead of a month. All of these are also switchable
+# live from the admin Configuration tab (Limits), no redeploy needed.
+LAUNCH_FREE_ACCESS = os.getenv("LAUNCH_FREE_ACCESS", "False") == "True"
+# Optional last day of the offer (YYYY-MM-DD). Empty = no end date.
+LAUNCH_FREE_UNTIL = os.getenv("LAUNCH_FREE_UNTIL", "")
+LAUNCH_QUOTA_WINDOW_HOURS = int(os.getenv("LAUNCH_QUOTA_WINDOW_HOURS", "12"))
+LAUNCH_TAILORED_RESUMES_PER_WINDOW = int(os.getenv("LAUNCH_TAILORED_RESUMES_PER_WINDOW", "3"))
+# One tailored resume takes 3-4 AI calls (job analysis, gap analysis,
+# missing-info review, generation), so 15 lets a user actually reach 3.
+LAUNCH_AI_CALLS_PER_WINDOW = int(os.getenv("LAUNCH_AI_CALLS_PER_WINDOW", "15"))
+LAUNCH_SHOW_ADS = os.getenv("LAUNCH_SHOW_ADS", "True") == "True"
+
 # Where operational alerts (the daily job-import check) are sent.
 OPS_ALERT_EMAIL = os.getenv("OPS_ALERT_EMAIL", "sales@patrixel.com")
 

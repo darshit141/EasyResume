@@ -132,6 +132,13 @@ class EntitlementsSerializer(serializers.Serializer):
     # AI-call ceiling above is reported as unlimited because it is no longer
     # enforced for them.
     uses_own_ai_key = serializers.BooleanField()
+    # Free launch offer (billing.launch). With `quota_window_hours` set, the
+    # tailored-resume and AI-call limits are per rolling window of that many
+    # hours instead of per calendar month.
+    launch_offer = serializers.BooleanField()
+    quota_window_hours = serializers.IntegerField(allow_null=True)
+    tailored_resumes_resets_at = serializers.DateTimeField()
+    ai_calls_resets_at = serializers.DateTimeField()
 
 
 class BillingErrorSerializer(serializers.Serializer):

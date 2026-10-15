@@ -8,6 +8,7 @@ from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from billing import launch
 from billing.models import Subscription, StripeWebhookEvent
 from billing.plans import (
     PLANS,
@@ -168,7 +169,17 @@ class PaymentOptionsAPIView(APIView):
     permission_classes = [AllowAny]
 
     def get(self, request):
-        return Response({"currencies": available_currencies(), "default_currency": default_currency()})
+        offer = launch.summary()
+        return Response(
+            {
+                # Checkout is closed while the free launch offer runs, so no
+                # currency is payable - the pricing page reads this to drop its
+                # buy buttons and show the offer instead.
+                "currencies": [] if offer["active"] else available_currencies(),
+                "default_currency": default_currency(),
+                "launch_offer": offer,
+            }
+        )
 
 
 @extend_schema(
@@ -231,6 +242,14 @@ class CreateCheckoutSessionAPIView(APIView):
     permission_classes = [IsAuthenticated]
 
     def post(self, request):
+        if launch.is_active():
+            return Response(
+                {
+                    "detail": "Everything is free during our launch, so there's nothing to pay for right now.",
+                    "code": "PAYMENTS_PAUSED",
+                },
+                status=status.HTTP_409_CONFLICT,
+            )
         serializer = CheckoutRequestSerializer(data=request.data)
         if not serializer.is_valid():
             return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
