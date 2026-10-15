@@ -529,6 +529,18 @@ DEFAULT_CONFIGS = [
         "description": "Show ads to users during the free launch offer (only when display ads are enabled in the Ads section).",
     },
     {
+        "key": "AI_GLOBAL_DAILY_CAP",
+        "category": "limits",
+        "value_type": "integer",
+        "description": "Site-wide ceiling on AI-backed actions per day (midnight to midnight IST) for users without a paid plan. Protects the AI bill from sign-up spikes and abuse. Paying users and users on their own AI key are never stopped. 0 = no ceiling.",
+    },
+    {
+        "key": "AI_CAPACITY_ALERT_PERCENT",
+        "category": "limits",
+        "value_type": "integer",
+        "description": "Email the ops address when today's AI usage reaches this percentage of the daily ceiling (and again at 100%).",
+    },
+    {
         "key": "ALLOWED_JOB_URL_DOMAINS",
         "category": "limits",
         "value_type": "list",

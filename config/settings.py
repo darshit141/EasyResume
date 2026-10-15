@@ -604,6 +604,14 @@ LAUNCH_TAILORED_RESUMES_PER_WINDOW = int(os.getenv("LAUNCH_TAILORED_RESUMES_PER_
 LAUNCH_AI_CALLS_PER_WINDOW = int(os.getenv("LAUNCH_AI_CALLS_PER_WINDOW", "15"))
 LAUNCH_SHOW_ADS = os.getenv("LAUNCH_SHOW_ADS", "True") == "True"
 
+# Site-wide ceiling on AI actions per day for unpaid accounts
+# (billing/services/ai_capacity.py). 0 = off. Paying and own-key users are
+# never stopped by it. Ops gets an email at AI_CAPACITY_ALERT_PERCENT and at
+# 100%. The day runs midnight to midnight in AI_CAPACITY_TIME_ZONE.
+AI_GLOBAL_DAILY_CAP = int(os.getenv("AI_GLOBAL_DAILY_CAP", "1500"))
+AI_CAPACITY_ALERT_PERCENT = int(os.getenv("AI_CAPACITY_ALERT_PERCENT", "80"))
+AI_CAPACITY_TIME_ZONE = os.getenv("AI_CAPACITY_TIME_ZONE", "Asia/Kolkata")
+
 # Where operational alerts (the daily job-import check) are sent.
 OPS_ALERT_EMAIL = os.getenv("OPS_ALERT_EMAIL", "sales@patrixel.com")
 

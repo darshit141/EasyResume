@@ -42,6 +42,14 @@ class FeatureRequiresProError(PlanRestrictionError):
     code = "UPGRADE_REQUIRED"
 
 
+class AICapacityReachedError(PlanRestrictionError):
+    """The site-wide daily AI ceiling (billing.services.ai_capacity), not
+    this user's own limit. Rides the same 402 path so every AI view already
+    handles it; the code tells the UI it is not the user's quota."""
+
+    code = "AI_CAPACITY_REACHED"
+
+
 class EntitlementsService:
     @staticmethod
     def for_user(user):
@@ -89,6 +97,9 @@ class EntitlementsService:
             latency_ms=latency_ms,
             model_name=model_name or "",
         )
+        from billing.services import ai_capacity
+
+        ai_capacity.maybe_alert()
 
     @staticmethod
     def bonus_credits(user):
@@ -153,6 +164,20 @@ class EntitlementsService:
         # compute cost, and a personal API key buys none of them.
         if EntitlementsService.uses_own_ai_key(user, provider=provider):
             return
+
+        # Site-wide daily ceiling, checked after the paid and own-key exits
+        # above so it only ever stops unpaid usage we would be paying for.
+        from billing.services import ai_capacity
+
+        if ai_capacity.is_reached():
+            resets_at = ai_capacity.next_reset()
+            raise AICapacityReachedError(
+                "IntelliResume is very busy today and we've reached today's free AI capacity. "
+                f"It resets at midnight IST, {_until(resets_at)}. Anything you've already "
+                "done is saved.",
+                feature="ai_capacity",
+                resets_at=resets_at.isoformat(),
+            )
 
         bonus = EntitlementsService.bonus_credits(user)
         limit = base_limit + bonus
