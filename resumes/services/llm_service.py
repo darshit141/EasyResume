@@ -176,17 +176,49 @@ def _parse_json_content(content):
     if not isinstance(content, str) or not content.strip():
         raise LLMEmptyResponseError()
     cleaned = content.strip()
-    if cleaned.startswith("```"):
-        lines = cleaned.splitlines()
-        if lines and lines[0].startswith("```"):
-            lines = lines[1:]
-        if lines and lines[-1].startswith("```"):
-            lines = lines[:-1]
-        cleaned = "\n".join(lines).strip()
+
+    # 1. Strip reasoning / chain-of-thought blocks emitted by models such as
+    # MiniMax-M2.7, DeepSeek-R1, Qwen reasoning, etc.: <think>...</think>
+    cleaned = re.sub(r"(?is)<\s*think\s*>.*?<\s*/\s*think\s*>", "", cleaned).strip()
+
+    # 2. Extract JSON enclosed within markdown code fences if present
+    if "```" in cleaned:
+        match = re.search(r"```(?:json)?\s*([\s\S]*?)\s*```", cleaned, re.IGNORECASE)
+        if match:
+            cleaned = match.group(1).strip()
+        else:
+            lines = cleaned.splitlines()
+            if lines and lines[0].startswith("```"):
+                lines = lines[1:]
+            if lines and lines[-1].startswith("```"):
+                lines = lines[:-1]
+            cleaned = "\n".join(lines).strip()
+
+    # 3. Direct parse
     try:
         return json.loads(cleaned)
-    except json.JSONDecodeError as exc:
-        raise LLMInvalidResponseError() from exc
+    except json.JSONDecodeError:
+        pass
+
+    # 4. If direct parse fails (e.g. conversational prose wraps the JSON),
+    # extract outermost matching braces { ... } or brackets [ ... ]
+    first_brace = cleaned.find("{")
+    last_brace = cleaned.rfind("}")
+    if first_brace != -1 and last_brace != -1 and last_brace > first_brace:
+        try:
+            return json.loads(cleaned[first_brace : last_brace + 1])
+        except json.JSONDecodeError:
+            pass
+
+    first_bracket = cleaned.find("[")
+    last_bracket = cleaned.rfind("]")
+    if first_bracket != -1 and last_bracket != -1 and last_bracket > first_bracket:
+        try:
+            return json.loads(cleaned[first_bracket : last_bracket + 1])
+        except json.JSONDecodeError:
+            pass
+
+    raise LLMInvalidResponseError()
 
 
 class LLMService(ABC):
@@ -254,10 +286,7 @@ class OllamaLLMService(LLMService):
                 content = body.get("response")
                 if not isinstance(content, str) or not content.strip():
                     raise LLMEmptyResponseError()
-                try:
-                    return json.loads(content)
-                except json.JSONDecodeError as exc:
-                    raise LLMInvalidResponseError() from exc
+                return _parse_json_content(content)
             except HTTPError as exc:
                 if exc.code == 404:
                     raise LLMModelUnavailableError() from exc
@@ -380,10 +409,7 @@ class GroqLLMService(LLMService):
                     content = (choices[0].get("message") or {}).get("content")
                     if not isinstance(content, str) or not content.strip():
                         raise LLMEmptyResponseError()
-                    try:
-                        return json.loads(content)
-                    except json.JSONDecodeError as exc:
-                        raise LLMInvalidResponseError() from exc
+                    return _parse_json_content(content)
                 except HTTPError as exc:
                     detail = exc.read().decode(errors="replace") if hasattr(exc, "read") else ""
                     if exc.code in (401, 403):
@@ -1357,25 +1383,19 @@ class GeminiLLMService(LLMService):
         )
         if not content.strip():
             raise LLMEmptyResponseError()
-        try:
-            return json.loads(content)
-        except json.JSONDecodeError as exc:
-            raise LLMInvalidResponseError() from exc
+        return _parse_json_content(content)
 
 
 class FallbackLLMService(LLMService):
     """Wraps a primary provider client with a fallback: if the primary is
-    unreachable, times out, or has no model configured, retries the exact
-    same call against the fallback provider once before giving up.
+    unreachable, times out, has no model configured, or returns an unparseable
+    response, retries the exact same call against the fallback provider once before giving up.
     Transparent to every caller — same LLMService interface as any single
     provider (COMMERCIAL_READINESS_AUDIT.md A5).
 
-    Deliberately does NOT fall back on LLMSchemaValidationError or
-    LLMInvalidResponseError: those mean the provider responded and the
-    *content* didn't pass validation, which is what each AI service's own
-    grounding/retry-with-a-stricter-prompt logic already exists to handle
-    — conflating the two would mask real prompt bugs behind a provider
-    switch instead of surfacing them.
+    Deliberately does NOT fall back on LLMSchemaValidationError: that means the provider
+    responded with valid JSON and the schema check failed, which each AI service's own
+    grounding/retry-with-a-stricter-prompt logic already exists to handle.
     """
 
     def __init__(self, primary, fallback, fallback_provider_name):
@@ -1387,9 +1407,9 @@ class FallbackLLMService(LLMService):
     def generate_structured(self, prompt, schema):
         try:
             return self.primary.generate_structured(prompt, schema)
-        except (LLMSchemaValidationError, LLMInvalidResponseError):
+        except LLMSchemaValidationError:
             raise
-        except LLMServiceError as exc:
+        except (LLMInvalidResponseError, LLMServiceError) as exc:
             logger.warning(
                 "Primary AI provider failed (%s); retrying once with fallback provider %s.",
                 getattr(exc, "code", "LLM_ERROR"), self.fallback_provider_name,
@@ -1405,9 +1425,9 @@ class FallbackLLMService(LLMService):
     def check_model_available(self):
         try:
             return self.primary.check_model_available()
-        except (LLMSchemaValidationError, LLMInvalidResponseError):
+        except LLMSchemaValidationError:
             raise
-        except LLMServiceError:
+        except (LLMInvalidResponseError, LLMServiceError):
             return self.fallback.check_model_available()
 
 

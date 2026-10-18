@@ -576,7 +576,7 @@ class JobGapAnalysisAPIView(APIView):
             curation = JobResumeCuration.objects.filter(id=curation_id, user=request.user).first()
             if curation is None:
                 raise Http404("Job curation analysis not found.")
-            if curation.status != "completed" or not curation.analysis_data:
+            if (curation.status != "completed" or not curation.analysis_data) and not (curation.job_description and curation.job_description.strip()):
                 return llm_error_response(JobRequirementsUnavailableError())
 
             job = enqueue_ai_job(

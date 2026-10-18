@@ -41,7 +41,12 @@ class JobResumeCurationService:
             return curation, self._latest_version(curation)
 
         if curation.status != "completed" or not curation.analysis_data:
-            raise JobRequirementsUnavailableError()
+            if curation.job_description and curation.job_description.strip():
+                from resumes.services.job_curation_service import JobCurationService
+                JobCurationService(llm_service=self.ai_service.llm_service, user=user).run_analysis(curation)
+                curation.refresh_from_db()
+            else:
+                raise JobRequirementsUnavailableError()
 
         # Re-run candidate-vs-job matching against the latest profile before
         # generating, so a stale gap analysis never drives regeneration.
