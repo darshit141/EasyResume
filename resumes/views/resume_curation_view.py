@@ -280,6 +280,14 @@ class JobResumeCurationGenerateAPIView(APIView):
         if curation is None:
             raise Http404("Job curation analysis not found.")
 
+        # If a tailoring job is already active for this curation, attach to it immediately
+        active_job = curation.ai_jobs.filter(
+            job_type=AIJob.JOB_TYPE_TAILORED_RESUME_GENERATION,
+            status__in=[AIJob.STATUS_QUEUED, AIJob.STATUS_PROCESSING],
+        ).order_by("-created_at").first()
+        if active_job:
+            return Response(AIJobSerializer(active_job).data, status=status.HTTP_202_ACCEPTED)
+
         # Returning an already-generated resume from cache creates no new
         # version and costs nothing, so it must not consume quota.
         creates_new_version = regenerate or not curation.tailored_resume_data

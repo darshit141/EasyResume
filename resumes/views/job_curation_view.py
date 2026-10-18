@@ -409,7 +409,10 @@ class JobCurationListAPIView(ListAPIView):
     serializer_class = JobResumeCurationSerializer
 
     def get_queryset(self):
-        return JobResumeCuration.objects.filter(user=self.request.user)
+        return (
+            JobResumeCuration.objects.filter(user=self.request.user)
+            .prefetch_related("ai_jobs", "tailored_resume_versions")
+        )
 
 
 @extend_schema(
@@ -442,7 +445,10 @@ class JobCurationDetailAPIView(RetrieveAPIView):
     lookup_url_kwarg = "curation_id"
 
     def get_queryset(self):
-        return JobResumeCuration.objects.filter(user=self.request.user)
+        return (
+            JobResumeCuration.objects.filter(user=self.request.user)
+            .prefetch_related("ai_jobs", "tailored_resume_versions")
+        )
 
 
 @extend_schema(

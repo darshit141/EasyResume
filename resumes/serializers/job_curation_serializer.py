@@ -193,6 +193,10 @@ class JobResumeCurationSerializer(serializers.ModelSerializer):
     has_gap_analysis = serializers.SerializerMethodField()
     has_tailored_resume = serializers.SerializerMethodField()
     has_cover_letter = serializers.SerializerMethodField()
+    active_ai_job = serializers.SerializerMethodField()
+    match_percentage = serializers.SerializerMethodField()
+    version_count = serializers.SerializerMethodField()
+    latest_version = serializers.SerializerMethodField()
 
     def get_analysis_data(self, curation):
         if curation.status == "completed" and curation.analysis_data:
@@ -222,6 +226,10 @@ class JobResumeCurationSerializer(serializers.ModelSerializer):
             "has_gap_analysis",
             "has_tailored_resume",
             "has_cover_letter",
+            "active_ai_job",
+            "match_percentage",
+            "version_count",
+            "latest_version",
             "created_at",
             "updated_at",
         ]
@@ -235,6 +243,41 @@ class JobResumeCurationSerializer(serializers.ModelSerializer):
 
     def get_has_cover_letter(self, curation):
         return bool(curation.cover_letter_data)
+
+    def get_active_ai_job(self, curation):
+        from ai_jobs.models import AIJob
+        job = (
+            curation.ai_jobs.filter(
+                status__in=[AIJob.STATUS_QUEUED, AIJob.STATUS_PROCESSING]
+            )
+            .order_by("-created_at")
+            .first()
+        )
+        if not job:
+            return None
+        return {
+            "id": job.id,
+            "job_type": job.job_type,
+            "status": job.status,
+            "created_at": job.created_at,
+        }
+
+    def get_match_percentage(self, curation):
+        latest = curation.tailored_resume_versions.order_by("-version").first()
+        if latest and latest.match_percentage is not None:
+            return float(latest.match_percentage)
+        if curation.gap_analysis_data:
+            pct = curation.gap_analysis_data.get("overall_match_percentage")
+            if pct is not None:
+                return float(pct)
+        return None
+
+    def get_version_count(self, curation):
+        return curation.tailored_resume_versions.count()
+
+    def get_latest_version(self, curation):
+        latest = curation.tailored_resume_versions.order_by("-version").first()
+        return latest.version if latest else None
 
 
 class JobCurationSkippedSerializer(serializers.Serializer):
