@@ -26,9 +26,11 @@ class JobCurationService:
     persist) and is what the worker calls.
     """
 
-    def __init__(self, ai_service=None, llm_service=None, provider=None, user=None):
+    def __init__(self, ai_service=None, llm_service=None, provider=None, user=None, model=None, fallback_provider=None):
         self.user = user
-        self.ai_service = ai_service or JobCurationAIService(llm_service=llm_service, provider=provider, user=user)
+        self.ai_service = ai_service or JobCurationAIService(
+            llm_service=llm_service, provider=provider, user=user, model=model, fallback_provider=fallback_provider
+        )
 
     def create_pending(self, user, job_title, job_description, job_url="", resume_id=None, company_name=""):
         """Creates the curation session row with no AI call made yet.

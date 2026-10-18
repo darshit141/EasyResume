@@ -75,7 +75,7 @@ class ResumeCurationAIService:
         "furthermore", "currently", "previously", "recently",
     })
 
-    def __init__(self, llm_service=None, provider=None, user=None):
+    def __init__(self, llm_service=None, provider=None, user=None, model=None, fallback_provider=None):
         """``user`` is the account the work is being done for. It is used for
         one thing: if they have saved their own provider API key, the client
         built here uses it instead of the server's (see
@@ -83,7 +83,9 @@ class ResumeCurationAIService:
         command, a health check — the server's own credentials are used, which
         is the behaviour this had before BYOK existed."""
         self.user = user
-        self.llm_service = llm_service or get_llm_service(provider, user=user)
+        self.llm_service = llm_service or get_llm_service(
+            provider, user=user, model=model, fallback_provider=fallback_provider
+        )
 
     def generate_tailored_resume(
         self,
@@ -92,6 +94,7 @@ class ResumeCurationAIService:
         job_description,
         job_requirements,
         candidate_match_summary,
+        allowed_missing_skills=None,
     ):
         retry_feedback = None
         last_error = None
@@ -106,10 +109,11 @@ class ResumeCurationAIService:
                 job_requirements=json.dumps(job_requirements, sort_keys=True),
                 candidate_match_summary=json.dumps(candidate_match_summary, sort_keys=True),
                 retry_feedback=retry_feedback,
+                allowed_missing_skills=allowed_missing_skills,
             )
             raw = self.llm_service.generate_structured(prompt, TAILORED_RESUME_SCHEMA)
             try:
-                return self.validate_and_ground(raw, candidate_source_data)
+                return self.validate_and_ground(raw, candidate_source_data, allowed_missing_skills=allowed_missing_skills)
             except ResumeCurationGroundingError as exc:
                 last_error = exc
                 retry_feedback = exc.violations
@@ -123,14 +127,33 @@ class ResumeCurationAIService:
         raise last_error
 
     @classmethod
-    def validate_and_ground(cls, raw, candidate_source_data):
+    def validate_and_ground(cls, raw, candidate_source_data, allowed_missing_skills=None):
         cls._validate_shape(raw)
 
         candidate_text = cls._candidate_text_blob(candidate_source_data)
         candidate_skill_terms = {
             cls._normalise_text(skill)
             for skill in candidate_source_data.get("skills", [])
+            if cls._normalise_text(skill)
         }
+        # Permit aliases for declared candidate skills (e.g. react -> react.js)
+        from resumes.services.job_gap_analysis_service import TECH_ALIASES
+        alias_expansions = set()
+        for term in list(candidate_skill_terms):
+            if term in TECH_ALIASES:
+                for alias in TECH_ALIASES[term]:
+                    alias_expansions.add(cls._normalise_text(alias))
+        candidate_skill_terms.update(alias_expansions)
+
+        # If user explicitly opted into adding missing job skills, permit them
+        if allowed_missing_skills:
+            for skill in allowed_missing_skills:
+                norm = cls._normalise_text(skill)
+                if norm:
+                    candidate_skill_terms.add(norm)
+                    if norm in TECH_ALIASES:
+                        for alias in TECH_ALIASES[norm]:
+                            candidate_skill_terms.add(cls._normalise_text(alias))
 
         violations = []
 

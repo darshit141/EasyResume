@@ -19,6 +19,21 @@ class ResumeUploadSerializer(serializers.ModelSerializer):
             "lower accuracy). Defaults to the server's configured provider."
         ),
     )
+    ai_model = serializers.CharField(
+        required=False,
+        allow_null=True,
+        allow_blank=True,
+        write_only=True,
+        max_length=120,
+        help_text="Optional AI model override.",
+    )
+    ai_fallback_provider = serializers.ChoiceField(
+        choices=RESUME_PARSE_PROVIDERS,
+        required=False,
+        allow_null=True,
+        write_only=True,
+        help_text="Optional AI fallback provider.",
+    )
 
     class Meta:
         model = Resume
@@ -26,6 +41,8 @@ class ResumeUploadSerializer(serializers.ModelSerializer):
             "id",
             "file",
             "ai_provider",
+            "ai_model",
+            "ai_fallback_provider",
             "original_filename",
             "status",
             "ats_score",

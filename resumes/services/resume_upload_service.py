@@ -75,7 +75,7 @@ class ResumeUploadService:
             raise ResumeLimitReachedError(limit)
 
     @staticmethod
-    def upload_resume(user, validated_data, provider=None):
+    def upload_resume(user, validated_data, provider=None, model=None, fallback_provider=None):
         uploaded_file = validated_data["file"]
 
         try:
@@ -101,7 +101,9 @@ class ResumeUploadService:
         # validation, empty response) propagate to the view unchanged, where
         # they're mapped to the same 502/503 responses used everywhere else
         # AI-backed calls can fail.
-        parsed_data = ResumeParser.parse(extracted_text, provider=provider)
+        parsed_data = ResumeParser.parse(
+            extracted_text, provider=provider, user=user, model=model, fallback_provider=fallback_provider
+        )
         ats_score = ATSScorer.calculate_score(parsed_data)
 
         # Only now, with a fully successful parse in hand, touch the
@@ -157,7 +159,7 @@ class ResumeUploadService:
         return resume
 
     @staticmethod
-    def run_parse(resume, provider=None, user=None):
+    def run_parse(resume, provider=None, user=None, model=None, fallback_provider=None):
         """Runs the AI parse for an already-created, status="processing"
         resume. Called by the background worker (ai_jobs.tasks) — never
         call this directly from a view. On any failure the resume is marked
@@ -173,7 +175,9 @@ class ResumeUploadService:
                     logger.exception("Failed to re-extract text for queued resume parse.")
                     raise ResumeTextExtractionError() from exc
 
-            parsed_data = ResumeParser.parse(extracted_text, provider=provider, user=user)
+            parsed_data = ResumeParser.parse(
+                extracted_text, provider=provider, user=user, model=model, fallback_provider=fallback_provider
+            )
             ats_score = ATSScorer.calculate_score(parsed_data)
         except Exception:
             resume.status = "failed"

@@ -12,9 +12,11 @@ class ResumeParser:
     """
 
     @staticmethod
-    def parse(text, provider=None, user=None):
+    def parse(text, provider=None, user=None, model=None, fallback_provider=None):
         if provider == "standard":
             # No AI call, so no key of anyone's is involved.
             result = StandardResumeParserService().parse(text)
             return ResumeParserService._validate(result)
-        return ResumeParserService(provider=provider, user=user).parse(text)
+        return ResumeParserService(
+            provider=provider, user=user, model=model, fallback_provider=fallback_provider
+        ).parse(text)

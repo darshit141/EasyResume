@@ -654,8 +654,22 @@ OLLAMA_KEEP_ALIVE = os.getenv("OLLAMA_KEEP_ALIVE", "30m")
 
 # Groq: free-tier, OpenAI-compatible API. Get a key at https://console.groq.com
 GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
-GROQ_MODEL = os.getenv("GROQ_MODEL", "")
 GROQ_BASE_URL = os.getenv("GROQ_BASE_URL", "https://api.groq.com/openai/v1")
+GROQ_MODEL = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile").strip()
+# Groq multi-model cascade: tried in order when the primary model hits rate limit (429), 503 or 404
+GROQ_FALLBACK_MODELS = [
+    model.strip()
+    for model in os.getenv(
+        "GROQ_FALLBACK_MODELS",
+        "llama-3.3-70b-versatile, openai/gpt-oss-20b, llama-3.1-8b-instant",
+    ).split(",")
+    if model.strip()
+]
+
+# Multi-key pool concurrency controls (editable live via SystemConfiguration admin tab)
+LLM_KEY_ROTATION_ENABLED = os.getenv("LLM_KEY_ROTATION_ENABLED", "True") == "True"
+LLM_KEY_COOLDOWN_SECONDS = int(os.getenv("LLM_KEY_COOLDOWN_SECONDS", "300"))
+TAILOR_ADD_MISSING_SKILLS_DEFAULT = os.getenv("TAILOR_ADD_MISSING_SKILLS_DEFAULT", "False") == "True"
 
 # Gemini: free-tier API. Get a key at https://aistudio.google.com/apikey
 #

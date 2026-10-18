@@ -25,14 +25,28 @@ def _run_job_analysis(job):
     from resumes.services.job_curation_service import JobCurationService
 
     curation = JobResumeCuration.objects.get(id=job.curation_id)
-    JobCurationService(provider=job.provider or None, user=job.user).run_analysis(curation)
+    ai_model = job.input_params.get("ai_model")
+    ai_fallback_provider = job.input_params.get("ai_fallback_provider")
+    JobCurationService(
+        provider=job.provider or None,
+        user=job.user,
+        model=ai_model,
+        fallback_provider=ai_fallback_provider,
+    ).run_analysis(curation)
 
 
 def _run_gap_analysis(job):
     from resumes.services.job_gap_analysis_service import JobGapAnalysisService
 
     regenerate = bool(job.input_params.get("regenerate", False))
-    JobGapAnalysisService(provider=job.provider or None, user=job.user).get_or_create_gap_analysis(
+    ai_model = job.input_params.get("ai_model")
+    ai_fallback_provider = job.input_params.get("ai_fallback_provider")
+    JobGapAnalysisService(
+        provider=job.provider or None,
+        user=job.user,
+        model=ai_model,
+        fallback_provider=ai_fallback_provider,
+    ).get_or_create_gap_analysis(
         job.user, job.curation_id, regenerate=regenerate
     )
 
@@ -43,12 +57,19 @@ def _run_missing_information_review(job):
     )
 
     regenerate = bool(job.input_params.get("regenerate", False))
+    ai_model = job.input_params.get("ai_model")
+    ai_fallback_provider = job.input_params.get("ai_fallback_provider")
     # The review dict itself is derived at read time from gap_analysis_data
     # (never stored on its own) — build_review() persists gap_analysis_data
     # as a side effect, so the frontend re-fetches by calling the same GET
     # endpoint again, which recomputes the review from the now-cached data
     # with no further AI call. No output_data snapshot needed.
-    MissingInformationReviewService(provider=job.provider or None, user=job.user).build_review(
+    MissingInformationReviewService(
+        provider=job.provider or None,
+        user=job.user,
+        model=ai_model,
+        fallback_provider=ai_fallback_provider,
+    ).build_review(
         job.user, job.curation_id, regenerate=regenerate
     )
 
@@ -67,13 +88,29 @@ def _run_tailored_resume_generation(job):
     from resumes.services.resume_template_service import ResumeTemplateService
 
     regenerate = bool(job.input_params.get("regenerate", False))
-    curation, version = JobResumeCurationService(provider=job.provider or None, user=job.user).generate(
-        user=job.user, curation_id=job.curation_id, regenerate=regenerate
+    ai_model = job.input_params.get("ai_model")
+    ai_fallback_provider = job.input_params.get("ai_fallback_provider")
+    add_missing_skills = job.input_params.get("add_missing_skills")
+    curation, version = JobResumeCurationService(
+        provider=job.provider or None,
+        user=job.user,
+        model=ai_model,
+        fallback_provider=ai_fallback_provider,
+    ).generate(
+        user=job.user,
+        curation_id=job.curation_id,
+        regenerate=regenerate,
+        add_missing_skills=add_missing_skills,
     )
     # Reuses the gap-analysis result `generate()` just cached — regenerate
     # is always False here, matching the original synchronous view, which
     # never re-ran matching a second time for this step.
-    gap_review = MissingInformationReviewService(provider=job.provider or None, user=job.user).build_review(
+    gap_review = MissingInformationReviewService(
+        provider=job.provider or None,
+        user=job.user,
+        model=ai_model,
+        fallback_provider=ai_fallback_provider,
+    ).build_review(
         user=job.user, curation_id=job.curation_id, regenerate=False
     )
     version_comparison = TailoredResumeVersionComparisonService.compare_with_previous(curation, version)
@@ -101,7 +138,14 @@ def _run_cover_letter_generation(job):
     from resumes.services.cover_letter_service import CoverLetterService
 
     regenerate = bool(job.input_params.get("regenerate", False))
-    curation = CoverLetterService(provider=job.provider or None, user=job.user).generate(
+    ai_model = job.input_params.get("ai_model")
+    ai_fallback_provider = job.input_params.get("ai_fallback_provider")
+    curation = CoverLetterService(
+        provider=job.provider or None,
+        user=job.user,
+        model=ai_model,
+        fallback_provider=ai_fallback_provider,
+    ).generate(
         user=job.user, curation_id=job.curation_id, regenerate=regenerate
     )
     job.output_data = CoverLetterResponseSerializer(curation).data
@@ -112,7 +156,15 @@ def _run_resume_parse(job):
     from resumes.services.resume_upload_service import ResumeUploadService
 
     resume = Resume.objects.get(id=job.resume_id)
-    ResumeUploadService.run_parse(resume, provider=job.provider or None, user=job.user)
+    ai_model = job.input_params.get("ai_model")
+    ai_fallback_provider = job.input_params.get("ai_fallback_provider")
+    ResumeUploadService.run_parse(
+        resume,
+        provider=job.provider or None,
+        user=job.user,
+        model=ai_model,
+        fallback_provider=ai_fallback_provider,
+    )
 
 
 JOB_RUNNERS = {

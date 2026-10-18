@@ -54,6 +54,97 @@ EXACT_MATCH_CATEGORIES = {
     "ats_relevant_term",
 }
 
+TECH_ALIASES = {
+    "react": ["react", "react js", "react.js", "reactjs"],
+    "react.js": ["react", "react js", "react.js", "reactjs"],
+    "reactjs": ["react", "react js", "react.js", "reactjs"],
+    "node": ["node", "node js", "node.js", "nodejs"],
+    "node.js": ["node", "node js", "node.js", "nodejs"],
+    "nodejs": ["node", "node js", "node.js", "nodejs"],
+    "vue": ["vue", "vue js", "vue.js", "vuejs"],
+    "vue.js": ["vue", "vue js", "vue.js", "vuejs"],
+    "vuejs": ["vue", "vue js", "vue.js", "vuejs"],
+    "angular": ["angular", "angular js", "angular.js", "angularjs"],
+    "angularjs": ["angular", "angular js", "angular.js", "angularjs"],
+    "k8s": ["k8s", "kubernetes"],
+    "kubernetes": ["k8s", "kubernetes"],
+    "postgres": ["postgres", "postgresql", "psql"],
+    "postgresql": ["postgres", "postgresql", "psql"],
+    "psql": ["postgres", "postgresql", "psql"],
+    "mongo": ["mongo", "mongodb"],
+    "mongodb": ["mongo", "mongodb"],
+    "aws": ["aws", "amazon web services", "amazon cloud"],
+    "amazon web services": ["aws", "amazon web services", "amazon cloud"],
+    "gcp": ["gcp", "google cloud", "google cloud platform"],
+    "google cloud": ["gcp", "google cloud", "google cloud platform"],
+    "google cloud platform": ["gcp", "google cloud", "google cloud platform"],
+    "azure": ["azure", "microsoft azure"],
+    "microsoft azure": ["azure", "microsoft azure"],
+    "ts": ["ts", "typescript"],
+    "typescript": ["ts", "typescript"],
+    "js": ["js", "javascript"],
+    "javascript": ["js", "javascript"],
+    "py": ["py", "python"],
+    "python": ["py", "python"],
+    "golang": ["golang", "go", "go lang"],
+    "go": ["golang", "go", "go lang"],
+    "ci cd": ["ci cd", "cicd", "ci/cd", "continuous integration", "continuous deployment", "continuous delivery"],
+    "cicd": ["ci cd", "cicd", "ci/cd", "continuous integration", "continuous deployment", "continuous delivery"],
+    "ci/cd": ["ci cd", "cicd", "ci/cd", "continuous integration", "continuous deployment", "continuous delivery"],
+    "continuous integration": ["ci cd", "cicd", "ci/cd", "continuous integration"],
+    "continuous deployment": ["ci cd", "cicd", "ci/cd", "continuous deployment", "continuous delivery"],
+    "rest": ["rest", "restful", "rest api", "restful api", "restful apis"],
+    "restful": ["rest", "restful", "rest api", "restful api", "restful apis"],
+    "rest api": ["rest", "restful", "rest api", "restful api"],
+    "restful api": ["rest", "restful", "rest api", "restful api"],
+    "graphql": ["graphql", "gql"],
+    "gql": ["graphql", "gql"],
+    "docker": ["docker", "container", "containers", "containerization"],
+    "containers": ["docker", "container", "containers", "containerization"],
+    "containerization": ["docker", "container", "containers", "containerization"],
+    "ml": ["ml", "machine learning"],
+    "machine learning": ["ml", "machine learning"],
+    "ai": ["ai", "artificial intelligence", "genai", "gen ai", "generative ai"],
+    "artificial intelligence": ["ai", "artificial intelligence", "genai", "generative ai"],
+    "dl": ["dl", "deep learning"],
+    "deep learning": ["dl", "deep learning"],
+    "nlp": ["nlp", "natural language processing"],
+    "natural language processing": ["nlp", "natural language processing"],
+    "cv": ["cv", "computer vision"],
+    "computer vision": ["cv", "computer vision"],
+    "sql server": ["sql server", "mssql", "ms sql", "microsoft sql server"],
+    "mssql": ["sql server", "mssql", "ms sql", "microsoft sql server"],
+    "nosql": ["nosql", "no sql", "non relational"],
+    "qa": ["qa", "quality assurance", "software testing", "test automation", "testing"],
+    "quality assurance": ["qa", "quality assurance", "software testing", "test automation"],
+    "tdd": ["tdd", "test driven development"],
+    "html": ["html", "html5"],
+    "html5": ["html", "html5"],
+    "css": ["css", "css3"],
+    "css3": ["css", "css3"],
+    "next": ["next", "next js", "next.js", "nextjs"],
+    "nextjs": ["next", "next js", "next.js", "nextjs"],
+    "next.js": ["next", "next js", "next.js", "nextjs"],
+    "express": ["express", "express js", "express.js", "expressjs"],
+    "expressjs": ["express", "express js", "express.js", "expressjs"],
+    "spring": ["spring", "spring boot", "springboot"],
+    "spring boot": ["spring", "spring boot", "springboot"],
+    "django": ["django", "django rest framework", "drf"],
+    "drf": ["django rest framework", "drf", "django"],
+    "fastapi": ["fastapi", "fast api"],
+    "flask": ["flask", "flask api"],
+    "kafka": ["kafka", "apache kafka"],
+    "spark": ["spark", "apache spark", "pyspark"],
+    "pyspark": ["pyspark", "spark", "apache spark"],
+    "airflow": ["airflow", "apache airflow"],
+    "redis": ["redis", "redis cache"],
+    "linux": ["linux", "unix", "ubuntu", "debian", "centos", "redhat", "rhel"],
+    "git": ["git", "github", "gitlab", "bitbucket"],
+    "github": ["git", "github"],
+    "gitlab": ["git", "gitlab"],
+    "terraform": ["terraform", "iac", "infrastructure as code"],
+}
+
 
 class CandidateDataUnavailableError(LLMServiceError):
     code = "CANDIDATE_DATA_UNAVAILABLE"
@@ -70,7 +161,7 @@ class JobGapAnalysisService:
     Builds verified candidate data and compares it to analyzed job requirements.
     """
 
-    def __init__(self, llm_service=None, provider=None, user=None):
+    def __init__(self, llm_service=None, provider=None, user=None, model=None, fallback_provider=None):
         """``user`` is the account the work is being done for. It is used for
         one thing: if they have saved their own provider API key, the client
         built here uses it instead of the server's (see
@@ -78,7 +169,9 @@ class JobGapAnalysisService:
         command, a health check — the server's own credentials are used, which
         is the behaviour this had before BYOK existed."""
         self.user = user
-        self.llm_service = llm_service or get_llm_service(provider, user=user)
+        self.llm_service = llm_service or get_llm_service(
+            provider, user=user, model=model, fallback_provider=fallback_provider
+        )
 
     def get_or_create_gap_analysis(self, user, curation_id, regenerate=False):
         curation = JobResumeCuration.objects.get(id=curation_id, user=user)
@@ -221,6 +314,7 @@ class JobGapAnalysisService:
                         requirements_by_key,
                         candidate_terms,
                         candidate_text,
+                        candidate_data=candidate_data,
                     )
                 )
 
@@ -267,33 +361,42 @@ class JobGapAnalysisService:
         )
         result["overall_match_percentage"] = round((score / total) * 100, 2) if total else 0
         self._validate_summary_fields(result)
-        self._recompute_ats_coverage(result)
+        self._recompute_ats_coverage(result, candidate_terms, candidate_text)
         return result
 
-    @staticmethod
-    def _recompute_ats_coverage(result):
-        """Derive the ATS coverage percentage from the keyword lists instead
-        of trusting the number the model reported.
-
-        Deciding *which* job keywords a resume covers is a semantic
-        judgement the model is genuinely good at. The percentage is
-        arithmetic over its own answer - and nothing previously forced the
-        two to agree. Schema validation checked only that the field
-        existed, so a response claiming 85% next to a one-covered,
-        three-missing split passed straight through and was shown to the
-        user as fact.
-
-        Recomputing here also makes the number reproducible: the same
-        covered/missing split always yields the same percentage, which a
-        model-generated figure could not guarantee run to run.
+    @classmethod
+    def _recompute_ats_coverage(cls, result, candidate_terms=None, candidate_text=""):
+        """Derive the ATS coverage percentage from the keyword lists and verify
+        them against actual candidate data instead of trusting raw model hallucination.
         """
         coverage = result.get("ats_keyword_coverage") or {}
-        covered = coverage.get("covered_keywords") or []
-        missing = coverage.get("missing_keywords") or []
+        raw_covered = coverage.get("covered_keywords") or []
+        raw_missing = coverage.get("missing_keywords") or []
 
-        total = len(covered) + len(missing)
+        if candidate_terms is None and not candidate_text:
+            verified_covered = [kw for kw in raw_covered if isinstance(kw, str) and kw.strip()]
+            verified_missing = [kw for kw in raw_missing if isinstance(kw, str) and kw.strip()]
+        else:
+            all_keywords = []
+            for kw in raw_covered + raw_missing:
+                if isinstance(kw, str) and kw.strip() and kw.strip() not in all_keywords:
+                    all_keywords.append(kw.strip())
+
+            verified_covered = []
+            verified_missing = []
+
+            for kw in all_keywords:
+                norm = cls._normalise_text(kw)
+                if cls._is_term_in_candidate(norm, candidate_terms, candidate_text):
+                    verified_covered.append(kw)
+                else:
+                    verified_missing.append(kw)
+
+        total = len(verified_covered) + len(verified_missing)
+        coverage["covered_keywords"] = sorted(verified_covered, key=lambda s: s.lower())
+        coverage["missing_keywords"] = sorted(verified_missing, key=lambda s: s.lower())
         coverage["coverage_percentage"] = (
-            round((len(covered) / total) * 100, 2) if total else 0
+            round((len(verified_covered) / total) * 100, 2) if total else 0
         )
         result["ats_keyword_coverage"] = coverage
 
@@ -303,6 +406,7 @@ class JobGapAnalysisService:
         requirements_by_key,
         candidate_terms,
         candidate_text,
+        candidate_data=None,
     ):
         if not isinstance(item, dict):
             raise LLMSchemaValidationError()
@@ -324,39 +428,56 @@ class JobGapAnalysisService:
         if requirement_key not in requirements_by_key:
             raise LLMSchemaValidationError()
 
+        requirement_norm = self._normalise_text(item["requirement"])
         evidence_is_supported = self._evidence_is_supported(
             item["candidate_evidence"],
             candidate_text,
+            requirement_norm=requirement_norm,
+            candidate_terms=candidate_terms,
         )
-        requirement_norm = self._normalise_text(item["requirement"])
 
         if item["category"] == "experience_requirement":
-            return self._enforce_experience_match(item, candidate_text)
+            return self._enforce_experience_match(item, candidate_text, candidate_data=candidate_data)
+
+        if item["category"] in EXACT_MATCH_CATEGORIES:
+            has_term = self._is_term_in_candidate(requirement_norm, candidate_terms, candidate_text)
+            if item["match_status"] == MATCHED:
+                if not has_term:
+                    if self._has_partial_overlap(requirement_norm, candidate_terms, candidate_text):
+                        item = {
+                            **item,
+                            "match_status": PARTIALLY_MATCHED,
+                            "reasoning": f"Partial candidate evidence was found in resume data for {item['requirement']}.",
+                        }
+                    else:
+                        return self._downgrade_to_missing(
+                            item,
+                            "This requirement was not explicitly present in verified candidate data.",
+                        )
+            elif item["match_status"] == PARTIALLY_MATCHED:
+                if not has_term and not self._has_partial_overlap(requirement_norm, candidate_terms, candidate_text):
+                    return self._downgrade_to_missing(
+                        item,
+                        "No supported partial candidate evidence was found.",
+                    )
 
         if item["match_status"] in {MATCHED, PARTIALLY_MATCHED} and not evidence_is_supported:
             return self._downgrade_to_missing(item, "Candidate evidence was not found in verified resume data.")
 
-        if item["category"] in EXACT_MATCH_CATEGORIES:
-            has_exact_term = requirement_norm in candidate_terms
-            if item["match_status"] == MATCHED and not has_exact_term:
-                return self._downgrade_to_missing(
-                    item,
-                    "This requirement was not explicitly present in verified candidate data.",
-                )
-            if item["match_status"] == PARTIALLY_MATCHED and not self._has_partial_overlap(requirement_norm, candidate_terms):
-                return self._downgrade_to_missing(
-                    item,
-                    "No supported partial candidate evidence was found.",
-                )
+        # Ensure that if match_status is MATCHED but evidence was omitted by LLM, we populate evidence from candidate_text
+        if item["match_status"] == MATCHED and not item["candidate_evidence"]:
+            snippet = self._extract_evidence_snippet(requirement_norm, candidate_text)
+            if snippet:
+                item["candidate_evidence"] = [snippet]
 
         return {
             **item,
             "confidence": max(0, min(float(item["confidence"]), 1)),
         }
 
-    def _enforce_experience_match(self, item, candidate_text):
+    def _enforce_experience_match(self, item, candidate_text, candidate_data=None):
         required_years = self._max_years(item["requirement"])
-        candidate_years = self._max_years(candidate_text)
+        candidate_years = self._candidate_experience_years(candidate_text, candidate_data)
         if required_years is None:
             return item
         if candidate_years is None:
@@ -372,6 +493,38 @@ class JobGapAnalysisService:
             "confidence": max(0, min(float(item["confidence"]), 1)),
             "reasoning": f"Candidate data indicates {candidate_years:g} years against a {required_years:g}-year requirement.",
         }
+
+    @classmethod
+    def _candidate_experience_years(cls, candidate_text, candidate_data=None):
+        max_explicit = cls._max_years(candidate_text)
+        
+        parsed = (candidate_data.get("parsed_data") if isinstance(candidate_data, dict) else None) or candidate_data or {}
+        experience_entries = parsed.get("experience", []) if isinstance(parsed, dict) else []
+        
+        import datetime
+        current_year = datetime.datetime.now().year
+        
+        year_ranges = []
+        for entry in experience_entries:
+            text = ""
+            if isinstance(entry, dict):
+                text = f"{entry.get('header', '')} {' '.join(entry.get('bullets', []))}"
+            elif isinstance(entry, str):
+                text = entry
+            
+            matches = re.findall(r"\b(19\d\d|20\d\d)\b\s*(?:-|–|—|to)\s*\b(19\d\d|20\d\d|present|current|now)\b", text, re.IGNORECASE)
+            for start_str, end_str in matches:
+                try:
+                    s_yr = int(start_str)
+                    e_yr = current_year if end_str.lower() in {"present", "current", "now"} else int(end_str)
+                    if 1970 <= s_yr <= current_year and e_yr >= s_yr:
+                        year_ranges.append(e_yr - s_yr)
+                except (ValueError, TypeError):
+                    continue
+
+        calculated_years = sum(year_ranges) if year_ranges else None
+        candidates = [y for y in [max_explicit, calculated_years] if y is not None]
+        return max(candidates) if candidates else None
 
     @staticmethod
     def _downgrade_to_missing(item, reason):
@@ -410,9 +563,33 @@ class JobGapAnalysisService:
         if set(coverage) != {"covered_keywords", "missing_keywords", "coverage_percentage"}:
             raise LLMSchemaValidationError()
 
-    @staticmethod
-    def _candidate_terms(candidate_data):
+    @classmethod
+    def _candidate_terms(cls, candidate_data):
         terms = set()
+
+        def extract_tokens(text):
+            if not text or not isinstance(text, str):
+                return
+            norm = cls._normalise_text(text)
+            if norm:
+                terms.add(norm)
+
+            # Split by delimiters (commas, slashes, brackets, bullets, dashes)
+            parts = re.split(r'[,/;|\n\r•\(\)\-\[\]]+', text)
+            for part in parts:
+                p_norm = cls._normalise_text(part)
+                if p_norm and len(p_norm) >= 2:
+                    terms.add(p_norm)
+
+            # N-grams (1-gram to 3-gram) from normalized words
+            words = norm.split()
+            for w in words:
+                if len(w) >= 2:
+                    terms.add(w)
+            for i in range(len(words) - 1):
+                terms.add(f"{words[i]} {words[i+1]}")
+            for i in range(len(words) - 2):
+                terms.add(f"{words[i]} {words[i+1]} {words[i+2]}")
 
         def collect(value):
             if isinstance(value, dict):
@@ -422,35 +599,82 @@ class JobGapAnalysisService:
                 for nested in value:
                     collect(nested)
             elif isinstance(value, str):
-                normalised = JobGapAnalysisService._normalise_text(value)
-                if normalised:
-                    terms.add(normalised)
+                extract_tokens(value)
 
-        collect(candidate_data.get("parsed_data", {}))
+        target = candidate_data.get("parsed_data") if isinstance(candidate_data, dict) else None
+        collect(target or candidate_data)
         return terms
 
-    @staticmethod
-    def _evidence_is_supported(evidence, candidate_text):
+    @classmethod
+    def _get_aliases(cls, term):
+        norm = cls._normalise_text(term)
+        variants = {norm}
+        if norm in TECH_ALIASES:
+            for alias in TECH_ALIASES[norm]:
+                variants.add(cls._normalise_text(alias))
+        return variants
+
+    @classmethod
+    def _is_term_in_candidate(cls, requirement_norm, candidate_terms, candidate_text):
+        if not requirement_norm:
+            return False
+        aliases = cls._get_aliases(requirement_norm)
+        for alias in aliases:
+            if alias in candidate_terms:
+                return True
+            pattern = r"(?:^|\s)" + re.escape(alias) + r"(?:\s|$)"
+            if re.search(pattern, candidate_text):
+                return True
+        return False
+
+    @classmethod
+    def _has_partial_overlap(cls, requirement_norm, candidate_terms, candidate_text):
+        aliases = cls._get_aliases(requirement_norm)
+        stopwords = {"and", "or", "in", "with", "of", "for", "to", "a", "an", "the", "on", "at", "by", "as"}
+        for alias in aliases:
+            tokens = set(alias.split()) - stopwords
+            for token in tokens:
+                if len(token) >= 3 and cls._is_term_in_candidate(token, candidate_terms, candidate_text):
+                    return True
+        return False
+
+    @classmethod
+    def _evidence_is_supported(cls, evidence, candidate_text, requirement_norm=None, candidate_terms=None):
+        if requirement_norm and candidate_terms and cls._is_term_in_candidate(requirement_norm, candidate_terms, candidate_text):
+            return True
         if not evidence:
             return False
         for item in evidence:
             if not isinstance(item, str):
                 raise LLMSchemaValidationError()
-            normalised = JobGapAnalysisService._normalise_text(item)
-            if normalised and normalised in candidate_text:
+            normalised = cls._normalise_text(item)
+            if not normalised:
+                continue
+            if normalised in candidate_text:
                 return True
+            pattern = r"(?:^|\s)" + re.escape(normalised) + r"(?:\s|$)"
+            if re.search(pattern, candidate_text):
+                return True
+            tokens = [t for t in normalised.split() if len(t) >= 3 and t not in {
+                "and", "the", "with", "for", "from", "that", "this", "have", "been", "using", "work", "role"
+            }]
+            if len(tokens) >= 2:
+                matched_tokens = sum(1 for t in tokens if re.search(r"(?:^|\s)" + re.escape(t) + r"(?:\s|$)", candidate_text))
+                if matched_tokens / len(tokens) >= 0.5:
+                    return True
         return False
 
-    @staticmethod
-    def _has_partial_overlap(requirement, candidate_terms):
-        requirement_tokens = set(requirement.split())
-        if not requirement_tokens:
-            return False
-        for term in candidate_terms:
-            term_tokens = set(term.split())
-            if requirement_tokens & term_tokens:
-                return True
-        return False
+    @classmethod
+    def _extract_evidence_snippet(cls, requirement_norm, candidate_text):
+        aliases = cls._get_aliases(requirement_norm)
+        for alias in aliases:
+            pattern = r"(?:^|\s)(" + re.escape(alias) + r")(?:\s|$)"
+            match = re.search(pattern, candidate_text)
+            if match:
+                start = max(0, match.start() - 30)
+                end = min(len(candidate_text), match.end() + 30)
+                return candidate_text[start:end].strip()
+        return ""
 
     @staticmethod
     def _max_years(text):

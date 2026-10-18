@@ -43,7 +43,11 @@ from billing.services.entitlements_service import (
 )
 from billing.views.plan_limit_response import plan_restriction_response
 from resumes.views.error_responses import llm_error_response
-from resumes.services.llm_service import requested_provider
+from resumes.services.llm_service import (
+    requested_fallback_provider,
+    requested_model,
+    requested_provider,
+)
 
 
 JOB_ANALYSIS_EXAMPLE = {
@@ -299,6 +303,8 @@ class JobCurationCreateAPIView(APIView):
 
         data = serializer.validated_data
         provider = requested_provider(data.get("ai_provider"))
+        ai_model = requested_model(data.get("ai_model"))
+        ai_fallback_provider = requested_fallback_provider(data.get("ai_fallback_provider"))
         # Tailoring is the user's choice. Declining it still saves the job -
         # it just doesn't spend an AI credit - so the quota gates apply only
         # to the path that actually calls a model.
@@ -357,7 +363,9 @@ class JobCurationCreateAPIView(APIView):
             )
 
         try:
-            curation = JobCurationService(provider=provider).create_pending(
+            curation = JobCurationService(
+                provider=provider, user=request.user, model=ai_model, fallback_provider=ai_fallback_provider
+            ).create_pending(
                 user=request.user,
                 job_title=job_title,
                 job_description=job_description,
@@ -381,6 +389,7 @@ class JobCurationCreateAPIView(APIView):
             AIJob.JOB_TYPE_JOB_ANALYSIS,
             provider=resolve_provider(provider),
             curation=curation,
+            input_params={"ai_model": ai_model, "ai_fallback_provider": ai_fallback_provider},
         )
         return Response(
             AIJobSerializer(job).data,
@@ -555,6 +564,8 @@ class JobGapAnalysisAPIView(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
         provider = requested_provider(provider)
+        ai_model = requested_model(request.query_params.get("ai_model"))
+        ai_fallback_provider = requested_fallback_provider(request.query_params.get("ai_fallback_provider"))
 
         # This view never passes regenerate=True, so the service either
         # returns cached gap_analysis_data untouched (no AI call at all) or
@@ -584,11 +595,14 @@ class JobGapAnalysisAPIView(APIView):
                 AIJob.JOB_TYPE_GAP_ANALYSIS,
                 provider=resolve_provider(provider),
                 curation=curation,
+                input_params={"ai_model": ai_model, "ai_fallback_provider": ai_fallback_provider},
             )
             return Response(AIJobSerializer(job).data, status=status.HTTP_202_ACCEPTED)
 
         try:
-            curation = JobGapAnalysisService(provider=provider).get_or_create_gap_analysis(
+            curation = JobGapAnalysisService(
+                provider=provider, user=request.user, model=ai_model, fallback_provider=ai_fallback_provider
+            ).get_or_create_gap_analysis(
                 request.user,
                 curation_id,
             )

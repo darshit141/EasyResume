@@ -22,7 +22,11 @@ from billing.services.entitlements_service import (
     PlanRestrictionError,
 )
 from billing.views.plan_limit_response import plan_restriction_response
-from resumes.services.llm_service import requested_provider
+from resumes.services.llm_service import (
+    requested_fallback_provider,
+    requested_model,
+    requested_provider,
+)
 
 @extend_schema(
     tags=["Resume"],
@@ -100,6 +104,8 @@ class ResumeUploadAPIView(APIView):
             return Response({"detail": exc.message, "code": exc.code}, status=status.HTTP_400_BAD_REQUEST)
 
         provider = requested_provider(serializer.validated_data.get("ai_provider"))
+        ai_model = requested_model(serializer.validated_data.get("ai_model"))
+        ai_fallback_provider = requested_fallback_provider(serializer.validated_data.get("ai_fallback_provider"))
         is_ai_call = provider != "standard"
         try:
             EntitlementsService.check_ai_provider_allowed(request.user, provider)
@@ -116,6 +122,8 @@ class ResumeUploadAPIView(APIView):
                     request.user,
                     serializer.validated_data,
                     provider=provider,
+                    model=ai_model,
+                    fallback_provider=ai_fallback_provider,
                 )
             except ResumeTextExtractionError as exc:
                 return Response(
@@ -144,5 +152,6 @@ class ResumeUploadAPIView(APIView):
             AIJob.JOB_TYPE_RESUME_PARSE,
             provider=resolve_provider(provider),
             resume=resume,
+            input_params={"ai_model": ai_model, "ai_fallback_provider": ai_fallback_provider},
         )
         return Response(AIJobSerializer(job).data, status=status.HTTP_202_ACCEPTED)

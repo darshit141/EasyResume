@@ -40,8 +40,12 @@ from billing.services.entitlements_service import (
     PlanRestrictionError,
 )
 from billing.views.plan_limit_response import plan_restriction_response
+from resumes.services.llm_service import (
+    requested_fallback_provider,
+    requested_model,
+    requested_provider,
+)
 from resumes.views.job_curation_view import CURATION_ID_PARAMETER
-from resumes.services.llm_service import requested_provider
 
 
 TAILORED_RESUME_EXAMPLE = {
@@ -272,6 +276,9 @@ class JobResumeCurationGenerateAPIView(APIView):
 
         regenerate = serializer.validated_data["regenerate"]
         provider = requested_provider(serializer.validated_data.get("ai_provider"))
+        ai_model = requested_model(serializer.validated_data.get("ai_model"))
+        ai_fallback_provider = requested_fallback_provider(serializer.validated_data.get("ai_fallback_provider"))
+        add_missing_skills = serializer.validated_data.get("add_missing_skills")
 
         # Plan gates run before any AI call, so a user who is over quota gets
         # an instant, clear answer instead of waiting out a generation we
@@ -304,12 +311,17 @@ class JobResumeCurationGenerateAPIView(APIView):
             # Cached path: JobResumeCurationService.generate() short-circuits
             # internally with no AI call, so this stays fully synchronous —
             # same as before.
-            curation, version = JobResumeCurationService(provider=provider).generate(
+            curation, version = JobResumeCurationService(
+                provider=provider, user=request.user, model=ai_model, fallback_provider=ai_fallback_provider
+            ).generate(
                 user=request.user,
                 curation_id=curation_id,
                 regenerate=False,
+                add_missing_skills=add_missing_skills,
             )
-            gap_review = MissingInformationReviewService(provider=provider).build_review(
+            gap_review = MissingInformationReviewService(
+                provider=provider, user=request.user, model=ai_model, fallback_provider=ai_fallback_provider
+            ).build_review(
                 user=request.user,
                 curation_id=curation_id,
                 regenerate=False,
@@ -347,7 +359,12 @@ class JobResumeCurationGenerateAPIView(APIView):
             AIJob.JOB_TYPE_TAILORED_RESUME_GENERATION,
             provider=resolve_provider(provider),
             curation=curation,
-            input_params={"regenerate": regenerate},
+            input_params={
+                "regenerate": regenerate,
+                "ai_model": ai_model,
+                "ai_fallback_provider": ai_fallback_provider,
+                "add_missing_skills": add_missing_skills,
+            },
         )
         return Response(AIJobSerializer(job).data, status=status.HTTP_202_ACCEPTED)
 
