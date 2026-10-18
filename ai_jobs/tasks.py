@@ -151,6 +151,7 @@ def run_ai_job(self, job_id):
     job.celery_task_id = self.request.id or ""
     job.attempt_count += 1
     job.save(update_fields=["status", "started_at", "celery_task_id", "attempt_count", "updated_at"])
+    _cache_status(job)
 
     start = time.monotonic()
     try:
@@ -182,7 +183,13 @@ def run_ai_job(self, job_id):
     job.status = AIJob.STATUS_COMPLETED
     job.completed_at = timezone.now()
     job.save(update_fields=["status", "completed_at", "output_data", "updated_at"])
+    _cache_status(job)
     _record_usage(job, latency_ms)
+
+
+def _cache_status(job):
+    from ai_jobs.services import cache_ai_job_status
+    cache_ai_job_status(job)
 
 
 def _mark_failed(job, error_code, error_message):
@@ -191,6 +198,7 @@ def _mark_failed(job, error_code, error_message):
     job.error_message = (error_message or "")[:500]
     job.completed_at = timezone.now()
     job.save(update_fields=["status", "error_code", "error_message", "completed_at", "updated_at"])
+    _cache_status(job)
 
 
 _ACTION_BY_JOB_TYPE = None

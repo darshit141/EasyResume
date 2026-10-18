@@ -85,3 +85,36 @@ class TailoredResumeAsyncTestCase(APITestCase):
         self.assertEqual(response.status_code, status.HTTP_202_ACCEPTED)
         self.assertEqual(response.data["id"], in_flight_job.id)
         self.assertEqual(response.data["status"], AIJob.STATUS_PROCESSING)
+
+    def test_ai_job_status_polling_serves_from_redis_cache(self):
+        from django.core.cache import cache
+        job = AIJob.objects.create(
+            user=self.user,
+            job_type=AIJob.JOB_TYPE_TAILORED_RESUME_GENERATION,
+            status=AIJob.STATUS_PROCESSING,
+            curation=self.curation,
+        )
+        # First poll queries DB and populates cache
+        url = f"/api/ai-jobs/{job.id}/"
+        res1 = self.client.get(url)
+        self.assertEqual(res1.status_code, status.HTTP_200_OK)
+        self.assertEqual(res1.data["status"], AIJob.STATUS_PROCESSING)
+
+        # Mutate cached value in Redis to verify second poll is served from Redis
+        cache_key = f"ai_job_poll:{job.id}"
+        cached = cache.get(cache_key)
+        self.assertIsNotNone(cached)
+        cached["data"]["status"] = "cached_test_status"
+        cache.set(cache_key, cached, timeout=60)
+
+        res2 = self.client.get(url)
+        self.assertEqual(res2.status_code, status.HTTP_200_OK)
+        self.assertEqual(res2.data["status"], "cached_test_status")
+
+    def test_api_key_pool_round_robin_rotation(self):
+        from resumes.services.llm_service import APIKeyPool
+        pool = APIKeyPool(["key_a", "key_b", "key_c"], provider_name="test_rr")
+        # Should cycle through the keys in round-robin order
+        first_cycle = [pool.active_keys()[0] for _ in range(3)]
+        self.assertEqual(len(set(first_cycle)), 3)
+        self.assertSetEqual(set(first_cycle), {"key_a", "key_b", "key_c"})
