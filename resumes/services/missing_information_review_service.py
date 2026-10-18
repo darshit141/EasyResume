@@ -36,10 +36,10 @@ DEFAULT_PROFILE_SECTION = "profile"
 class MissingInformationReviewService:
     """Builds the frontend-facing missing-information review for a curation."""
 
-    def __init__(self, gap_analysis_service=None, provider=None, user=None):
+    def __init__(self, gap_analysis_service=None, provider=None, user=None, model=None, fallback_provider=None):
         self.user = user
         self.gap_analysis_service = gap_analysis_service or JobGapAnalysisService(
-            provider=provider, user=user
+            provider=provider, user=user, model=model, fallback_provider=fallback_provider
         )
 
     def build_review(self, user, curation_id, regenerate=False):
@@ -52,7 +52,7 @@ class MissingInformationReviewService:
 
         missing_requirements = [
             self._missing_requirement(item)
-            for item in gap_data["missing_requirements"]
+            for item in gap_data.get("missing_requirements", [])
         ]
         suggested_profile_sections = sorted({
             item["profile_section"] for item in missing_requirements
@@ -61,19 +61,19 @@ class MissingInformationReviewService:
         return {
             "id": curation.id,
             "job_title": curation.job_title,
-            "overall_match_percentage": gap_data["overall_match_percentage"],
+            "overall_match_percentage": gap_data.get("overall_match_percentage", 0.0),
             "strong_matches": [
                 self._requirement_summary(item)
-                for item in gap_data["matched_requirements"]
+                for item in gap_data.get("matched_requirements", [])
             ],
             "partial_matches": [
                 self._requirement_summary(item)
-                for item in gap_data["partially_matched_requirements"]
+                for item in gap_data.get("partially_matched_requirements", [])
             ],
             "missing_requirements": missing_requirements,
-            "missing_candidate_information": gap_data["important_missing_information"],
-            "recommendations": gap_data["recommendations_for_profile_improvement"],
-            "ats_keyword_gaps": gap_data["ats_keyword_coverage"],
+            "missing_candidate_information": gap_data.get("important_missing_information", []),
+            "recommendations": gap_data.get("recommendations_for_profile_improvement", []),
+            "ats_keyword_gaps": gap_data.get("ats_keyword_coverage", {}),
             "suggested_profile_sections": suggested_profile_sections,
         }
 

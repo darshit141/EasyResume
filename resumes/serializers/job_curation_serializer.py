@@ -61,8 +61,27 @@ class JobCurationRequestSerializer(serializers.Serializer):
         allow_null=True,
         help_text=(
             "Which AI provider to use for this analysis (ollama | groq | "
-            "gemini). Defaults to the server's configured provider."
+            "gemini | kira | openrouter | dahl). Defaults to the server's configured provider."
         ),
+    )
+    ai_model = serializers.CharField(
+        required=False,
+        allow_null=True,
+        allow_blank=True,
+        max_length=120,
+        help_text="Optional AI model override (e.g. 'llama-3.3-70b-versatile').",
+    )
+    ai_fallback_provider = serializers.ChoiceField(
+        choices=SUPPORTED_PROVIDERS,
+        required=False,
+        allow_null=True,
+        help_text="Optional AI fallback provider if the primary provider fails.",
+    )
+    add_missing_skills = serializers.BooleanField(
+        required=False,
+        allow_null=True,
+        default=None,
+        help_text="When true, automatically incorporates identified missing job skills into the tailored resume.",
     )
     resume_id = serializers.IntegerField(
         required=False,
@@ -369,8 +388,27 @@ class ResumeCurationGenerateRequestSerializer(serializers.Serializer):
         allow_null=True,
         help_text=(
             "Which AI provider to use for this generation (ollama | groq | "
-            "gemini). Defaults to the server's configured provider."
+            "gemini | kira | openrouter | dahl). Defaults to the server's configured provider."
         ),
+    )
+    ai_model = serializers.CharField(
+        required=False,
+        allow_null=True,
+        allow_blank=True,
+        max_length=120,
+        help_text="Optional AI model override (e.g. 'llama-3.3-70b-versatile', 'gemini-2.5-flash').",
+    )
+    ai_fallback_provider = serializers.ChoiceField(
+        choices=SUPPORTED_PROVIDERS,
+        required=False,
+        allow_null=True,
+        help_text="Optional AI fallback provider if the primary provider encounters errors or rate limits.",
+    )
+    add_missing_skills = serializers.BooleanField(
+        required=False,
+        allow_null=True,
+        default=None,
+        help_text="When true, automatically incorporates identified missing job skills into the tailored resume.",
     )
 
 

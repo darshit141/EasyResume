@@ -10,6 +10,8 @@ User = get_user_model()
 
 class TailoredResumeAsyncTestCase(APITestCase):
     def setUp(self):
+        from django.core.cache import cache
+        cache.clear()
         self.user = User.objects.create_user(
             email="async_user@example.com",
             password="StrongPassword123!",
@@ -115,6 +117,6 @@ class TailoredResumeAsyncTestCase(APITestCase):
         from resumes.services.llm_service import APIKeyPool
         pool = APIKeyPool(["key_a", "key_b", "key_c"], provider_name="test_rr")
         # Should cycle through the keys in round-robin order
-        first_cycle = [pool.active_keys()[0] for _ in range(3)]
+        first_cycle = [pool.active_keys(rotate=True)[0] for _ in range(3)]
         self.assertEqual(len(set(first_cycle)), 3)
         self.assertSetEqual(set(first_cycle), {"key_a", "key_b", "key_c"})

@@ -25,14 +25,16 @@ class JobResumeCurationService:
     job-tailored resume for a curation session.
     """
 
-    def __init__(self, ai_service=None, gap_analysis_service=None, provider=None, user=None):
+    def __init__(self, ai_service=None, gap_analysis_service=None, provider=None, user=None, model=None, fallback_provider=None):
         self.user = user
-        self.ai_service = ai_service or ResumeCurationAIService(provider=provider, user=user)
+        self.ai_service = ai_service or ResumeCurationAIService(
+            provider=provider, user=user, model=model, fallback_provider=fallback_provider
+        )
         self.gap_analysis_service = gap_analysis_service or JobGapAnalysisService(
-            provider=provider, user=user
+            provider=provider, user=user, model=model, fallback_provider=fallback_provider
         )
 
-    def generate(self, user, curation_id, regenerate=False):
+    def generate(self, user, curation_id, regenerate=False, add_missing_skills=None):
         """Returns (curation, version). ``version`` is the JobResumeCurationVersion
         backing the returned tailored_resume_data, or None if none exists yet."""
         curation = JobResumeCuration.objects.get(id=curation_id, user=user)
@@ -60,9 +62,35 @@ class JobResumeCurationService:
             curation.analysis_data
         )
 
+        from django.conf import settings
+        from api.utils.config import get_config_value
+        if add_missing_skills is None:
+            add_missing_skills = bool(get_config_value(
+                "TAILOR_ADD_MISSING_SKILLS_DEFAULT",
+                getattr(settings, "TAILOR_ADD_MISSING_SKILLS_DEFAULT", False)
+            ))
+
+        allowed_missing_skills = []
+        if add_missing_skills and gap_curation.gap_analysis_data:
+            missing_reqs = gap_curation.gap_analysis_data.get("missing_requirements", [])
+            for item in missing_reqs:
+                cat = item.get("category", "")
+                if cat in {
+                    "required_skill", "preferred_skill", "technology", "framework",
+                    "database", "cloud_technology", "tool", "soft_skill",
+                    "important_keyword", "ats_relevant_term"
+                }:
+                    req = item.get("requirement", "").strip()
+                    if req and req not in allowed_missing_skills:
+                        allowed_missing_skills.append(req)
+            for kw in gap_curation.gap_analysis_data.get("ats_keyword_coverage", {}).get("missing_keywords", []):
+                if isinstance(kw, str) and kw.strip() and kw.strip() not in allowed_missing_skills:
+                    allowed_missing_skills.append(kw.strip())
+
         action = "Resume regeneration" if regenerate else "Resume generation"
         logger.info(
-            "%s started user_id=%s curation_id=%s", action, user.id, curation_id
+            "%s started user_id=%s curation_id=%s add_missing_skills=%s (allowed=%s)",
+            action, user.id, curation_id, add_missing_skills, len(allowed_missing_skills)
         )
         try:
             tailored = self.ai_service.generate_tailored_resume(
@@ -71,6 +99,7 @@ class JobResumeCurationService:
                 job_description=curation.job_description,
                 job_requirements=job_requirements,
                 candidate_match_summary=gap_curation.gap_analysis_data,
+                allowed_missing_skills=allowed_missing_skills,
             )
         except LLMServiceError as exc:
             # Never touch tailored_resume_data here: the previously persisted

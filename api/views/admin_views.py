@@ -115,6 +115,12 @@ DEFAULT_CONFIGS = [
         "description": "Groq model name",
     },
     {
+        "key": "GROQ_FALLBACK_MODELS",
+        "category": "llm",
+        "value_type": "list",
+        "description": "Comma-separated Groq models to try, in order, when the first choice is rate-limited or unavailable.",
+    },
+    {
         "key": "GROQ_BASE_URL",
         "category": "llm",
         "value_type": "string",
@@ -125,6 +131,18 @@ DEFAULT_CONFIGS = [
         "category": "llm",
         "value_type": "string",
         "description": "Groq API key(s). Supports multiple comma or newline-separated tokens for quota failover. Stored encrypted.",
+    },
+    {
+        "key": "LLM_KEY_ROTATION_ENABLED",
+        "category": "llm",
+        "value_type": "boolean",
+        "description": "Enable atomic round-robin rotation across multiple API keys in the key pool to distribute traffic evenly.",
+    },
+    {
+        "key": "LLM_KEY_COOLDOWN_SECONDS",
+        "category": "llm",
+        "value_type": "integer",
+        "description": "Cooldown period in seconds for an API key when it receives an HTTP 429 quota exhaustion.",
     },
     {
         "key": "GEMINI_API_KEY",
@@ -250,6 +268,15 @@ DEFAULT_CONFIGS = [
         "category": "llm",
         "value_type": "string",
         "description": "Dahl Global API key(s). Supports multiple comma or newline-separated tokens for automatic failover pool. Stored encrypted.",
+    },
+    {
+        "key": "TAILOR_ADD_MISSING_SKILLS_DEFAULT",
+        "category": "llm",
+        "value_type": "boolean",
+        "description": (
+            "Default setting for whether to automatically incorporate verified missing job requirements "
+            "into tailored resumes when not explicitly specified in the tailoring request."
+        ),
     },
     {
         "key": "BYOK_ENABLED",

@@ -30,8 +30,12 @@ from resumes.services.missing_information_review_service import (
     MissingInformationReviewService,
 )
 from resumes.views.error_responses import llm_error_response
+from resumes.services.llm_service import (
+    requested_fallback_provider,
+    requested_model,
+    requested_provider,
+)
 from resumes.views.job_curation_view import AI_PROVIDER_PARAMETER, CURATION_ID_PARAMETER
-from resumes.services.llm_service import requested_provider
 
 
 MISSING_INFORMATION_EXAMPLE = {
@@ -191,6 +195,8 @@ class MissingInformationReviewAPIView(APIView):
             return Response(query.errors, status=status.HTTP_400_BAD_REQUEST)
 
         provider = requested_provider(query.validated_data.get("ai_provider"))
+        ai_model = requested_model(query.validated_data.get("ai_model"))
+        ai_fallback_provider = requested_fallback_provider(query.validated_data.get("ai_fallback_provider"))
         regenerate = query.validated_data["regenerate"]
         # This view delegates to the same gap-analysis service the dedicated
         # gap-analysis endpoint uses, so it makes an AI call under the exact
@@ -210,7 +216,9 @@ class MissingInformationReviewAPIView(APIView):
         if not will_call_ai:
             # Cached path: no AI call, stays fully synchronous.
             try:
-                review = MissingInformationReviewService(provider=provider).build_review(
+                review = MissingInformationReviewService(
+                    provider=provider, user=request.user, model=ai_model, fallback_provider=ai_fallback_provider
+                ).build_review(
                     user=request.user,
                     curation_id=curation_id,
                     regenerate=False,
@@ -235,6 +243,10 @@ class MissingInformationReviewAPIView(APIView):
             AIJob.JOB_TYPE_MISSING_INFORMATION_REVIEW,
             provider=resolve_provider(provider),
             curation=curation,
-            input_params={"regenerate": regenerate},
+            input_params={
+                "regenerate": regenerate,
+                "ai_model": ai_model,
+                "ai_fallback_provider": ai_fallback_provider,
+            },
         )
         return Response(AIJobSerializer(job).data, status=status.HTTP_202_ACCEPTED)

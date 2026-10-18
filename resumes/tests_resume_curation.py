@@ -570,3 +570,55 @@ class TailoredResumeDocxExportAPITests(TestCase):
         response = self.client.get(self.export_url(curation))
 
         self.assertEqual(response.status_code, 404)
+
+    def test_add_missing_skills_permits_identified_job_skills(self):
+        self.create_resume()
+        curation = self.create_curation()
+        # Fake gap analysis with GraphQL as a missing requirement
+        curation.gap_analysis_data = {
+            "overall_match_percentage": 75.0,
+            "missing_requirements": [
+                {
+                    "requirement": "GraphQL",
+                    "category": "required_skill",
+                    "match_status": "MISSING",
+                    "candidate_evidence": [],
+                    "confidence": 1.0,
+                    "reasoning": "Missing GraphQL",
+                    "recommendation": "Learn GraphQL",
+                }
+            ],
+            "matched_requirements": [],
+            "partially_matched_requirements": [],
+            "not_verifiable_requirements": [],
+            "ats_keyword_coverage": {"covered_keywords": [], "missing_keywords": ["GraphQL"], "coverage_percentage": 50.0},
+            "important_missing_information": [],
+            "recommendations_for_profile_improvement": [],
+        }
+        curation.save()
+
+        tailored_with_missing_skill = valid_tailored_result(skills=["Java", "GraphQL"])
+        fake_llm = QueuedLLMService(results=[tailored_with_missing_skill])
+
+        self.authenticate()
+        url = f"/api/resumes/job-curations/{curation.id}/tailored-resume/"
+        with patch("resumes.services.job_resume_curation_service.ResumeCurationAIService") as mock_cls:
+            from resumes.services.resume_curation_ai_service import ResumeCurationAIService
+            real_service = ResumeCurationAIService(llm_service=fake_llm)
+            mock_cls.return_value = real_service
+
+            response = self.client.post(
+                url,
+                {"regenerate": False, "add_missing_skills": True},
+                format="json",
+            )
+            self.assertEqual(response.status_code, 202)
+            job_status = poll_job(self.client, response)
+            self.assertEqual(job_status.data["status"], "completed")
+            self.assertIn("GraphQL", job_status.data["result"]["tailored_resume_data"]["skills"])
+
+    def test_tech_alias_mapping_accepts_synonym_skills(self):
+        from resumes.services.resume_curation_ai_service import ResumeCurationAIService
+        raw = valid_tailored_result(skills=["Java", "Postgres"])
+        grounded = ResumeCurationAIService.validate_and_ground(raw, CANDIDATE_PARSED_DATA)
+        self.assertEqual(grounded["skills"], ["Java", "Postgres"])

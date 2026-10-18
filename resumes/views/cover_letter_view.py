@@ -22,10 +22,14 @@ from resumes.serializers.cover_letter_serializer import (
 )
 from resumes.serializers.job_curation_serializer import APIErrorSerializer
 from resumes.services.job_gap_analysis_service import JobRequirementsUnavailableError
-from resumes.services.llm_service import resolve_provider
+from resumes.services.llm_service import (
+    requested_fallback_provider,
+    requested_model,
+    requested_provider,
+    resolve_provider,
+)
 from resumes.views.error_responses import llm_error_response
 from resumes.views.job_curation_view import CURATION_ID_PARAMETER
-from resumes.services.llm_service import requested_provider
 
 
 @extend_schema(
@@ -77,6 +81,8 @@ class CoverLetterGenerateAPIView(APIView):
 
         regenerate = serializer.validated_data["regenerate"]
         provider = requested_provider(serializer.validated_data.get("ai_provider"))
+        ai_model = requested_model(serializer.validated_data.get("ai_model"))
+        ai_fallback_provider = requested_fallback_provider(serializer.validated_data.get("ai_fallback_provider"))
 
         curation = JobResumeCuration.objects.filter(id=curation_id, user=request.user).first()
         if curation is None:
@@ -107,7 +113,11 @@ class CoverLetterGenerateAPIView(APIView):
             AIJob.JOB_TYPE_COVER_LETTER_GENERATION,
             provider=resolve_provider(provider),
             curation=curation,
-            input_params={"regenerate": regenerate},
+            input_params={
+                "regenerate": regenerate,
+                "ai_model": ai_model,
+                "ai_fallback_provider": ai_fallback_provider,
+            },
         )
         return Response(AIJobSerializer(job).data, status=status.HTTP_202_ACCEPTED)
 

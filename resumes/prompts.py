@@ -338,6 +338,7 @@ def build_resume_curation_prompt(
     job_requirements,
     candidate_match_summary,
     retry_feedback=None,
+    allowed_missing_skills=None,
 ):
     feedback_block = ""
     if retry_feedback:
@@ -346,6 +347,20 @@ def build_resume_curation_prompt(
             "Correct every one of these in this attempt:\n- "
             + "\n- ".join(retry_feedback)
             + "\n"
+        )
+
+    if allowed_missing_skills:
+        skills_rule = (
+            '- "skills" may include skills from CANDIDATE_SOURCE_DATA.skills as well as the following '
+            'candidate-approved missing job requirements: %s. Reorder or filter for maximum relevance to JOB_TITLE, '
+            'and do not invent any other skills, employers, or degrees.'
+            % (", ".join(allowed_missing_skills))
+        )
+    else:
+        skills_rule = (
+            '- "skills" must be an exact subset of CANDIDATE_SOURCE_DATA.skills, spelled exactly as '
+            'given, reordered or filtered for relevance. Do not rename or merge skill entries and '
+            'do not add skills only because they appear in JOB_REQUIREMENTS.'
         )
 
     return """You are tailoring a candidate's resume for one specific job using ONLY
@@ -357,9 +372,7 @@ STRICT RULES:
   technologies, dates, or years of experience that are not already there.
 - You may reorder, re-emphasize, reword, and restructure content, and choose which
   skills and projects are most relevant to JOB_TITLE and JOB_REQUIREMENTS.
-- "skills" must be an exact subset of CANDIDATE_SOURCE_DATA.skills, spelled exactly as
-  given, reordered or filtered for relevance. Do not rename or merge skill entries and
-  do not add skills only because they appear in JOB_REQUIREMENTS.
+%s
 - For "experience", "projects", "education", and "certifications", every returned item
   must include the integer "source_index" of the corresponding entry in
   CANDIDATE_SOURCE_DATA and a "tailored_text" that rewrites that entry's wording and
@@ -404,6 +417,7 @@ CANDIDATE_MATCH_SUMMARY:
 
 CANDIDATE_SOURCE_DATA:
 %s""" % (
+        skills_rule,
         feedback_block,
         job_title,
         job_description,
