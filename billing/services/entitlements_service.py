@@ -5,6 +5,8 @@ controls, but that is presentation only — these checks are what actually
 prevent a free account from using paid features.
 """
 
+from datetime import timedelta
+
 from django.utils import timezone
 
 from billing.entitlements import FEATURE_LABELS, entitlements_for, is_paid_plan
@@ -40,6 +42,14 @@ class FeatureRequiresProError(PlanRestrictionError):
     code = "UPGRADE_REQUIRED"
 
 
+class AICapacityReachedError(PlanRestrictionError):
+    """The site-wide daily AI ceiling (billing.services.ai_capacity), not
+    this user's own limit. Rides the same 402 path so every AI view already
+    handles it; the code tells the UI it is not the user's quota."""
+
+    code = "AI_CAPACITY_REACHED"
+
+
 class EntitlementsService:
     @staticmethod
     def for_user(user):
@@ -49,7 +59,7 @@ class EntitlementsService:
         return entitlements_for(subscription.plan_id, subscription.is_active)
 
     @staticmethod
-    def tailored_resumes_used_this_month(user):
+    def tailored_resumes_used_this_month(user, since=None):
         """How many tailored resumes the user has generated this calendar month.
 
         Counts generated *versions*, not curations: regenerating produces new
@@ -57,24 +67,16 @@ class EntitlementsService:
         same way a first generation does. Counting curations instead would
         let one curation be regenerated without limit.
         """
-        from resumes.models import JobResumeCurationVersion
-
-        now = timezone.now()
-        period_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
-        return JobResumeCurationVersion.objects.filter(
-            curation__user=user,
-            created_at__gte=period_start,
-        ).count()
+        return _tailored_versions(user, since or _month_start()).count()
 
     @staticmethod
-    def ai_calls_used_this_month(user):
+    def ai_calls_used_this_month(user, since=None):
         """How many AI-backed calls (of any kind) this user has made this
         calendar month, from the tracked usage log — not inferred from a
         side effect of some other model, so it actually covers every
         AI-calling action, not just the ones that happen to leave a row
         behind elsewhere."""
-        period_start = _month_start()
-        return AIUsageLog.objects.filter(user=user, created_at__gte=period_start).count()
+        return _ai_usage(user, since or _month_start()).count()
 
     @staticmethod
     def record_ai_usage(user, action, provider, job=None, latency_ms=None, model_name=""):
@@ -95,6 +97,9 @@ class EntitlementsService:
             latency_ms=latency_ms,
             model_name=model_name or "",
         )
+        from billing.services import ai_capacity
+
+        ai_capacity.maybe_alert()
 
     @staticmethod
     def bonus_credits(user):
@@ -160,18 +165,47 @@ class EntitlementsService:
         if EntitlementsService.uses_own_ai_key(user, provider=provider):
             return
 
+        # Site-wide daily ceiling, checked after the paid and own-key exits
+        # above so it only ever stops unpaid usage we would be paying for.
+        from billing.services import ai_capacity
+
+        if ai_capacity.is_reached():
+            resets_at = ai_capacity.next_reset()
+            raise AICapacityReachedError(
+                "IntelliResume is very busy today and we've reached today's free AI capacity. "
+                f"It resets at midnight IST, {_until(resets_at)}. Anything you've already "
+                "done is saved.",
+                feature="ai_capacity",
+                resets_at=resets_at.isoformat(),
+            )
+
         bonus = EntitlementsService.bonus_credits(user)
         limit = base_limit + bonus
-        used = EntitlementsService.ai_calls_used_this_month(user)
+        since = _quota_start(entitlements)
+        used = EntitlementsService.ai_calls_used_this_month(user, since=since)
         if used >= limit:
+            resets_at = _quota_resets_at(entitlements, _oldest(_ai_usage(user, since)))
+            if entitlements.get("quota_window_hours"):
+                message = (
+                    f"You've used your {base_limit} AI-assisted actions for now. IntelliResume is "
+                    f"free during our launch, with a fair-use limit of {base_limit} AI actions "
+                    f"every {entitlements['quota_window_hours']} hours. Your next one frees up "
+                    f"{_until(resets_at)}."
+                )
+            else:
+                message = (
+                    f"You've used all {base_limit} AI-assisted actions included in the Free plan "
+                    f"this month. Upgrade to Pro for unlimited AI usage, or wait until your "
+                    f"allowance resets."
+                )
             raise PlanLimitReachedError(
-                f"You've used all {base_limit} AI-assisted actions included in the Free plan "
-                f"this month. Upgrade to Pro for unlimited AI usage, or wait until your "
-                f"allowance resets.",
+                message,
                 feature="ai_usage",
                 used=used,
                 limit=limit,
-                resets_at=_next_month_start().isoformat(),
+                resets_at=resets_at.isoformat(),
+                window_hours=entitlements.get("quota_window_hours"),
+                launch_offer=bool(entitlements.get("launch_offer")),
                 earn_credit_available=_earn_credit_available(user),
             )
 
@@ -188,14 +222,15 @@ class EntitlementsService:
         # here either; it would tell someone their quota doesn't matter
         # when an ordinary request still spends it.
         uses_own_key = EntitlementsService.uses_own_ai_key(user)
+        since = _quota_start(entitlements)
         limit = entitlements["tailored_resumes_per_month"]
-        used = EntitlementsService.tailored_resumes_used_this_month(user)
+        used = EntitlementsService.tailored_resumes_used_this_month(user, since=since)
         # Reported as unlimited because that is what check_can_use_ai
         # actually does for this user's default-provider requests — the
         # summary must describe the gate that runs, not the one that would
         # run without their key.
         ai_limit = None if uses_own_key else entitlements["ai_calls_per_month"]
-        ai_used = EntitlementsService.ai_calls_used_this_month(user)
+        ai_used = EntitlementsService.ai_calls_used_this_month(user, since=since)
         bonus = EntitlementsService.bonus_credits(user) if ai_limit is not None else 0
         eff_limit = None if limit is None else limit + bonus
         eff_ai_limit = None if ai_limit is None else ai_limit + bonus
@@ -227,6 +262,18 @@ class EntitlementsService:
             # this the UI would keep counting down toward a limit that is no
             # longer being enforced, which reads as a bug.
             "uses_own_ai_key": uses_own_key,
+            # Free launch offer (billing.launch). When `quota_window_hours`
+            # is set, the two quotas above are per rolling window of that
+            # many hours rather than per calendar month, and each
+            # `*_resets_at` is when the next unit frees up.
+            "launch_offer": bool(entitlements.get("launch_offer")),
+            "quota_window_hours": entitlements.get("quota_window_hours"),
+            "tailored_resumes_resets_at": _quota_resets_at(
+                entitlements, _oldest(_tailored_versions(user, since))
+            ).isoformat(),
+            "ai_calls_resets_at": _quota_resets_at(
+                entitlements, _oldest(_ai_usage(user, since))
+            ).isoformat(),
         }
 
     @staticmethod
@@ -238,16 +285,31 @@ class EntitlementsService:
 
         bonus = EntitlementsService.bonus_credits(user)
         limit = base_limit + bonus
-        used = EntitlementsService.tailored_resumes_used_this_month(user)
+        since = _quota_start(entitlements)
+        used = EntitlementsService.tailored_resumes_used_this_month(user, since=since)
         if used >= limit:
+            resets_at = _quota_resets_at(entitlements, _oldest(_tailored_versions(user, since)))
+            if entitlements.get("quota_window_hours"):
+                message = (
+                    f"You've made your {base_limit} tailored resumes for now. IntelliResume is "
+                    f"free during our launch, with a fair-use limit of {base_limit} tailored "
+                    f"resumes every {entitlements['quota_window_hours']} hours. Your next one "
+                    f"frees up {_until(resets_at)}."
+                )
+            else:
+                message = (
+                    f"You've used all {base_limit} tailored resumes included in the Free plan "
+                    f"this month. Upgrade to Pro for unlimited tailored resumes, or wait "
+                    f"until your allowance resets."
+                )
             raise PlanLimitReachedError(
-                f"You've used all {base_limit} tailored resumes included in the Free plan "
-                f"this month. Upgrade to Pro for unlimited tailored resumes, or wait "
-                f"until your allowance resets.",
+                message,
                 feature="tailored_resumes",
                 used=used,
                 limit=limit,
-                resets_at=_next_month_start().isoformat(),
+                resets_at=resets_at.isoformat(),
+                window_hours=entitlements.get("quota_window_hours"),
+                launch_offer=bool(entitlements.get("launch_offer")),
                 earn_credit_available=_earn_credit_available(user),
             )
 
@@ -342,6 +404,51 @@ def _earn_credit_available(user):
         return CreditService.can_watch_rewarded_ad(user)
     except Exception:  # never let a nice-to-have hint break the real error
         return False
+
+
+def _tailored_versions(user, since):
+    """Generated tailored-resume versions since `since`. Counts versions,
+    not curations: a regeneration is a new model call and spends quota."""
+    from resumes.models import JobResumeCurationVersion
+
+    return JobResumeCurationVersion.objects.filter(curation__user=user, created_at__gte=since)
+
+
+def _ai_usage(user, since):
+    return AIUsageLog.objects.filter(user=user, created_at__gte=since)
+
+
+def _oldest(queryset):
+    return queryset.order_by("created_at").values_list("created_at", flat=True).first()
+
+
+def _quota_start(entitlements):
+    """Where the current quota period begins: a rolling window of
+    `quota_window_hours` during the launch offer, else the calendar month."""
+    hours = entitlements.get("quota_window_hours")
+    if hours:
+        return timezone.now() - timedelta(hours=hours)
+    return _month_start()
+
+
+def _quota_resets_at(entitlements, oldest_in_period):
+    """When the next unit of quota becomes available. In a rolling window
+    that is when the oldest use inside it ages out; with nothing used yet,
+    it is now."""
+    hours = entitlements.get("quota_window_hours")
+    if hours:
+        if oldest_in_period is None:
+            return timezone.now()
+        return oldest_in_period + timedelta(hours=hours)
+    return _next_month_start()
+
+
+def _until(moment):
+    minutes = max(1, int((moment - timezone.now()).total_seconds() // 60) + 1)
+    if minutes < 60:
+        return f"in about {minutes} minute{'s' if minutes != 1 else ''}"
+    hours = round(minutes / 60)
+    return f"in about {hours} hour{'s' if hours != 1 else ''}"
 
 
 def _month_start():

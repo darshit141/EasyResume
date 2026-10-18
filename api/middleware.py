@@ -48,3 +48,21 @@ class RequestIDLogFilter(logging.Filter):
     def filter(self, record):
         record.request_id = get_current_request_id() or "-"
         return True
+
+
+class ContentSecurityPolicyMiddleware:
+    """Sets a strict Content-Security-Policy header on outbound HTTP responses,
+    whitelisting only trusted script/connect/frame origins (Google Analytics, Google Ads,
+    Google OAuth, Stripe) and blocking untrusted script execution.
+    """
+
+    def __init__(self, get_response):
+        self.get_response = get_response
+
+    def __call__(self, request):
+        response = self.get_response(request)
+        from django.conf import settings
+        csp = getattr(settings, "CONTENT_SECURITY_POLICY", None)
+        if csp and "Content-Security-Policy" not in response:
+            response["Content-Security-Policy"] = csp
+        return response

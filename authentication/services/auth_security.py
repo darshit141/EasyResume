@@ -129,6 +129,26 @@ def clear_failed_logins(user):
         user.save(update_fields=["failed_login_attempts", "locked_until"])
 
 
+def locked_out_payload(seconds):
+    """Body for the 429 that in-session checks (change password, delete
+    account, two-factor changes) return while the account is locked."""
+    return {
+        "message": lockout_message(seconds),
+        "code": "ACCOUNT_LOCKED",
+        "retry_after_seconds": seconds,
+    }
+
+
+def revoke_all_sessions(user):
+    """Blacklist every refresh token the user holds, so signing in again is
+    the only way back. Access tokens already issued still expire on their
+    own within ACCESS_TOKEN_LIFETIME."""
+    from rest_framework_simplejwt.token_blacklist.models import BlacklistedToken, OutstandingToken
+
+    for outstanding in OutstandingToken.objects.filter(user=user):
+        BlacklistedToken.objects.get_or_create(token=outstanding)
+
+
 def lockout_message(seconds):
     minutes = max(1, (seconds + 59) // 60)
     unit = "minute" if minutes == 1 else "minutes"

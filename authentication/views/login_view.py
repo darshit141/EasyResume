@@ -43,8 +43,9 @@ class LoginAPIView(APIView):
             # shape as VerifyLoginOTPAPIView so the frontend has exactly one
             # "you are logged in" contract to handle, not two.
             if not result.get("otp_required", True):
+                from authentication.utils.jwt_cookie import set_refresh_token_cookie
                 user = result["user"]
-                return Response(
+                response = Response(
                     {
                         "success": True,
                         "otp_required": False,
@@ -62,6 +63,7 @@ class LoginAPIView(APIView):
                     },
                     status=result["status"],
                 )
+                return set_refresh_token_cookie(response, result.get("refresh"))
 
             # Two-factor: password accepted, a second factor is pending and
             # tokens come from the verify-otp step. otp_method tells the

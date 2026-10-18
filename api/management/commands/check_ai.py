@@ -26,8 +26,10 @@ from api.utils.config import get_config_value
 from api.utils.secrets import SecretDecryptionError, decrypt_value
 from resumes.services.llm_service import (
     SUPPORTED_PROVIDERS,
+    DahlLLMService,
     GeminiLLMService,
     LLMServiceError,
+    _parse_api_keys,
     get_llm_service,
     resolve_provider,
 )
@@ -44,13 +46,16 @@ CONFIG_KEYS = (
     "GEMINI_AUTO_FALLBACK_FAMILIES",
     "GEMINI_AUTO_EXCLUDE",
     "GEMINI_MAX_MODEL_ATTEMPTS",
+    "DAHL_MODEL",
+    "DAHL_FALLBACK_MODELS",
+    "DAHL_BASE_URL",
     "GROQ_MODEL",
     "KIRA_MODEL",
     "OLLAMA_MODEL",
     "LLM_TIMEOUT",
     "LLM_MAX_RETRIES",
 )
-KEY_SETTINGS = ("GEMINI_API_KEY", "GROQ_API_KEY", "KIRA_API_KEY")
+KEY_SETTINGS = ("GEMINI_API_KEY", "DAHL_API_KEY", "GROQ_API_KEY", "KIRA_API_KEY")
 NEW_GEMINI_KEY_ADVICE = (
     "Create a key at https://aistudio.google.com/apikey and paste it into GEMINI_API_KEY in the admin "
     "Configuration tab. It takes effect on the next request - no restart needed."
@@ -82,7 +87,12 @@ class Command(BaseCommand):
         self._print_keys()
         self._heading(f"Provider check: {provider}")
 
-        ok = self._check_gemini(generate) if provider == "gemini" else self._check_generic(provider, generate)
+        if provider == "gemini":
+            ok = self._check_gemini(generate)
+        elif provider == "dahl":
+            ok = self._check_dahl(generate)
+        else:
+            ok = self._check_generic(provider, generate)
 
         fallback = get_config_value("LLM_FALLBACK_PROVIDER", settings.LLM_FALLBACK_PROVIDER)
         if not options["provider"] and fallback and fallback != provider:
@@ -133,7 +143,13 @@ class Command(BaseCommand):
                 source = "admin panel (encrypted)"
             else:
                 value, source = str(getattr(settings, setting, "") or "").strip(), ".env"
-            state = f"set, {len(value)} characters <- {source}" if value else "not set"
+            tokens = _parse_api_keys(value)
+            if len(tokens) > 1:
+                state = f"set, {len(tokens)} pooled tokens ({len(value)} chars) <- {source}"
+            elif tokens:
+                state = f"set, 1 token ({len(value)} chars) <- {source}"
+            else:
+                state = "not set"
             self.stdout.write(f"  {setting:<16} {state}")
 
     def _check_gemini(self, generate):
@@ -199,6 +215,49 @@ class Command(BaseCommand):
         if working[0] != chain[0]:
             self.stdout.write(self.style.WARNING(
                 f"  {chain[0]} is not answering right now; requests are served by {working[0]} until it does."
+            ))
+        return True
+
+    def _check_dahl(self, generate):
+        service = get_llm_service(provider="dahl")
+        if not isinstance(service, DahlLLMService):
+            return self._check_generic("dahl", generate)
+
+        if not service.api_key:
+            self.stdout.write(self.style.ERROR("  No Dahl API key is configured."))
+            self.stdout.write("  Add DAHL_API_KEY in the admin Configuration tab or .env file.")
+            return False
+
+        chain = service.candidate_models()
+        self.stdout.write(f"  Models are tried in this order: {' -> '.join(chain) or '(none)'}")
+        if not chain:
+            self.stdout.write("  No Dahl model configured.")
+            return False
+
+        try:
+            service.check_model_available()
+            self.stdout.write("  Provider reachable.")
+        except LLMServiceError as exc:
+            self.stdout.write(self.style.WARNING(f"  Provider check returned: {exc.code} - {exc}"))
+
+        if not generate:
+            return True
+
+        working = []
+        for model in chain:
+            ok, detail = service.probe_model(model)
+            if ok:
+                working.append(model)
+                self.stdout.write(self.style.SUCCESS(f"  [ok]   {model}: {detail}"))
+            else:
+                self.stdout.write(self.style.ERROR(f"  [fail] {model}: {detail}"))
+
+        if not working:
+            self.stdout.write("  No Dahl model answered.")
+            return False
+        if working[0] != chain[0]:
+            self.stdout.write(self.style.WARNING(
+                f"  {chain[0]} is not answering right now; requests will be served by fallback {working[0]}."
             ))
         return True
 

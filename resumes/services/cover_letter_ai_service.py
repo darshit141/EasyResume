@@ -176,7 +176,7 @@ class CoverLetterAIService:
             " ".join([
                 str(job_title or ""),
                 str(job_description or ""),
-                json.dumps(job_requirements or {}, sort_keys=True),
+                json.dumps(job_requirements or {}, ensure_ascii=False, sort_keys=True),
             ])
         )
         return f"{candidate_blob} {job_blob}"

@@ -83,7 +83,8 @@ class GoogleSignInAPIView(APIView):
                 },
                 status=status.HTTP_200_OK,
             )
-        return Response(
+        from authentication.utils.jwt_cookie import set_refresh_token_cookie
+        response = Response(
             {
                 "success": True,
                 "otp_required": False,
@@ -102,3 +103,4 @@ class GoogleSignInAPIView(APIView):
             },
             status=status.HTTP_200_OK,
         )
+        return set_refresh_token_cookie(response, result.get("refresh"))

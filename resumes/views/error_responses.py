@@ -12,6 +12,8 @@ from resumes.services.llm_service import (
     LLMModelUnavailableError,
     LLMSchemaValidationError,
     LLMTimeoutError,
+    LLMQuotaExceededError,
+    LLMHighDemandError,
 )
 from resumes.services.cover_letter_ai_service import CoverLetterGroundingError
 from resumes.services.job_application_ai_service import ApplicationEmailGroundingError
@@ -33,13 +35,13 @@ def llm_error_response(exc):
         ),
     ):
         response_status = status.HTTP_502_BAD_GATEWAY
-    elif isinstance(exc, (LLMModelUnavailableError, LLMTimeoutError)):
+    elif isinstance(exc, (LLMModelUnavailableError, LLMTimeoutError, LLMQuotaExceededError, LLMHighDemandError)):
         response_status = status.HTTP_503_SERVICE_UNAVAILABLE
 
     return Response(
         {
             "detail": str(exc),
-            "code": exc.code,
+            "code": getattr(exc, "code", "LLM_UNAVAILABLE"),
         },
         status=response_status,
     )

@@ -8,22 +8,9 @@ that every admin-panel view that mutates state actually calls it).
 
 import logging
 
+from api.throttles import client_ip  # noqa: F401  (re-exported for callers)
+
 logger = logging.getLogger(__name__)
-
-
-def client_ip(request):
-    """Best-effort client IP, preferring a proxy-set header when present.
-
-    Never allowed to raise: an audit log write must not fail the admin
-    action it is recording just because a header was missing or malformed.
-    """
-    try:
-        forwarded = request.META.get("HTTP_X_FORWARDED_FOR")
-        if forwarded:
-            return forwarded.split(",")[0].strip()
-        return request.META.get("REMOTE_ADDR")
-    except Exception:  # pragma: no cover - defensive
-        return None
 
 
 def mask_secret_for_audit(value):

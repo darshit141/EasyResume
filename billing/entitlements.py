@@ -74,7 +74,7 @@ FREE_ENTITLEMENTS = {
     # Every provider is available on every plan — Groq and Gemini are no
     # longer Pro-exclusive. Cost is controlled entirely by
     # `ai_calls_per_month` above, not by which provider a request picks.
-    "allowed_ai_providers": ["ollama", "standard", "groq", "gemini", "kira"],
+    "allowed_ai_providers": ["ollama", "standard", "groq", "gemini", "kira", "dahl"],
     "docx_export": False,
     "tailored_resume_version_history": False,
     # Free users may pick one of the built-in resume layout presets; tuning
@@ -92,6 +92,10 @@ FREE_ENTITLEMENTS = {
     # traffic data. Actually serving ads still requires a real AdSense
     # publisher id (VITE_ADSENSE_CLIENT) — this flag is dormant until then.
     "ads": True,
+    # Quotas on this plan are calendar-monthly. The free launch offer
+    # (billing.launch) swaps this for a short rolling window, in hours.
+    "quota_window_hours": None,
+    "launch_offer": False,
 }
 
 PRO_ENTITLEMENTS = {
@@ -105,12 +109,14 @@ PRO_ENTITLEMENTS = {
     # the server's own OpenRouter account, offered as an extra provider for
     # paying users rather than as free-tier capacity. See OPENROUTER_* in
     # settings and resumes.services.llm_service.OpenRouterLLMService.
-    "allowed_ai_providers": ["ollama", "standard", "groq", "gemini", "kira", "openrouter"],
+    "allowed_ai_providers": ["ollama", "standard", "groq", "gemini", "kira", "openrouter", "dahl"],
     "docx_export": True,
     "tailored_resume_version_history": True,
     "resume_template_customization": True,
     "reply_tracking": REPLY_TRACKING_PRO,
     "ads": False,
+    "quota_window_hours": None,
+    "launch_offer": False,
 }
 
 # The tier that exists to fund third-party services we pay for per-account.
@@ -185,6 +191,11 @@ def entitlements_for(plan_id, is_active):
             "reply_tracking": resolve_reply_tracking(plan_id, entitlements["reply_tracking"]),
         }
 
+    from billing import launch
+
+    if launch.is_active():
+        return launch_entitlements()
+
     return {
         **FREE_ENTITLEMENTS,
         "tailored_resumes_per_month": get_config_value(
@@ -199,6 +210,38 @@ def entitlements_for(plan_id, is_active):
             FREE_ENTITLEMENTS["job_applications_per_month"],
         ),
         "reply_tracking": resolve_reply_tracking("free", FREE_ENTITLEMENTS["reply_tracking"]),
+    }
+
+
+def launch_entitlements():
+    """What an unpaid account gets while the free launch offer is on.
+
+    Every paid *feature* is unlocked; what stays metered is AI spend, over a
+    short rolling window (``quota_window_hours``) instead of a month. The
+    two quota keys keep their historical ``_per_month`` names so every
+    caller keeps working - when ``quota_window_hours`` is set they mean
+    "per window". OpenRouter stays paid-only: it runs on our own account
+    and is the most expensive route, so it is not part of a free offer.
+    """
+    from api.utils.config import get_config_value
+    from billing import launch
+
+    return {
+        **FREE_ENTITLEMENTS,
+        "plan_id": "free",
+        "launch_offer": True,
+        "quota_window_hours": launch.window_hours(),
+        "tailored_resumes_per_month": launch.tailored_resumes_per_window(),
+        "ai_calls_per_month": launch.ai_calls_per_window(),
+        "job_applications_per_month": get_config_value(
+            "FREE_JOB_APPLICATIONS_PER_MONTH",
+            FREE_ENTITLEMENTS["job_applications_per_month"],
+        ),
+        "docx_export": True,
+        "tailored_resume_version_history": True,
+        "resume_template_customization": True,
+        "reply_tracking": resolve_reply_tracking("free", FREE_ENTITLEMENTS["reply_tracking"]),
+        "ads": launch.shows_ads(),
     }
 
 

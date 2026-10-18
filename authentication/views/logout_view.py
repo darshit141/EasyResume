@@ -6,6 +6,7 @@ from rest_framework.views import APIView
 
 from authentication.serializers.logout_serializer import LogoutSerializer
 from authentication.services.logout_service import LogoutService
+from authentication.utils.jwt_cookie import delete_refresh_token_cookie
 
 
 @extend_schema(
@@ -36,12 +37,24 @@ class LogoutAPIView(APIView):
         if not serializer.is_valid():
             return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
-        result = LogoutService.logout(serializer.validated_data["refresh"])
+        refresh_token = (
+            serializer.validated_data.get("refresh")
+            or request.COOKIES.get("refresh_token")
+        )
+
+        if not refresh_token:
+            # Client has already cleared or omitted refresh token; clear any cookie
+            response = Response({"message": "Logged out successfully."}, status=status.HTTP_200_OK)
+            return delete_refresh_token_cookie(response)
+
+        result = LogoutService.logout(refresh_token)
 
         if not result["success"]:
-            return Response(
+            response = Response(
                 {"message": result["message"]},
                 status=status.HTTP_400_BAD_REQUEST,
             )
+            return delete_refresh_token_cookie(response)
 
-        return Response({"message": result["message"]}, status=status.HTTP_200_OK)
+        response = Response({"message": result["message"]}, status=status.HTTP_200_OK)
+        return delete_refresh_token_cookie(response)

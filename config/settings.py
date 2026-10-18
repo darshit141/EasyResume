@@ -43,8 +43,8 @@ SECRET_KEY = os.getenv("SECRET_KEY")
 CONFIG_ENCRYPTION_KEY = os.getenv("CONFIG_ENCRYPTION_KEY", "")
 # SECURITY WARNING: don't run with debug turned on in production! Real
 # deployments must set DEBUG=False explicitly via environment — this
-# defaults to True only for local-dev convenience.
-DEBUG = os.getenv("DEBUG", "True") == "True"
+# defaults to False so missing the variable in production fails safely.
+DEBUG = os.getenv("DEBUG", "False").strip().lower() in ("true", "1", "yes")
 
 ALLOWED_HOSTS = [
     host.strip() for host in os.getenv("ALLOWED_HOSTS", "").split(",") if host.strip()
@@ -57,15 +57,36 @@ CORS_ALLOW_ALL_ORIGINS = DEBUG
 CORS_ALLOWED_ORIGINS = [
     origin.strip() for origin in os.getenv("CORS_ALLOWED_ORIGINS", "").split(",") if origin.strip()
 ]
+# Allow cookies to be sent with cross-origin requests (for HttpOnly refresh tokens)
+CORS_ALLOW_CREDENTIALS = True
 
 CSRF_TRUSTED_ORIGINS = [
     origin.strip() for origin in os.getenv("CSRF_TRUSTED_ORIGINS", "").split(",") if origin.strip()
 ]
 
+# Strict Content Security Policy (CSP): whitelists Google OAuth, Analytics, Ads, and Stripe
+CONTENT_SECURITY_POLICY = os.getenv(
+    "CONTENT_SECURITY_POLICY",
+    (
+        "default-src 'self'; "
+        "script-src 'self' https://accounts.google.com https://www.googletagmanager.com https://pagead2.googlesyndication.com https://js.stripe.com; "
+        "connect-src 'self' https://accounts.google.com https://www.google-analytics.com https://pagead2.googlesyndication.com https://api.stripe.com; "
+        "frame-src 'self' https://accounts.google.com https://js.stripe.com https://googleads.g.doubleclick.net; "
+        "img-src 'self' data: https: blob:; "
+        "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
+        "font-src 'self' data: https://fonts.gstatic.com; "
+        "object-src 'none'; "
+        "base-uri 'self';"
+    ),
+)
+
 # Production-only hardening (all inert under DEBUG=True so local dev over
 # plain http:// keeps working unchanged).
 if not DEBUG:
     SECURE_SSL_REDIRECT = os.getenv("SECURE_SSL_REDIRECT", "True") == "True"
+    # nginx terminates TLS and tells Django so; without this every request looks
+    # like plain http, and the HSTS header below would never be sent.
+    SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
     SESSION_COOKIE_SECURE = True
     CSRF_COOKIE_SECURE = True
     SECURE_CONTENT_TYPE_NOSNIFF = True
@@ -118,6 +139,7 @@ MIDDLEWARE = [
     "django.contrib.messages.middleware.MessageMiddleware",
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
     "api.middleware.RequestIDMiddleware",
+    "api.middleware.ContentSecurityPolicyMiddleware",
 ]
 
 ROOT_URLCONF = 'config.urls'
@@ -228,7 +250,7 @@ REST_FRAMEWORK = {
     ),
     "DEFAULT_SCHEMA_CLASS": "drf_spectacular.openapi.AutoSchema",
     "DEFAULT_THROTTLE_CLASSES": [] if RUNNING_TESTS else [
-        "rest_framework.throttling.ScopedRateThrottle",
+        "api.throttles.ClientIPScopedRateThrottle",
     ],
     "DEFAULT_THROTTLE_RATES": {
         # Brute-forceable auth endpoints (login, register, OTP, password reset).
@@ -263,6 +285,10 @@ REST_FRAMEWORK = {
         # our IP. Tight on purpose: nobody legitimately saves an API key
         # more than a few times an hour.
         "user_ai_key": os.getenv("THROTTLE_USER_AI_KEY", "10/hour"),
+        # Background AI job polling from frontend processing views.
+        "ai_job_poll": os.getenv("THROTTLE_AI_JOB_POLL", "120/min"),
+        # Diagnostic test calls to external LLM providers from the admin panel.
+        "admin_test_ai": os.getenv("THROTTLE_ADMIN_TEST_AI", "15/min"),
     },
 }
 
@@ -587,6 +613,28 @@ INBOUND_EMAIL_RETENTION_DAYS = int(os.getenv("INBOUND_EMAIL_RETENTION_DAYS", "18
 # How many jobs a Free account can track recruiter email for.
 REPLY_TRACKING_FREE_JOB_LIMIT = int(os.getenv("REPLY_TRACKING_FREE_JOB_LIMIT", "5"))
 
+# Free launch offer (billing/launch.py). While on, every unpaid account gets
+# the paid feature set free, checkout is closed, and AI use is metered over a
+# short rolling window instead of a month. All of these are also switchable
+# live from the admin Configuration tab (Limits), no redeploy needed.
+LAUNCH_FREE_ACCESS = os.getenv("LAUNCH_FREE_ACCESS", "False") == "True"
+# Optional last day of the offer (YYYY-MM-DD). Empty = no end date.
+LAUNCH_FREE_UNTIL = os.getenv("LAUNCH_FREE_UNTIL", "")
+LAUNCH_QUOTA_WINDOW_HOURS = int(os.getenv("LAUNCH_QUOTA_WINDOW_HOURS", "12"))
+LAUNCH_TAILORED_RESUMES_PER_WINDOW = int(os.getenv("LAUNCH_TAILORED_RESUMES_PER_WINDOW", "3"))
+# One tailored resume takes 3-4 AI calls (job analysis, gap analysis,
+# missing-info review, generation), so 15 lets a user actually reach 3.
+LAUNCH_AI_CALLS_PER_WINDOW = int(os.getenv("LAUNCH_AI_CALLS_PER_WINDOW", "15"))
+LAUNCH_SHOW_ADS = os.getenv("LAUNCH_SHOW_ADS", "True") == "True"
+
+# Site-wide ceiling on AI actions per day for unpaid accounts
+# (billing/services/ai_capacity.py). 0 = off. Paying and own-key users are
+# never stopped by it. Ops gets an email at AI_CAPACITY_ALERT_PERCENT and at
+# 100%. The day runs midnight to midnight in AI_CAPACITY_TIME_ZONE.
+AI_GLOBAL_DAILY_CAP = int(os.getenv("AI_GLOBAL_DAILY_CAP", "1500"))
+AI_CAPACITY_ALERT_PERCENT = int(os.getenv("AI_CAPACITY_ALERT_PERCENT", "80"))
+AI_CAPACITY_TIME_ZONE = os.getenv("AI_CAPACITY_TIME_ZONE", "Asia/Kolkata")
+
 # Where operational alerts (the daily job-import check) are sent.
 OPS_ALERT_EMAIL = os.getenv("OPS_ALERT_EMAIL", "sales@patrixel.com")
 
@@ -621,7 +669,14 @@ GEMINI_MODEL = os.getenv("GEMINI_MODEL", "").strip()
 # Tried in order when GEMINI_MODEL is overloaded (503), out of quota (429)
 # or discontinued (404). Comma-separated.
 GEMINI_FALLBACK_MODELS = [
-    model.strip() for model in os.getenv("GEMINI_FALLBACK_MODELS", "").split(",") if model.strip()
+    model.strip()
+    for model in os.getenv(
+        "GEMINI_FALLBACK_MODELS",
+        "gemini-3.7-flash, gemini-3.6-flash, gemini-3.5-flash, gemini-flash-latest, "
+        "gemini-2.5-flash, gemini-flash-lite-latest, gemini-3.5-flash-lite, "
+        "gemini-2.5-flash-lite, gemini-2.5-pro, gemini-pro-latest",
+    ).split(",")
+    if model.strip()
 ]
 # Ask Google which models the key can call (cached) before trying any, so a
 # discontinued model is skipped instead of failing every request, and further
@@ -629,7 +684,7 @@ GEMINI_FALLBACK_MODELS = [
 GEMINI_MODEL_DISCOVERY = os.getenv("GEMINI_MODEL_DISCOVERY", "True") == "True"
 # Automatic fallbacks must contain one of these words in their id...
 GEMINI_AUTO_FALLBACK_FAMILIES = [
-    item.strip() for item in os.getenv("GEMINI_AUTO_FALLBACK_FAMILIES", "flash").split(",") if item.strip()
+    item.strip() for item in os.getenv("GEMINI_AUTO_FALLBACK_FAMILIES", "flash, pro").split(",") if item.strip()
 ]
 # ...and none of these: kinds of model that are not general text models, or
 # are too unstable to fail over to. Not model ids, so they do not go stale
@@ -644,7 +699,7 @@ GEMINI_AUTO_EXCLUDE = [
     if item.strip()
 ]
 # Most models one request may try before giving up.
-GEMINI_MAX_MODEL_ATTEMPTS = int(os.getenv("GEMINI_MAX_MODEL_ATTEMPTS", "4"))
+GEMINI_MAX_MODEL_ATTEMPTS = int(os.getenv("GEMINI_MAX_MODEL_ATTEMPTS", "8"))
 # Seconds the live model list is cached per key.
 GEMINI_MODEL_LIST_TTL = int(os.getenv("GEMINI_MODEL_LIST_TTL", "3600"))
 GEMINI_BASE_URL = os.getenv(
@@ -675,6 +730,21 @@ KIRA_BASE_URL = os.getenv("KIRA_BASE_URL", "https://kiraai.vn/api/v1")
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "")
 OPENROUTER_MODEL = os.getenv("OPENROUTER_MODEL", "")
 OPENROUTER_BASE_URL = os.getenv("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1")
+
+# Dahl Global: OpenAI-compatible inference platform (inference.dahl.global).
+# Hosts MiniMaxAI/MiniMax-M2.7, zai-org/GLM-5.3-Flash, deepseek-ai/DeepSeek-V4-Flash-0731.
+# Supports multi-model failover so an unavailable or rate-limited model cascades to the next.
+DAHL_API_KEY = os.getenv("DAHL_API_KEY", "").strip()
+DAHL_MODEL = os.getenv("DAHL_MODEL", "MiniMaxAI/MiniMax-M2.7").strip()
+DAHL_FALLBACK_MODELS = [
+    model.strip()
+    for model in os.getenv(
+        "DAHL_FALLBACK_MODELS",
+        "zai-org/GLM-5.3-Flash, deepseek-ai/DeepSeek-V4-Flash-0731",
+    ).split(",")
+    if model.strip()
+]
+DAHL_BASE_URL = os.getenv("DAHL_BASE_URL", "https://inference.dahl.global/v1").rstrip("/")
 
 # --- Rewarded ads -> earned credits ---------------------------------------
 # A free-tier user can watch an opt-in rewarded video to earn a credit (one

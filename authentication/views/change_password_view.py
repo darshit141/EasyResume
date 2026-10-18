@@ -27,10 +27,14 @@ from authentication.services.change_password_service import (
             description="Validation error, or current password is incorrect."
         ),
         status.HTTP_401_UNAUTHORIZED: OpenApiResponse(description="Authentication required."),
+        status.HTTP_429_TOO_MANY_REQUESTS: OpenApiResponse(
+            description="Too many wrong passwords; account temporarily locked."
+        ),
     },
 )
 class ChangePasswordAPIView(APIView):
     permission_classes = [IsAuthenticated]
+    throttle_scope = "auth_sensitive"
 
     def post(self, request):
         serializer = ChangePasswordSerializer(data=request.data)
@@ -45,9 +49,25 @@ class ChangePasswordAPIView(APIView):
         )
 
         if not result["success"]:
+            if result.get("locked"):
+                return Response(
+                    {
+                        "message": result["message"],
+                        "code": result["code"],
+                        "retry_after_seconds": result["retry_after_seconds"],
+                    },
+                    status=status.HTTP_429_TOO_MANY_REQUESTS,
+                )
             return Response(
                 {"message": result["message"]},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        return Response({"message": result["message"]}, status=status.HTTP_200_OK)
+        # The other devices' tokens are revoked, so this device is handed
+        # replacements to keep its own session.
+        from authentication.utils.jwt_cookie import set_refresh_token_cookie
+        response = Response(
+            {"message": result["message"], **result["tokens"]},
+            status=status.HTTP_200_OK,
+        )
+        return set_refresh_token_cookie(response, result.get("tokens", {}).get("refresh"))

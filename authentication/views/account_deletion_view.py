@@ -7,6 +7,7 @@ from rest_framework.views import APIView
 from authentication.serializers.account_deletion_serializer import (
     AccountDeletionRequestSerializer,
 )
+from authentication.services import auth_security
 from authentication.services.account_deletion_service import AccountDeletionService
 
 
@@ -32,17 +33,33 @@ from authentication.services.account_deletion_service import AccountDeletionServ
 )
 class AccountDeletionAPIView(APIView):
     permission_classes = [IsAuthenticated]
+    throttle_scope = "auth_sensitive"
 
     def post(self, request):
         serializer = AccountDeletionRequestSerializer(data=request.data)
         if not serializer.is_valid():
             return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
+        locked_for = auth_security.lockout_seconds_remaining(request.user)
+        if locked_for:
+            return Response(
+                auth_security.locked_out_payload(locked_for),
+                status=status.HTTP_429_TOO_MANY_REQUESTS,
+            )
+
         if not request.user.check_password(serializer.validated_data["password"]):
+            locked_for = auth_security.record_failed_login(request.user)
+            if locked_for:
+                return Response(
+                    auth_security.locked_out_payload(locked_for),
+                    status=status.HTTP_429_TOO_MANY_REQUESTS,
+                )
             return Response(
                 {"password": ["Incorrect password."]},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
+        from authentication.utils.jwt_cookie import delete_refresh_token_cookie
         AccountDeletionService.delete_account(request.user)
-        return Response({"message": "Account permanently deleted."})
+        response = Response({"message": "Account permanently deleted."})
+        return delete_refresh_token_cookie(response)

@@ -70,10 +70,18 @@ class LLMAuthError(LLMModelUnavailableError):
 
 class LLMQuotaExceededError(LLMServiceError):
     code = "LLM_QUOTA_EXCEEDED"
-    message = "The AI provider's quota for the configured key is exhausted."
+    message = "Due to high demand, our AI services are temporarily at capacity. Please try again after some time."
 
 
-SUPPORTED_PROVIDERS = ("ollama", "groq", "gemini", "kira", "openrouter")
+class LLMHighDemandError(LLMQuotaExceededError):
+    """Raised when all configured models and tokens have been exhausted
+    due to rate limits, quota limits, or temporary service capacity."""
+
+    code = "AI_HIGH_DEMAND_CAPACITY"
+    message = "Due to high demand, our AI services are temporarily at capacity. Please try again after some time."
+
+
+SUPPORTED_PROVIDERS = ("ollama", "groq", "gemini", "kira", "openrouter", "dahl")
 
 # Resume upload/parsing has one extra choice unavailable elsewhere: a
 # deterministic, non-AI parser (see StandardResumeParserService). The other
@@ -81,6 +89,87 @@ SUPPORTED_PROVIDERS = ("ollama", "groq", "gemini", "kira", "openrouter")
 # generation) require real semantic reasoning a regex engine can't provide,
 # so they only ever offer SUPPORTED_PROVIDERS.
 RESUME_PARSE_PROVIDERS = SUPPORTED_PROVIDERS + ("standard",)
+
+
+def _dedupe(items):
+    seen = set()
+    result = []
+    for item in items:
+        if item and item not in seen:
+            seen.add(item)
+            result.append(item)
+    return result
+
+
+def _parse_api_keys(value):
+    """Extract list of individual API keys from string or iterable.
+    Supports comma-separated, newline-separated, or semicolon-separated tokens.
+    Preserves order and deduplicates.
+    """
+    if not value:
+        return []
+    if isinstance(value, (list, tuple)):
+        result = []
+        for item in value:
+            result.extend(_parse_api_keys(item))
+        return _dedupe([k for k in result if k])
+    parts = re.split(r'[\r\n,;]+', str(value))
+    return _dedupe([p.strip() for p in parts if p.strip()])
+
+
+class APIKeyPool:
+    """Manages a pool of API keys for a provider with rate-limit cooldown tracking."""
+
+    def __init__(self, keys, provider_name="llm", cooldown_seconds=300):
+        self.keys = _parse_api_keys(keys)
+        self.provider_name = str(provider_name).lower()
+        self.cooldown_seconds = cooldown_seconds
+
+    def _cooldown_key(self, api_key):
+        digest = hashlib.sha256(f"{self.provider_name}|{api_key}".encode("utf-8")).hexdigest()[:20]
+        return f"llm:key_cooldown:{self.provider_name}:{digest}"
+
+    def is_on_cooldown(self, api_key):
+        if not api_key:
+            return False
+        return bool(cache.get(self._cooldown_key(api_key)))
+
+    def mark_exhausted(self, api_key, cooldown=None):
+        """Mark an API key as temporarily exhausted (HTTP 429 quota reached)."""
+        if not api_key:
+            return
+        ttl = cooldown or self.cooldown_seconds
+        cache.set(self._cooldown_key(api_key), True, timeout=ttl)
+        logger.warning(
+            "API key for %s marked on cooldown for %ss due to quota/rate limit.",
+            self.provider_name, ttl,
+        )
+
+    def mark_healthy(self, api_key):
+        """Clear cooldown for a key if it was marked."""
+        if api_key:
+            cache.delete(self._cooldown_key(api_key))
+
+    def active_keys(self):
+        """Returns non-cooldown keys first. If all configured keys are on cooldown,
+        falls back to all configured keys so transient cooldowns do not lock out indefinitely."""
+        if not self.keys:
+            return []
+        available = [k for k in self.keys if not self.is_on_cooldown(k)]
+        if available:
+            return available
+        return list(self.keys)
+
+    @property
+    def primary_key(self):
+        active = self.active_keys()
+        return active[0] if active else (self.keys[0] if self.keys else "")
+
+    def __len__(self):
+        return len(self.keys)
+
+    def __bool__(self):
+        return bool(self.keys)
 
 
 def _parse_json_content(content):
@@ -228,17 +317,29 @@ class GroqLLMService(LLMService):
 
     provider_name = "groq"
 
-    def __init__(self, api_key, model, timeout, max_retries, temperature, base_url, max_output_tokens=2048):
-        self.api_key = api_key
-        self.model = model
+    def __init__(self, api_key=None, model=None, timeout=30, max_retries=2, temperature=0.0, base_url="", max_output_tokens=2048, api_keys=None):
+        self.key_pool = APIKeyPool(api_keys or api_key or "", provider_name=self.provider_name)
+        self.model = (model or "").strip()
         self.timeout = timeout
         self.max_retries = max_retries
         self.temperature = temperature
         self.base_url = base_url.rstrip("/")
         self.max_output_tokens = max_output_tokens
 
+    @property
+    def api_key(self):
+        return self.key_pool.primary_key
+
+    @api_key.setter
+    def api_key(self, val):
+        self.key_pool = APIKeyPool(val, provider_name=self.provider_name)
+
+    @property
+    def api_keys(self):
+        return self.key_pool.keys
+
     def generate_structured(self, prompt, schema):
-        if not self.model or not self.api_key:
+        if not self.model or not self.key_pool:
             raise LLMModelUnavailableError()
 
         full_prompt = (
@@ -253,72 +354,86 @@ class GroqLLMService(LLMService):
             "temperature": self.temperature,
             "max_tokens": self.max_output_tokens,
         }).encode("utf-8")
-        request = Request(
-            f"{self.base_url}/chat/completions",
-            data=payload,
-            headers={
-                "Content-Type": "application/json",
-                "Authorization": f"Bearer {self.api_key}",
-                "User-Agent": "IntelliResume/1.0",
-            },
-            method="POST",
-        )
 
-        for attempt in range(self.max_retries + 1):
-            try:
-                with urlopen(request, timeout=self.timeout) as response:
-                    body = json.loads(response.read().decode("utf-8"))
-                choices = body.get("choices")
-                if not isinstance(choices, list) or not choices:
-                    raise LLMEmptyResponseError()
-                content = (choices[0].get("message") or {}).get("content")
-                if not isinstance(content, str) or not content.strip():
-                    raise LLMEmptyResponseError()
+        last_exc = None
+        active_keys = self.key_pool.active_keys()
+
+        for key_index, current_key in enumerate(active_keys):
+            request = Request(
+                f"{self.base_url}/chat/completions",
+                data=payload,
+                headers={
+                    "Content-Type": "application/json",
+                    "Authorization": f"Bearer {current_key}",
+                    "User-Agent": "IntelliResume/1.0",
+                },
+                method="POST",
+            )
+
+            for attempt in range(self.max_retries + 1):
                 try:
-                    return json.loads(content)
-                except json.JSONDecodeError as exc:
-                    raise LLMInvalidResponseError() from exc
-            except HTTPError as exc:
-                detail = exc.read().decode(errors="replace") if hasattr(exc, "read") else ""
-                if exc.code in (401, 403):
-                    logger.error(
-                        "%s rejected the API key (HTTP %s) for model %s.",
-                        self.provider_name, exc.code, self.model,
-                    )
-                    raise LLMAuthError() from exc
-                if exc.code == 404:
-                    logger.warning(
-                        "%s model %s is unavailable (HTTP 404): %s",
-                        self.provider_name, self.model, detail,
-                    )
-                    raise LLMModelUnavailableError() from exc
-                if exc.code == 429:
-                    logger.warning(
-                        "%s rate-limited model %s (HTTP 429): %s",
-                        self.provider_name, self.model, detail,
-                    )
-                else:
-                    logger.error(
-                        "%s request to %s failed (HTTP %s): %s",
-                        self.provider_name, self.model, exc.code, detail,
-                    )
-                raise LLMServiceError() from exc
-            except (socket.timeout, TimeoutError) as exc:
-                if attempt == self.max_retries:
-                    logger.warning(
-                        "%s timed out calling model %s after %s attempt(s).",
-                        self.provider_name, self.model, attempt + 1,
-                    )
-                    raise LLMTimeoutError() from exc
-            except (URLError, ConnectionError) as exc:
-                if attempt == self.max_retries:
-                    logger.error(
-                        "%s was unreachable for model %s after %s attempt(s): %s",
-                        self.provider_name, self.model, attempt + 1, exc,
-                    )
+                    with urlopen(request, timeout=self.timeout) as response:
+                        body = json.loads(response.read().decode("utf-8"))
+                    choices = body.get("choices")
+                    if not isinstance(choices, list) or not choices:
+                        raise LLMEmptyResponseError()
+                    content = (choices[0].get("message") or {}).get("content")
+                    if not isinstance(content, str) or not content.strip():
+                        raise LLMEmptyResponseError()
+                    try:
+                        return json.loads(content)
+                    except json.JSONDecodeError as exc:
+                        raise LLMInvalidResponseError() from exc
+                except HTTPError as exc:
+                    detail = exc.read().decode(errors="replace") if hasattr(exc, "read") else ""
+                    if exc.code in (401, 403):
+                        logger.error(
+                            "%s rejected the API key (HTTP %s) for model %s.",
+                            self.provider_name, exc.code, self.model,
+                        )
+                        self.key_pool.mark_exhausted(current_key, cooldown=600)
+                        if key_index == len(active_keys) - 1 and len(active_keys) == 1:
+                            raise LLMAuthError() from exc
+                        break
+                    if exc.code == 404:
+                        logger.warning(
+                            "%s model %s is unavailable (HTTP 404): %s",
+                            self.provider_name, self.model, detail,
+                        )
+                        raise LLMModelUnavailableError() from exc
+                    if exc.code == 429:
+                        logger.warning(
+                            "%s rate-limited model %s on key %s... (HTTP 429): %s",
+                            self.provider_name, self.model, current_key[:8], detail,
+                        )
+                        self.key_pool.mark_exhausted(current_key)
+                        last_exc = LLMQuotaExceededError()
+                        break
+                    else:
+                        logger.error(
+                            "%s request to %s failed (HTTP %s): %s",
+                            self.provider_name, self.model, exc.code, detail,
+                        )
                     raise LLMServiceError() from exc
+                except (socket.timeout, TimeoutError) as exc:
+                    if attempt == self.max_retries:
+                        logger.warning(
+                            "%s timed out calling model %s after %s attempt(s).",
+                            self.provider_name, self.model, attempt + 1,
+                        )
+                        raise LLMTimeoutError() from exc
+                except (URLError, ConnectionError) as exc:
+                    if attempt == self.max_retries:
+                        logger.error(
+                            "%s was unreachable for model %s after %s attempt(s): %s",
+                            self.provider_name, self.model, attempt + 1, exc,
+                        )
+                        raise LLMServiceError() from exc
 
-        raise LLMServiceError()
+        if isinstance(last_exc, LLMQuotaExceededError):
+            raise LLMHighDemandError()
+
+        raise last_exc or LLMServiceError()
 
     def check_model_available(self):
         if not self.model or not self.api_key:
@@ -353,6 +468,45 @@ class GroqLLMService(LLMService):
             raise LLMModelUnavailableError()
         return True
 
+    def probe_model(self, model=None):
+        target = model or self.model
+        key = self.api_key
+        if not target or not key:
+            return False, "No model or API key configured"
+        started = time.monotonic()
+        payload = json.dumps({
+            "model": target,
+            "messages": [{"role": "user", "content": 'Reply with {"ok": true} and nothing else.'}],
+            "temperature": self.temperature,
+            "max_tokens": 64,
+        }).encode("utf-8")
+        request = Request(
+            f"{self.base_url}/chat/completions",
+            data=payload,
+            headers={
+                "Content-Type": "application/json",
+                "Authorization": f"Bearer {key}",
+                "User-Agent": "IntelliResume/1.0",
+            },
+            method="POST",
+        )
+        try:
+            with urlopen(request, timeout=min(self.timeout, 15)) as response:
+                body = json.loads(response.read().decode("utf-8"))
+            choices = body.get("choices")
+            if isinstance(choices, list) and choices:
+                return True, f"answered in {time.monotonic() - started:.1f}s"
+            return False, "empty choices returned"
+        except HTTPError as exc:
+            detail = exc.read().decode(errors="replace") if hasattr(exc, "read") else ""
+            return False, f"HTTP {exc.code}: {detail[:120]}".strip()
+        except LLMServiceError as exc:
+            return False, exc.code
+        except (socket.timeout, TimeoutError):
+            return False, "timed out"
+        except (URLError, ConnectionError) as exc:
+            return False, f"network error: {exc}"
+
 
 class KiraLLMService(GroqLLMService):
     """Client for Kira (kiraai.vn), an OpenAI-compatible aggregator API.
@@ -386,6 +540,261 @@ class OpenRouterLLMService(GroqLLMService):
     admin Configuration tab) — users never pick a model, only optionally a
     provider, and only when ``AI_PROVIDER_SELECTION_ENABLED`` is on.
     """
+
+
+class DahlLLMService(LLMService):
+    """Client for Dahl Global (inference.dahl.global), an OpenAI-compatible
+    inference platform hosting models like MiniMaxAI/MiniMax-M2.7,
+    zai-org/GLM-5.3-Flash, and deepseek-ai/DeepSeek-V4-Flash-0731.
+
+    Supports an in-provider fallback chain across candidate models: if the
+    first-choice model is unavailable, rate-limited, or overloaded, the request
+    automatically falls back to the next model in the chain before failing over
+    to another provider.
+    """
+
+    provider_name = "dahl"
+
+    def __init__(
+        self,
+        api_key=None,
+        model=None,
+        timeout=30,
+        max_retries=2,
+        temperature=0.0,
+        base_url="https://inference.dahl.global/v1",
+        fallback_models=(),
+        max_output_tokens=8192,
+        api_keys=None,
+    ):
+        self.key_pool = APIKeyPool(api_keys or api_key or "", provider_name="dahl")
+        self.model = (model or "").strip()
+        self.timeout = timeout
+        self.max_retries = max_retries
+        self.temperature = temperature
+        self.base_url = base_url.rstrip("/")
+        self.fallback_models = _as_list(fallback_models)
+        self.max_output_tokens = max_output_tokens
+        self.last_model_used = None
+
+    @property
+    def api_key(self):
+        return self.key_pool.primary_key
+
+    @api_key.setter
+    def api_key(self, val):
+        self.key_pool = APIKeyPool(val, provider_name="dahl")
+
+    @property
+    def api_keys(self):
+        return self.key_pool.keys
+
+    def candidate_models(self):
+        """Candidate models tried in order: primary model followed by configured fallbacks."""
+        return _dedupe([self.model, *self.fallback_models])
+
+    def generate_structured(self, prompt, schema):
+        if not self.key_pool:
+            logger.error("No Dahl API key is configured - add DAHL_API_KEY in the admin Configuration tab.")
+            raise LLMAuthError()
+
+        candidates = self.candidate_models()
+        if not candidates:
+            logger.error("No usable Dahl model configured.")
+            raise LLMModelUnavailableError()
+
+        full_prompt = (
+            f"{prompt}\n\nRespond with a single JSON object only, with no "
+            f"surrounding text, conforming exactly to this JSON schema:\n"
+            f"{json.dumps(schema)}"
+        )
+
+        last_exc = None
+        for index, model in enumerate(candidates):
+            is_last_model = index == len(candidates) - 1
+            active_keys = self.key_pool.active_keys()
+
+            for key_index, current_key in enumerate(active_keys):
+                attempts = self.max_retries + 1
+                attempt = 0
+                use_json_object_format = True
+                key_exhausted = False
+
+                while attempt < attempts:
+                    payload_dict = {
+                        "model": model,
+                        "messages": [{"role": "user", "content": full_prompt}],
+                        "temperature": self.temperature,
+                        "max_tokens": self.max_output_tokens,
+                    }
+                    if use_json_object_format:
+                        payload_dict["response_format"] = {"type": "json_object"}
+
+                    payload = json.dumps(payload_dict).encode("utf-8")
+                    request = Request(
+                        f"{self.base_url}/chat/completions",
+                        data=payload,
+                        headers={
+                            "Content-Type": "application/json",
+                            "Authorization": f"Bearer {current_key}",
+                            "User-Agent": "IntelliResume/1.0",
+                        },
+                        method="POST",
+                    )
+
+                    try:
+                        with urlopen(request, timeout=self.timeout) as response:
+                            body = json.loads(response.read().decode("utf-8"))
+                        choices = body.get("choices")
+                        if not isinstance(choices, list) or not choices:
+                            raise LLMEmptyResponseError()
+                        content = (choices[0].get("message") or {}).get("content")
+                        if not isinstance(content, str) or not content.strip():
+                            raise LLMEmptyResponseError()
+                        result = _parse_json_content(content)
+                        self.last_model_used = model
+                        if index:
+                            logger.warning(
+                                "Served by fallback Dahl model %s (first choice: %s).",
+                                model, candidates[0],
+                            )
+                        if key_index:
+                            logger.info(
+                                "Served by fallback token in Dahl key pool (token #%s).", key_index + 1
+                            )
+                        return result
+                    except HTTPError as exc:
+                        detail = exc.read().decode(errors="replace") if hasattr(exc, "read") else ""
+                        if exc.code in (401, 403):
+                            logger.error("Dahl rejected the API key (HTTP %s) for model %s: %s", exc.code, model, detail)
+                            self.key_pool.mark_exhausted(current_key, cooldown=600)
+                            if key_index == len(active_keys) - 1 and len(active_keys) == 1:
+                                raise LLMAuthError() from exc
+                            key_exhausted = True
+                            break
+                        if exc.code == 400 and use_json_object_format and "response_format" in detail.lower():
+                            use_json_object_format = False
+                            continue
+                        if exc.code == 404:
+                            logger.warning("Dahl model %s is unavailable (HTTP 404): %s", model, detail)
+                            last_exc = LLMModelUnavailableError()
+                            break
+                        if exc.code == 429:
+                            logger.warning("Dahl rate-limited model %s on key %s... (HTTP 429): %s", model, current_key[:8], detail)
+                            self.key_pool.mark_exhausted(current_key)
+                            last_exc = LLMQuotaExceededError()
+                            key_exhausted = True
+                            break
+                        elif exc.code >= 500:
+                            logger.warning("Dahl model %s server error (HTTP %s): %s", model, exc.code, detail)
+                            last_exc = LLMServiceError()
+                            if not is_last_model:
+                                break
+                        else:
+                            logger.error("Dahl request to %s failed (HTTP %s): %s", model, exc.code, detail)
+                            last_exc = LLMServiceError()
+                            if not is_last_model:
+                                break
+                        attempt += 1
+                        if attempt < attempts:
+                            time.sleep(min(2 ** (attempt - 1), 4))
+                    except (socket.timeout, TimeoutError) as exc:
+                        attempt += 1
+                        if attempt == attempts:
+                            logger.warning("Dahl timed out calling model %s after %s attempt(s).", model, attempt)
+                            last_exc = LLMTimeoutError()
+                            if not is_last_model:
+                                break
+                    except (URLError, ConnectionError) as exc:
+                        attempt += 1
+                        if attempt == attempts:
+                            logger.error("Dahl was unreachable for model %s after %s attempt(s): %s", model, attempt, exc)
+                            last_exc = LLMServiceError()
+                            if not is_last_model:
+                                break
+
+                if not key_exhausted:
+                    # Model issue rather than key quota: don't burn other keys on this dead model
+                    break
+
+        if isinstance(last_exc, LLMQuotaExceededError):
+            raise LLMHighDemandError()
+
+        raise last_exc or LLMModelUnavailableError()
+
+    def probe_model(self, model=None, api_key=None):
+        """One tiny real generation against model for diagnostics."""
+        target_model = model or self.model
+        target_key = api_key or self.api_key
+        if not target_model or not target_key:
+            return False, "No model or API key configured"
+
+        started = time.monotonic()
+        payload = json.dumps({
+            "model": target_model,
+            "messages": [{"role": "user", "content": 'Reply with {"ok": true} and nothing else.'}],
+            "temperature": self.temperature,
+            "max_tokens": 64,
+        }).encode("utf-8")
+        request = Request(
+            f"{self.base_url}/chat/completions",
+            data=payload,
+            headers={
+                "Content-Type": "application/json",
+                "Authorization": f"Bearer {target_key}",
+                "User-Agent": "IntelliResume/1.0",
+            },
+            method="POST",
+        )
+        try:
+            with urlopen(request, timeout=min(self.timeout, 15)) as response:
+                body = json.loads(response.read().decode("utf-8"))
+            choices = body.get("choices")
+            if isinstance(choices, list) and choices:
+                return True, f"answered in {time.monotonic() - started:.1f}s"
+            return False, "empty choices returned"
+        except HTTPError as exc:
+            detail = exc.read().decode(errors="replace") if hasattr(exc, "read") else ""
+            return False, f"HTTP {exc.code}: {detail[:120]}".strip()
+        except LLMServiceError as exc:
+            return False, exc.code
+        except (socket.timeout, TimeoutError):
+            return False, "timed out"
+        except (URLError, ConnectionError) as exc:
+            return False, f"network error: {exc}"
+
+    def check_model_available(self):
+        if not self.model or not self.api_key:
+            raise LLMModelUnavailableError()
+        request = Request(
+            f"{self.base_url}/models",
+            headers={
+                "Authorization": f"Bearer {self.api_key}",
+                "User-Agent": "IntelliResume/1.0",
+            },
+            method="GET",
+        )
+        try:
+            with urlopen(request, timeout=min(self.timeout, 10)) as response:
+                body = json.loads(response.read().decode("utf-8"))
+            models = body.get("data")
+            if isinstance(models, list):
+                model_ids = {item.get("id") for item in models if isinstance(item, dict)}
+                candidates = self.candidate_models()
+                if any(m in model_ids for m in candidates):
+                    return True
+                raise LLMModelUnavailableError()
+            return True
+        except HTTPError as exc:
+            if exc.code in (401, 403):
+                raise LLMAuthError() from exc
+            if exc.code == 404:
+                return True
+            raise LLMServiceError() from exc
+        except (socket.timeout, TimeoutError) as exc:
+            raise LLMTimeoutError() from exc
+        except (URLError, ConnectionError) as exc:
+            raise LLMServiceError() from exc
 
 
 def _to_gemini_schema(schema):
@@ -571,12 +980,12 @@ class GeminiLLMService(LLMService):
 
     def __init__(
         self,
-        api_key,
-        model,
-        timeout,
-        max_retries,
-        temperature,
-        base_url,
+        api_key=None,
+        model=None,
+        timeout=30,
+        max_retries=2,
+        temperature=0.0,
+        base_url="https://generativelanguage.googleapis.com/v1beta",
         max_output_tokens=8192,
         fallback_models=(),
         discover_models=True,
@@ -584,8 +993,9 @@ class GeminiLLMService(LLMService):
         auto_exclude=(),
         max_model_attempts=4,
         model_list_ttl=3600,
+        api_keys=None,
     ):
-        self.api_key = (api_key or "").strip()
+        self.key_pool = APIKeyPool(api_keys or api_key or "", provider_name="gemini")
         # May be empty: with discovery on, the live list can still serve
         # requests with nothing configured at all.
         self.model = (model or "").strip()
@@ -604,6 +1014,18 @@ class GeminiLLMService(LLMService):
         # serve from a fallback, and anyone judging output quality needs that.
         self.last_model_used = None
 
+    @property
+    def api_key(self):
+        return self.key_pool.primary_key
+
+    @api_key.setter
+    def api_key(self, val):
+        self.key_pool = APIKeyPool(val, provider_name="gemini")
+
+    @property
+    def api_keys(self):
+        return self.key_pool.keys
+
     # -- model selection ------------------------------------------------------
 
     def available_models(self):
@@ -615,10 +1037,14 @@ class GeminiLLMService(LLMService):
         request. Raises ``LLMAuthError`` when Google rejects the key - the one
         failure here that must not be quietly worked around.
         """
-        if not self.discover_models:
+        if not self.discover_models or not self.key_pool:
             return None
 
-        digest = hashlib.sha256(f"{self.base_url}|{self.api_key}".encode("utf-8")).hexdigest()[:24]
+        active_key = self.key_pool.primary_key
+        if not active_key:
+            return None
+
+        digest = hashlib.sha256(f"{self.base_url}|{active_key}".encode("utf-8")).hexdigest()[:24]
         cache_key = f"llm:gemini:models:{digest}"
         cached = cache.get(cache_key)
         if cached is not None:
@@ -632,7 +1058,7 @@ class GeminiLLMService(LLMService):
                 url += f"&pageToken={quote(page_token)}"
             request = Request(
                 url,
-                headers={"x-goog-api-key": self.api_key, "User-Agent": "IntelliResume/1.0"},
+                headers={"x-goog-api-key": active_key, "User-Agent": "IntelliResume/1.0"},
                 method="GET",
             )
             try:
@@ -692,7 +1118,7 @@ class GeminiLLMService(LLMService):
     # -- generation -------------------------------------------------------------
 
     def generate_structured(self, prompt, schema):
-        if not self.api_key:
+        if not self.key_pool:
             logger.error("No Gemini API key is configured - add GEMINI_API_KEY in the admin Configuration tab.")
             raise LLMAuthError()
 
@@ -709,100 +1135,121 @@ class GeminiLLMService(LLMService):
 
         for index, model in enumerate(candidates):
             is_last_model = index == len(candidates) - 1
-            attempts = self.max_retries + 1
             send_thinking = not _model_rejects_thinking_budget(model)
             retried_without_thinking = False
-            attempt = 0
 
-            while attempt < attempts:
-                try:
-                    body = self._post_generate(model, prompt, response_schema, send_thinking)
-                except HTTPError as exc:
-                    status_name, message, reasons = _google_error_details(exc)
-                    if _is_key_rejection(exc.code, message, reasons):
-                        logger.error("Gemini rejected the API key (HTTP %s %s): %s", exc.code, status_name, message)
-                        raise LLMAuthError() from exc
-                    if exc.code == 400 and send_thinking:
-                        # Some models refuse a zero thinking budget (verified:
-                        # the Flash-Lite models). Google's error doesn't say so,
-                        # so try once without it; it is only remembered if that
-                        # then works, so an unrelated 400 teaches nothing wrong.
-                        send_thinking = False
-                        retried_without_thinking = True
-                        continue
-                    if exc.code == 404:
-                        logger.warning("Gemini model %s is not available (HTTP 404): %s", model, message)
-                        last_exc = LLMModelUnavailableError()
-                        break
-                    if exc.code == 429:
-                        logger.warning("Gemini model %s is out of quota (HTTP 429 %s): %s", model, status_name, message)
-                        last_exc = LLMQuotaExceededError()
-                        break
-                    if exc.code >= 500:
-                        logger.warning(
-                            "Gemini model %s is unavailable (HTTP %s %s): %s", model, exc.code, status_name, message
+            active_keys = self.key_pool.active_keys()
+            for key_index, current_key in enumerate(active_keys):
+                attempts = self.max_retries + 1
+                attempt = 0
+                key_exhausted = False
+
+                while attempt < attempts:
+                    try:
+                        body = self._post_generate(
+                            model, prompt, response_schema, send_thinking, api_key=current_key
                         )
-                        last_exc = LLMServiceError()
-                        if not is_last_model:
-                            # Fail over at once instead of retrying: an overloaded
-                            # model is rarely back within seconds, and another one
-                            # usually answers now. Measured in the outage this was
-                            # written for, retrying the first model twice added ~7s
-                            # before failing over anyway. Only the last model left
-                            # is worth retrying.
+                    except HTTPError as exc:
+                        status_name, message, reasons = _google_error_details(exc)
+                        if _is_key_rejection(exc.code, message, reasons):
+                            logger.error(
+                                "Gemini rejected API key %s... (HTTP %s %s): %s",
+                                current_key[:8], exc.code, status_name, message,
+                            )
+                            self.key_pool.mark_exhausted(current_key, cooldown=600)
+                            if key_index == len(active_keys) - 1 and len(active_keys) == 1:
+                                raise LLMAuthError() from exc
+                            key_exhausted = True
                             break
+                        if exc.code == 400 and send_thinking:
+                            send_thinking = False
+                            retried_without_thinking = True
+                            continue
+                        if exc.code == 404:
+                            logger.warning("Gemini model %s is not available (HTTP 404): %s", model, message)
+                            last_exc = LLMModelUnavailableError()
+                            break
+                        if exc.code == 429:
+                            logger.warning(
+                                "Gemini model %s is out of quota on key %s... (HTTP 429 %s): %s",
+                                model, current_key[:8], status_name, message,
+                            )
+                            self.key_pool.mark_exhausted(current_key)
+                            last_exc = LLMQuotaExceededError()
+                            key_exhausted = True
+                            break
+                        if exc.code >= 500:
+                            logger.warning(
+                                "Gemini model %s is unavailable (HTTP %s %s): %s", model, exc.code, status_name, message
+                            )
+                            last_exc = LLMServiceError()
+                            if not is_last_model:
+                                break
+                            attempt += 1
+                            if attempt < attempts:
+                                time.sleep(min(2 ** (attempt - 1), 4))
+                            continue
+                        logger.error("Gemini request to %s failed (HTTP %s %s): %s", model, exc.code, status_name, message)
+                        raise LLMServiceError() from exc
+                    except (socket.timeout, TimeoutError) as exc:
                         attempt += 1
                         if attempt < attempts:
-                            time.sleep(min(2 ** (attempt - 1), 4))
-                        continue
-                    # Any other 4xx describes the request itself, and every
-                    # other model would reject it the same way.
-                    logger.error("Gemini request to %s failed (HTTP %s %s): %s", model, exc.code, status_name, message)
-                    raise LLMServiceError() from exc
-                except (socket.timeout, TimeoutError) as exc:
-                    attempt += 1
-                    if attempt < attempts:
-                        continue
-                    # A request that ran to the full timeout would do the same
-                    # on the next model; stopping bounds the total wait.
-                    raise LLMTimeoutError() from exc
-                except (URLError, ConnectionError) as exc:
-                    logger.warning("Could not reach Gemini: %s", exc)
-                    attempt += 1
-                    if attempt < attempts:
-                        time.sleep(1)
-                        continue
-                    # The network is down for every model, not only this one.
-                    raise LLMServiceError() from exc
-                else:
-                    result = self._parse_generate_body(body)
-                    if retried_without_thinking:
-                        logger.info("Gemini model %s rejects thinkingBudget=0; it will be sent without it.", model)
-                        _remember_thinking_budget_rejected(model)
-                    self.last_model_used = model
-                    if index:
-                        logger.warning(
-                            "Served by fallback Gemini model %s (first choice: %s).", model, candidates[0]
-                        )
-                    return result
+                            continue
+                        raise LLMTimeoutError() from exc
+                    except (URLError, ConnectionError) as exc:
+                        logger.warning("Could not reach Gemini: %s", exc)
+                        attempt += 1
+                        if attempt < attempts:
+                            time.sleep(1)
+                            continue
+                        raise LLMServiceError() from exc
+                    else:
+                        result = self._parse_generate_body(body)
+                        if retried_without_thinking:
+                            logger.info("Gemini model %s rejects thinkingBudget=0; it will be sent without it.", model)
+                            _remember_thinking_budget_rejected(model)
+                        self.last_model_used = model
+                        if index:
+                            logger.warning(
+                                "Served by fallback Gemini model %s (first choice: %s).", model, candidates[0]
+                            )
+                        if key_index:
+                            logger.info(
+                                "Served by fallback token in Gemini key pool (token #%s).", key_index + 1
+                            )
+                        return result
+
+                if not key_exhausted:
+                    # Model failed (404/500/timeout), don't try other keys on this dead model
+                    break
+
+        if isinstance(last_exc, LLMQuotaExceededError):
+            raise LLMHighDemandError()
 
         raise last_exc or LLMModelUnavailableError()
 
-    def probe_model(self, model):
+    def probe_model(self, model=None, api_key=None):
         """One tiny real generation against exactly ``model``, for the
         ``check_ai`` command. Returns ``(ok, detail)`` and never raises for a
         provider error - a diagnostic that stops at the first failing model
         says nothing about the models after it."""
+        target_model = model or self.model
+        target_key = api_key or self.api_key
+        if not target_model or not target_key:
+            return False, "No model or API key configured"
+
         schema = _to_gemini_schema(_PROBE_SCHEMA)
-        send_thinking = not _model_rejects_thinking_budget(model)
+        send_thinking = not _model_rejects_thinking_budget(target_model)
         started = time.monotonic()
 
         for _ in range(2):
             try:
-                body = self._post_generate(model, _PROBE_PROMPT, schema, send_thinking, max_output_tokens=64)
+                body = self._post_generate(
+                    target_model, _PROBE_PROMPT, schema, send_thinking, max_output_tokens=64, api_key=target_key
+                )
                 self._parse_generate_body(body)
                 if not send_thinking:
-                    _remember_thinking_budget_rejected(model)
+                    _remember_thinking_budget_rejected(target_model)
                 return True, f"answered in {time.monotonic() - started:.1f}s"
             except HTTPError as exc:
                 status_name, message, _ = _google_error_details(exc)
@@ -821,7 +1268,7 @@ class GeminiLLMService(LLMService):
     def check_model_available(self):
         """Readiness: the key is accepted and at least one usable model is
         offered to it. Spends no generation call."""
-        if not self.api_key:
+        if not self.key_pool:
             logger.error("No Gemini API key is configured - add GEMINI_API_KEY in the admin Configuration tab.")
             raise LLMAuthError()
 
@@ -835,10 +1282,11 @@ class GeminiLLMService(LLMService):
         # Discovery is off or the list was unreachable: probe each configured
         # model's metadata directly instead.
         last_exc = None
+        target_key = self.api_key
         for model in self.candidate_models():
             request = Request(
                 f"{self.base_url}/models/{quote(model, safe='-._')}",
-                headers={"x-goog-api-key": self.api_key, "User-Agent": "IntelliResume/1.0"},
+                headers={"x-goog-api-key": target_key, "User-Agent": "IntelliResume/1.0"},
                 method="GET",
             )
             try:
@@ -862,7 +1310,7 @@ class GeminiLLMService(LLMService):
 
     # -- wire format ------------------------------------------------------------
 
-    def _post_generate(self, model, prompt, response_schema, send_thinking, max_output_tokens=None):
+    def _post_generate(self, model, prompt, response_schema, send_thinking, max_output_tokens=None, api_key=None):
         generation_config = {
             "temperature": self.temperature,
             "responseMimeType": "application/json",
@@ -878,12 +1326,13 @@ class GeminiLLMService(LLMService):
             "contents": [{"role": "user", "parts": [{"text": prompt}]}],
             "generationConfig": generation_config,
         }).encode("utf-8")
+        target_key = api_key or self.api_key
         request = Request(
             f"{self.base_url}/models/{quote(model, safe='-._')}:generateContent",
             data=payload,
             headers={
                 "Content-Type": "application/json",
-                "x-goog-api-key": self.api_key,
+                "x-goog-api-key": target_key,
                 "User-Agent": "IntelliResume/1.0",
             },
             method="POST",
@@ -943,10 +1392,15 @@ class FallbackLLMService(LLMService):
         except LLMServiceError as exc:
             logger.warning(
                 "Primary AI provider failed (%s); retrying once with fallback provider %s.",
-                exc.code, self.fallback_provider_name,
+                getattr(exc, "code", "LLM_ERROR"), self.fallback_provider_name,
             )
             self.used_fallback = True
-            return self.fallback.generate_structured(prompt, schema)
+            try:
+                return self.fallback.generate_structured(prompt, schema)
+            except (LLMQuotaExceededError, LLMHighDemandError):
+                raise LLMHighDemandError()
+            except LLMServiceError:
+                raise
 
     def check_model_available(self):
         try:
@@ -987,15 +1441,19 @@ def requested_provider(value):
     return value
 
 
-def _provider_api_key(setting_name):
-    """A provider API key: the admin Configuration tab first (stored
+def _provider_api_keys(setting_name):
+    """A provider's API key(s): the admin Configuration tab first (stored
     encrypted; get_config_value decrypts it), then the server environment.
-
-    Stripped, because a key pasted with a trailing space or newline is
-    rejected by every provider - and "I pasted the new key and it still
-    doesn't work" is exactly the failure this must not produce.
+    Returns a list of parsed, non-empty, stripped tokens.
     """
-    return str(get_config_value(setting_name, getattr(settings, setting_name, "")) or "").strip()
+    raw = str(get_config_value(setting_name, getattr(settings, setting_name, "")) or "").strip()
+    return _parse_api_keys(raw)
+
+
+def _provider_api_key(setting_name):
+    """The primary active key for a setting, for single-key consumers."""
+    keys = _provider_api_keys(setting_name)
+    return keys[0] if keys else ""
 
 
 def _build_client(provider, timeout, max_retries, temperature, max_output_tokens, api_key_override=None):
@@ -1007,8 +1465,10 @@ def _build_client(provider, timeout, max_retries, temperature, max_output_tokens
     written to a setting, and never logged.
     """
     if provider == "groq":
+        keys = _parse_api_keys(api_key_override) if api_key_override else _provider_api_keys("GROQ_API_KEY")
         return GroqLLMService(
-            api_key=api_key_override or _provider_api_key("GROQ_API_KEY"),
+            api_key=keys[0] if keys else "",
+            api_keys=keys,
             model=get_config_value("GROQ_MODEL", settings.GROQ_MODEL),
             timeout=timeout,
             max_retries=max_retries,
@@ -1018,8 +1478,10 @@ def _build_client(provider, timeout, max_retries, temperature, max_output_tokens
         )
 
     if provider == "gemini":
+        keys = _parse_api_keys(api_key_override) if api_key_override else _provider_api_keys("GEMINI_API_KEY")
         return GeminiLLMService(
-            api_key=api_key_override or _provider_api_key("GEMINI_API_KEY"),
+            api_key=keys[0] if keys else "",
+            api_keys=keys,
             model=get_config_value("GEMINI_MODEL", settings.GEMINI_MODEL),
             timeout=timeout,
             max_retries=max_retries,
@@ -1037,8 +1499,10 @@ def _build_client(provider, timeout, max_retries, temperature, max_output_tokens
         )
 
     if provider == "kira":
+        keys = _parse_api_keys(api_key_override) if api_key_override else _provider_api_keys("KIRA_API_KEY")
         return KiraLLMService(
-            api_key=api_key_override or _provider_api_key("KIRA_API_KEY"),
+            api_key=keys[0] if keys else "",
+            api_keys=keys,
             model=get_config_value("KIRA_MODEL", settings.KIRA_MODEL),
             timeout=timeout,
             max_retries=max_retries,
@@ -1048,13 +1512,29 @@ def _build_client(provider, timeout, max_retries, temperature, max_output_tokens
         )
 
     if provider == "openrouter":
+        keys = _parse_api_keys(api_key_override) if api_key_override else _provider_api_keys("OPENROUTER_API_KEY")
         return OpenRouterLLMService(
-            api_key=api_key_override or _provider_api_key("OPENROUTER_API_KEY"),
+            api_key=keys[0] if keys else "",
+            api_keys=keys,
             model=get_config_value("OPENROUTER_MODEL", settings.OPENROUTER_MODEL),
             timeout=timeout,
             max_retries=max_retries,
             temperature=temperature,
             base_url=get_config_value("OPENROUTER_BASE_URL", settings.OPENROUTER_BASE_URL),
+            max_output_tokens=max_output_tokens,
+        )
+
+    if provider == "dahl":
+        keys = _parse_api_keys(api_key_override) if api_key_override else _provider_api_keys("DAHL_API_KEY")
+        return DahlLLMService(
+            api_key=keys[0] if keys else "",
+            api_keys=keys,
+            model=get_config_value("DAHL_MODEL", settings.DAHL_MODEL),
+            timeout=timeout,
+            max_retries=max_retries,
+            temperature=temperature,
+            base_url=get_config_value("DAHL_BASE_URL", settings.DAHL_BASE_URL),
+            fallback_models=get_config_value("DAHL_FALLBACK_MODELS", settings.DAHL_FALLBACK_MODELS),
             max_output_tokens=max_output_tokens,
         )
 
