@@ -7,6 +7,7 @@ traced back to a source entry is rejected rather than silently accepted.
 """
 
 import json
+import logging
 import re
 
 from resumes.prompts import TAILORED_RESUME_SCHEMA, build_resume_curation_prompt
@@ -15,6 +16,8 @@ from resumes.services.llm_service import (
     LLMServiceError,
     get_llm_service,
 )
+
+logger = logging.getLogger(__name__)
 
 
 class ResumeCurationGroundingError(LLMServiceError):
@@ -35,17 +38,42 @@ class ResumeCurationAIService:
     ITEM_FIELDS = ("experience", "projects", "education", "certifications")
     MAX_ATTEMPTS = 2
     # A number keeps an immediately trailing magnitude / percent / multiplier
-    # suffix as part of the same token — "1.2k", "50%", "2x", "3M" — so a
+    # or duration/rate suffix as part of the same token — "1.2k", "50%", "2x", "30s" — so a
     # metric written the same way in the candidate's resume and in the
-    # generated text compares equal. Without this the token was split as
-    # "1.2" + "k", and "1.2" was then reported ungrounded because the "1.2k"
-    # in the source has a letter immediately after it (the whole-token
-    # boundary check in `_is_grounded` failed). That surfaced as a spurious
-    # RESUME_CURATION_GROUNDING_FAILED — "we couldn't generate your tailored
-    # resume" — for any candidate whose resume quantifies an achievement
-    # with a k/M/x-style figure.
-    _TOKEN_RE = re.compile(r"[A-Za-z][A-Za-z0-9+#.]*|\d+(?:\.\d+)?(?:[kKmMbBxX]|%)?")
-    _NUMERIC_TOKEN_RE = re.compile(r"^(\d+(?:\.\d+)?)(?:[kmbx%])?$")
+    # generated text compares equal.
+    _TOKEN_RE = re.compile(
+        r"[A-Za-z][A-Za-z0-9+#.]*|\d+(?:\.\d+)?(?:[kKmMbBxX%]|s|ms|sec|secs|seconds|min|mins|hr|hrs|h|d|days|yr|yrs|y|\+)?"
+    )
+    _NUMERIC_TOKEN_RE = re.compile(
+        r"^(\d+(?:\.\d+)?)(?:[kmbx%]|s|ms|sec|secs|seconds|min|mins|hr|hrs|h|d|days|yr|yrs|y|\+)?$",
+        re.IGNORECASE,
+    )
+    _SENTENCE_BREAKS = frozenset(".!?;:\n\r\t\u2022-\u2013\u2014|/(")
+    _COMMON_RESUME_VOCABULARY = frozenset({
+        "background", "experience", "experienced", "skills", "skilled", "summary", "overview",
+        "professional", "proven", "track", "record", "results", "strong", "extensive", "deep",
+        "solid", "hands", "demonstrated", "dedicated", "proficient", "successful", "expertise",
+        "accomplished", "core", "key", "primary", "focus", "focused", "high", "quality",
+        "solutions", "systems", "development", "architecture", "engineering", "engineer",
+        "developer", "role", "roles", "position", "positions", "team", "teams", "work",
+        "project", "projects", "environment", "environments", "industry", "industries",
+        "practices", "responsibilities", "achievements", "contributions", "collaborated",
+        "led", "built", "managed", "designed", "implemented", "delivered", "maintained",
+        "resolved", "improved", "optimized", "developed", "created", "spearheaded",
+        "year", "years", "month", "months", "day", "days", "time", "present", "current",
+        # English grammatical sentence openers
+        "as", "at", "in", "on", "of", "by", "from", "during", "while", "after",
+        "before", "since", "having", "over", "under", "across", "throughout",
+        "alongside", "beyond", "within", "these", "those", "they", "their",
+        "there", "its", "we", "our", "you", "your", "if", "when", "where",
+        "what", "which", "who", "whom", "why", "how", "both", "each", "either",
+        "neither", "not", "all", "any", "some", "many", "more", "most", "less",
+        "other", "another", "such", "than", "then", "though", "although",
+        "because", "but", "or", "so", "yet", "also", "however", "moreover",
+        "therefore", "thus", "here", "now", "once", "only", "own", "same",
+        "very", "just", "even", "still", "again", "further", "additionally",
+        "furthermore", "currently", "previously", "recently",
+    })
 
     def __init__(self, llm_service=None, provider=None, user=None):
         """``user`` is the account the work is being done for. It is used for
@@ -68,9 +96,11 @@ class ResumeCurationAIService:
         retry_feedback = None
         last_error = None
 
-        for _ in range(self.MAX_ATTEMPTS):
+        for attempt in range(1, self.MAX_ATTEMPTS + 1):
             prompt = build_resume_curation_prompt(
-                candidate_source_data=json.dumps(candidate_source_data, sort_keys=True),
+                candidate_source_data=json.dumps(
+                    candidate_source_data, ensure_ascii=False, sort_keys=True
+                ),
                 job_title=job_title,
                 job_description=job_description,
                 job_requirements=json.dumps(job_requirements, sort_keys=True),
@@ -83,6 +113,12 @@ class ResumeCurationAIService:
             except ResumeCurationGroundingError as exc:
                 last_error = exc
                 retry_feedback = exc.violations
+                logger.warning(
+                    "Resume tailoring attempt %s/%s grounding failed: %s",
+                    attempt,
+                    self.MAX_ATTEMPTS,
+                    exc.violations,
+                )
 
         raise last_error
 
@@ -206,26 +242,39 @@ class ResumeCurationAIService:
                         raise LLMSchemaValidationError()
 
     @classmethod
+    def _starts_a_sentence(cls, text, index):
+        cursor = index - 1
+        while cursor >= 0 and text[cursor].isspace():
+            cursor -= 1
+        return cursor < 0 or text[cursor] in cls._SENTENCE_BREAKS
+
+    @classmethod
     def _significant_tokens(cls, text):
         """Tokens that look like facts (numbers, dates, proper nouns) and must be grounded.
 
-        The leading token of each text is skipped since it is almost always a
-        freely-reworded action verb, not a fact.
+        Words starting a sentence (e.g. following a period or bullet) and
+        standard professional resume vocabulary are excluded unless they
+        contain a digit or are an acronym.
         """
-        raw_tokens = cls._TOKEN_RE.findall(text)
         significant = []
-        for index, raw_token in enumerate(raw_tokens):
-            if index == 0:
-                continue
-            # A trailing period is almost always sentence punctuation, not
-            # part of the fact itself (unlike an internal period, as in
-            # "Node.js" or "3.5"), so it is stripped before comparison.
+        for match in cls._TOKEN_RE.finditer(text):
+            raw_token = match.group(0)
             token = raw_token.rstrip(".")
             if not token:
                 continue
             has_digit = any(character.isdigit() for character in token)
             is_capitalized = token[0].isupper()
-            if has_digit or (is_capitalized and len(token) >= 2):
+            lowered = token.lower()
+
+            if has_digit:
+                significant.append(token)
+            elif is_capitalized and len(token) >= 2:
+                # Exclude words that start a sentence (capitalized by English grammar)
+                if cls._starts_a_sentence(text, match.start()) and not token.isupper():
+                    continue
+                # Exclude standard professional and grammatical words
+                if lowered in cls._COMMON_RESUME_VOCABULARY and not token.isupper():
+                    continue
                 significant.append(token)
         return significant
 
@@ -250,18 +299,20 @@ class ResumeCurationAIService:
         if re.search(pattern, candidate_text) is not None:
             return True
 
-        # A numeric fact may be written with or without its magnitude suffix
+        # A numeric fact may be written with or without its magnitude or unit suffix
         # on either side ("1.2k" in the resume, "1.2" in the generated text,
+        # "30s" in the resume, "30" or "30 seconds" in the generated text,
         # or vice versa). Match the numeric part and allow one optional
-        # magnitude/percent character right after it in the source, while
+        # magnitude/percent/unit character right after it in the source, while
         # still refusing an unrelated longer number ("1.2" must not ground
         # "1.28", "12" must not ground "128").
         numeric = cls._NUMERIC_TOKEN_RE.match(normalised)
         if numeric:
+            num_val = re.escape(numeric.group(1))
             loose = (
                 r"(?<![a-z0-9])"
-                + re.escape(numeric.group(1))
-                + r"(?:[kmbx%])?(?![a-z0-9.])"
+                + num_val
+                + r"(?:[kmbx%]|s|ms|sec|seconds|min|mins|hr|hrs|h|d|yr|yrs|y|\+)?(?![a-z0-9.])"
             )
             return re.search(loose, candidate_text) is not None
         return False
@@ -273,8 +324,17 @@ class ResumeCurationAIService:
             for key, value in candidate_source_data.items()
             if key not in {"resume_id", "personal_information"}
         }
-        return cls._normalise_text(json.dumps(groundable, sort_keys=True))
+        return cls._normalise_text(
+            json.dumps(groundable, ensure_ascii=False, sort_keys=True)
+        )
 
     @staticmethod
     def _normalise_text(value):
-        return re.sub(r"\s+", " ", re.sub(r"[^a-z0-9.+#]+", " ", str(value).lower())).strip()
+        text = (
+            str(value)
+            .replace("\u2013", " ")
+            .replace("\u2014", " ")
+            .replace("\u2022", " ")
+            .replace("\xa0", " ")
+        )
+        return re.sub(r"\s+", " ", re.sub(r"[^a-z0-9.+#]+", " ", text.lower())).strip()

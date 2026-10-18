@@ -493,7 +493,11 @@ class UserAIKey(models.Model):
     # supported provider": Ollama is a local server with no key at all, and
     # offering it here would be nonsense.
     PROVIDER_GEMINI = "gemini"
-    PROVIDER_CHOICES = [(PROVIDER_GEMINI, "Google Gemini")]
+    PROVIDER_DAHL = "dahl"
+    PROVIDER_CHOICES = [
+        (PROVIDER_GEMINI, "Google Gemini"),
+        (PROVIDER_DAHL, "Dahl Global"),
+    ]
 
     user = models.ForeignKey(
         settings.AUTH_USER_MODEL,

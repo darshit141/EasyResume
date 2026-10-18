@@ -251,7 +251,7 @@ class JobApplicationAIService:
                 # The addressee the user themselves typed in is a fact they
                 # supplied, so the model may use it.
                 str(recipient_name or ""),
-                json.dumps(job_requirements or {}, sort_keys=True),
+                json.dumps(job_requirements or {}, ensure_ascii=False, sort_keys=True),
             ])
         )
         return f"{candidate_blob} {job_blob}"

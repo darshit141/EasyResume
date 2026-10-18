@@ -74,7 +74,7 @@ FREE_ENTITLEMENTS = {
     # Every provider is available on every plan — Groq and Gemini are no
     # longer Pro-exclusive. Cost is controlled entirely by
     # `ai_calls_per_month` above, not by which provider a request picks.
-    "allowed_ai_providers": ["ollama", "standard", "groq", "gemini", "kira"],
+    "allowed_ai_providers": ["ollama", "standard", "groq", "gemini", "kira", "dahl"],
     "docx_export": False,
     "tailored_resume_version_history": False,
     # Free users may pick one of the built-in resume layout presets; tuning
@@ -109,7 +109,7 @@ PRO_ENTITLEMENTS = {
     # the server's own OpenRouter account, offered as an extra provider for
     # paying users rather than as free-tier capacity. See OPENROUTER_* in
     # settings and resumes.services.llm_service.OpenRouterLLMService.
-    "allowed_ai_providers": ["ollama", "standard", "groq", "gemini", "kira", "openrouter"],
+    "allowed_ai_providers": ["ollama", "standard", "groq", "gemini", "kira", "openrouter", "dahl"],
     "docx_export": True,
     "tailored_resume_version_history": True,
     "resume_template_customization": True,

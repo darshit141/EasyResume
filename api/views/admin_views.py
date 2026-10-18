@@ -1,3 +1,5 @@
+import time
+
 from django.conf import settings
 from django.db import models
 from django.db.models import Count
@@ -11,6 +13,13 @@ from api.models import AdminAuditLog, SystemConfiguration
 from api.utils.audit import mask_secret_for_audit, record_admin_action
 from api.utils.secrets import encrypt_value, is_secret_key
 from api.serializers.admin_serializers import AdminAuditLogSerializer, AdminUserSerializer
+from resumes.services.llm_service import (
+    SUPPORTED_PROVIDERS,
+    resolve_provider,
+    _provider_api_keys,
+    _parse_api_keys,
+    _build_client,
+)
 
 # Dropdown options for settings with a fixed set of values. They are served
 # from here, to staff only, rather than hardcoded in the admin page, so the
@@ -21,6 +30,7 @@ _LLM_PROVIDER_CHOICES = [
     {"value": "gemini", "label": "Google Gemini (hosted, native JSON schema)"},
     {"value": "kira", "label": "Kira (hosted, large context, high limits)"},
     {"value": "openrouter", "label": "OpenRouter (hosted, hundreds of models, Pro/Max only)"},
+    {"value": "dahl", "label": "Dahl Global (hosted: MiniMax, GLM, DeepSeek)"},
 ]
 
 # Every AI setting - provider, models, fallbacks and the provider API keys - is
@@ -36,7 +46,7 @@ DEFAULT_CONFIGS = [
         "key": "LLM_PROVIDER",
         "category": "llm",
         "value_type": "string",
-        "description": "Default LLM provider (ollama, groq, gemini, kira, openrouter)",
+        "description": "Default LLM provider (ollama, groq, gemini, kira, openrouter, dahl)",
         "choices": _LLM_PROVIDER_CHOICES,
     },
     {
@@ -114,13 +124,13 @@ DEFAULT_CONFIGS = [
         "key": "GROQ_API_KEY",
         "category": "llm",
         "value_type": "string",
-        "description": "Groq API key. Stored encrypted; never shown again after saving.",
+        "description": "Groq API key(s). Supports multiple comma or newline-separated tokens for quota failover. Stored encrypted.",
     },
     {
         "key": "GEMINI_API_KEY",
         "category": "llm",
         "value_type": "string",
-        "description": "Google Gemini API key (aistudio.google.com/apikey). Stored encrypted; never shown again after saving.",
+        "description": "Google Gemini API key(s). Supports multiple comma or newline-separated tokens for automatic round-robin and rate-limit failover. Stored encrypted.",
     },
     {
         "key": "GEMINI_MODEL",
@@ -190,7 +200,7 @@ DEFAULT_CONFIGS = [
         "key": "KIRA_API_KEY",
         "category": "llm",
         "value_type": "string",
-        "description": "Kira API key. Stored encrypted; never shown again after saving.",
+        "description": "Kira API key(s). Supports multiple comma or newline-separated tokens. Stored encrypted.",
     },
     {
         "key": "OPENROUTER_MODEL",
@@ -212,7 +222,34 @@ DEFAULT_CONFIGS = [
         "key": "OPENROUTER_API_KEY",
         "category": "llm",
         "value_type": "string",
-        "description": "OpenRouter API key. Stored encrypted; never shown again after saving.",
+        "description": "OpenRouter API key(s). Supports multiple comma or newline-separated tokens. Stored encrypted.",
+    },
+    {
+        "key": "DAHL_MODEL",
+        "category": "llm",
+        "value_type": "string",
+        "description": (
+            "First-choice Dahl Global chat model id (e.g. MiniMaxAI/MiniMax-M2.7, "
+            "zai-org/GLM-5.3-Flash, deepseek-ai/DeepSeek-V4-Flash-0731)."
+        ),
+    },
+    {
+        "key": "DAHL_FALLBACK_MODELS",
+        "category": "llm",
+        "value_type": "list",
+        "description": "Comma-separated Dahl models to try, in order, when the first choice is unavailable or rate-limited.",
+    },
+    {
+        "key": "DAHL_BASE_URL",
+        "category": "llm",
+        "value_type": "string",
+        "description": "Base URL for the Dahl API (default: https://inference.dahl.global/v1)",
+    },
+    {
+        "key": "DAHL_API_KEY",
+        "category": "llm",
+        "value_type": "string",
+        "description": "Dahl Global API key(s). Supports multiple comma or newline-separated tokens for automatic failover pool. Stored encrypted.",
     },
     {
         "key": "BYOK_ENABLED",
@@ -858,6 +895,155 @@ class SystemConfigurationResetAPIView(APIView):
         )
         return Response(
             {"detail": "Settings reset to defaults. Stored API keys were kept."},
+            status=status.HTTP_200_OK,
+        )
+
+
+class SystemConfigurationTestAIAPIView(APIView):
+    """Staff-only diagnostic endpoint to test an AI provider/model live.
+
+    Allows an admin to test saved credentials or verify newly entered
+    API keys/tokens before saving them to SystemConfiguration.
+    """
+    permission_classes = [permissions.IsAdminUser]
+
+    def post(self, request):
+        provider = (request.data.get("provider") or "").strip().lower()
+        if not provider:
+            provider = resolve_provider()
+        if provider not in SUPPORTED_PROVIDERS:
+            return Response(
+                {"ok": False, "message": f"Unsupported provider: {provider}"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        api_key_input = request.data.get("api_key")
+        model_input = (request.data.get("model") or "").strip()
+
+        # If masked or empty, resolve the configured provider keys
+        if not api_key_input or api_key_input.strip() == "********":
+            resolved_keys = _provider_api_keys(f"{provider.upper()}_API_KEY")
+            api_key_to_use = None
+        else:
+            resolved_keys = _parse_api_keys(api_key_input)
+            api_key_to_use = api_key_input
+
+        token_count = len(resolved_keys)
+        if not resolved_keys and provider != "ollama":
+            return Response(
+                {
+                    "ok": False,
+                    "provider": provider,
+                    "token_count": 0,
+                    "active_tokens": 0,
+                    "error_code": "LLM_AUTH_FAILED",
+                    "message": f"No API token configured for {provider}. Enter a valid token first.",
+                },
+                status=status.HTTP_200_OK,
+            )
+
+        timeout = min(int(request.data.get("timeout") or 15), 30)
+        try:
+            client = _build_client(
+                provider=provider,
+                timeout=timeout,
+                max_retries=1,
+                temperature=0.0,
+                max_output_tokens=64,
+                api_key_override=api_key_to_use,
+            )
+        except Exception as exc:
+            return Response(
+                {
+                    "ok": False,
+                    "provider": provider,
+                    "token_count": token_count,
+                    "message": f"Failed to initialize {provider} client: {exc}",
+                },
+                status=status.HTTP_200_OK,
+            )
+
+        # Determine target model to test
+        target_model = model_input or getattr(client, "model", None)
+        if not target_model:
+            candidates = getattr(client, "candidate_models", lambda: [])()
+            target_model = candidates[0] if candidates else None
+
+        if not target_model and provider != "ollama":
+            return Response(
+                {
+                    "ok": False,
+                    "provider": provider,
+                    "token_count": token_count,
+                    "message": f"No model specified or configured for {provider}.",
+                },
+                status=status.HTTP_200_OK,
+            )
+
+        started = time.monotonic()
+        tested_models = []
+        overall_ok = False
+        message = ""
+
+        probe_fn = getattr(client, "probe_model", None)
+        if callable(probe_fn):
+            ok, detail = probe_fn(target_model)
+            latency_ms = int((time.monotonic() - started) * 1000)
+            tested_models.append({
+                "model": target_model,
+                "ok": ok,
+                "latency_ms": latency_ms,
+                "detail": detail,
+            })
+            overall_ok = ok
+            if ok:
+                message = f"{provider.capitalize()} model '{target_model}' responded successfully in {latency_ms}ms."
+            else:
+                message = f"{provider.capitalize()} model '{target_model}' test failed: {detail}"
+        else:
+            try:
+                available = client.check_model_available()
+                latency_ms = int((time.monotonic() - started) * 1000)
+                overall_ok = bool(available)
+                tested_models.append({
+                    "model": target_model or "default",
+                    "ok": overall_ok,
+                    "latency_ms": latency_ms,
+                    "detail": "Model is available",
+                })
+                message = f"{provider.capitalize()} is reachable and model is available ({latency_ms}ms)."
+            except Exception as exc:
+                latency_ms = int((time.monotonic() - started) * 1000)
+                overall_ok = False
+                tested_models.append({
+                    "model": target_model or "default",
+                    "ok": False,
+                    "latency_ms": latency_ms,
+                    "detail": str(exc),
+                })
+                message = f"{provider.capitalize()} connection failed: {exc}"
+
+        candidate_list = []
+        if hasattr(client, "candidate_models"):
+            try:
+                candidate_list = client.candidate_models()
+            except Exception:
+                pass
+
+        active_tokens_count = len(getattr(getattr(client, "key_pool", None), "active_keys", lambda: resolved_keys)())
+
+        return Response(
+            {
+                "ok": overall_ok,
+                "provider": provider,
+                "model": target_model,
+                "latency_ms": latency_ms,
+                "token_count": token_count,
+                "active_tokens": active_tokens_count,
+                "message": message,
+                "tested_models": tested_models,
+                "candidate_models": candidate_list,
+            },
             status=status.HTTP_200_OK,
         )
 

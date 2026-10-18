@@ -646,7 +646,14 @@ GEMINI_MODEL = os.getenv("GEMINI_MODEL", "").strip()
 # Tried in order when GEMINI_MODEL is overloaded (503), out of quota (429)
 # or discontinued (404). Comma-separated.
 GEMINI_FALLBACK_MODELS = [
-    model.strip() for model in os.getenv("GEMINI_FALLBACK_MODELS", "").split(",") if model.strip()
+    model.strip()
+    for model in os.getenv(
+        "GEMINI_FALLBACK_MODELS",
+        "gemini-3.7-flash, gemini-3.6-flash, gemini-3.5-flash, gemini-flash-latest, "
+        "gemini-2.5-flash, gemini-flash-lite-latest, gemini-3.5-flash-lite, "
+        "gemini-2.5-flash-lite, gemini-2.5-pro, gemini-pro-latest",
+    ).split(",")
+    if model.strip()
 ]
 # Ask Google which models the key can call (cached) before trying any, so a
 # discontinued model is skipped instead of failing every request, and further
@@ -654,7 +661,7 @@ GEMINI_FALLBACK_MODELS = [
 GEMINI_MODEL_DISCOVERY = os.getenv("GEMINI_MODEL_DISCOVERY", "True") == "True"
 # Automatic fallbacks must contain one of these words in their id...
 GEMINI_AUTO_FALLBACK_FAMILIES = [
-    item.strip() for item in os.getenv("GEMINI_AUTO_FALLBACK_FAMILIES", "flash").split(",") if item.strip()
+    item.strip() for item in os.getenv("GEMINI_AUTO_FALLBACK_FAMILIES", "flash, pro").split(",") if item.strip()
 ]
 # ...and none of these: kinds of model that are not general text models, or
 # are too unstable to fail over to. Not model ids, so they do not go stale
@@ -669,7 +676,7 @@ GEMINI_AUTO_EXCLUDE = [
     if item.strip()
 ]
 # Most models one request may try before giving up.
-GEMINI_MAX_MODEL_ATTEMPTS = int(os.getenv("GEMINI_MAX_MODEL_ATTEMPTS", "4"))
+GEMINI_MAX_MODEL_ATTEMPTS = int(os.getenv("GEMINI_MAX_MODEL_ATTEMPTS", "8"))
 # Seconds the live model list is cached per key.
 GEMINI_MODEL_LIST_TTL = int(os.getenv("GEMINI_MODEL_LIST_TTL", "3600"))
 GEMINI_BASE_URL = os.getenv(
@@ -700,6 +707,21 @@ KIRA_BASE_URL = os.getenv("KIRA_BASE_URL", "https://kiraai.vn/api/v1")
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "")
 OPENROUTER_MODEL = os.getenv("OPENROUTER_MODEL", "")
 OPENROUTER_BASE_URL = os.getenv("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1")
+
+# Dahl Global: OpenAI-compatible inference platform (inference.dahl.global).
+# Hosts MiniMaxAI/MiniMax-M2.7, zai-org/GLM-5.3-Flash, deepseek-ai/DeepSeek-V4-Flash-0731.
+# Supports multi-model failover so an unavailable or rate-limited model cascades to the next.
+DAHL_API_KEY = os.getenv("DAHL_API_KEY", "").strip()
+DAHL_MODEL = os.getenv("DAHL_MODEL", "MiniMaxAI/MiniMax-M2.7").strip()
+DAHL_FALLBACK_MODELS = [
+    model.strip()
+    for model in os.getenv(
+        "DAHL_FALLBACK_MODELS",
+        "zai-org/GLM-5.3-Flash, deepseek-ai/DeepSeek-V4-Flash-0731",
+    ).split(",")
+    if model.strip()
+]
+DAHL_BASE_URL = os.getenv("DAHL_BASE_URL", "https://inference.dahl.global/v1").rstrip("/")
 
 # --- Rewarded ads -> earned credits ---------------------------------------
 # A free-tier user can watch an opt-in rewarded video to earn a credit (one

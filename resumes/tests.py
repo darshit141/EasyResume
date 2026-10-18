@@ -8,6 +8,7 @@ from rest_framework.test import APIClient
 
 from authentication.models import User
 from resumes.services.llm_service import (
+    DahlLLMService,
     FallbackLLMService,
     GeminiLLMService,
     GroqLLMService,
@@ -505,6 +506,114 @@ class KiraLLMServiceTests(SimpleTestCase):
         self.assertIsInstance(service.fallback, KiraLLMService)
 
 
+class DahlLLMServiceTests(SimpleTestCase):
+    """Dahl Global (inference.dahl.global) tests covering multi-model failover,
+    endpoint formatting, auth error handling, and provider resolution."""
+
+    def make_service(
+        self,
+        api_key="test-dahl-key",
+        model="MiniMaxAI/MiniMax-M2.7",
+        fallback_models=("zai-org/GLM-5.3-Flash", "deepseek-ai/DeepSeek-V4-Flash-0731"),
+    ):
+        return DahlLLMService(
+            api_key=api_key,
+            model=model,
+            timeout=5,
+            max_retries=0,
+            temperature=0,
+            base_url="https://inference.dahl.global/v1",
+            fallback_models=fallback_models,
+        )
+
+    def test_dahl_is_a_supported_provider(self):
+        self.assertIn("dahl", SUPPORTED_PROVIDERS)
+
+    def test_candidate_models_includes_primary_and_fallbacks(self):
+        service = self.make_service()
+        self.assertEqual(
+            service.candidate_models(),
+            ["MiniMaxAI/MiniMax-M2.7", "zai-org/GLM-5.3-Flash", "deepseek-ai/DeepSeek-V4-Flash-0731"],
+        )
+
+    def test_successful_completion_returns_parsed_json(self):
+        service = self.make_service()
+        body = json.dumps({
+            "choices": [{"message": {"content": json.dumps({"skills": ["Django", "Python"]})}}]
+        }).encode("utf-8")
+        with patch("resumes.services.llm_service.urlopen", return_value=_fake_response(body)):
+            result = service.generate_structured("prompt", {"type": "object"})
+        self.assertEqual(result, {"skills": ["Django", "Python"]})
+        self.assertEqual(service.last_model_used, "MiniMaxAI/MiniMax-M2.7")
+
+    def test_request_hits_configured_base_url_with_bearer_auth(self):
+        service = self.make_service()
+        body = json.dumps({"choices": [{"message": {"content": "{}"}}]}).encode("utf-8")
+        captured = {}
+
+        def fake_urlopen(request, timeout=None):
+            captured["request"] = request
+            return _fake_response(body)
+
+        with patch("resumes.services.llm_service.urlopen", side_effect=fake_urlopen):
+            service.generate_structured("prompt", {"type": "object"})
+
+        request = captured["request"]
+        self.assertEqual(request.full_url, "https://inference.dahl.global/v1/chat/completions")
+        self.assertEqual(request.get_header("Authorization"), "Bearer test-dahl-key")
+        payload = json.loads(request.data.decode("utf-8"))
+        self.assertEqual(payload["model"], "MiniMaxAI/MiniMax-M2.7")
+        self.assertEqual(payload["response_format"], {"type": "json_object"})
+
+    def test_model_fallback_when_primary_model_fails(self):
+        service = self.make_service()
+        primary_error = HTTPError(
+            "https://inference.dahl.global/v1/chat/completions",
+            503, "Service Unavailable", {}, None
+        )
+        fallback_body = json.dumps({
+            "choices": [{"message": {"content": json.dumps({"ok": True})}}]
+        }).encode("utf-8")
+
+        calls = []
+        def fake_urlopen(request, timeout=None):
+            calls.append(json.loads(request.data.decode("utf-8"))["model"])
+            if len(calls) == 1:
+                raise primary_error
+            return _fake_response(fallback_body)
+
+        with patch("resumes.services.llm_service.urlopen", side_effect=fake_urlopen):
+            result = service.generate_structured("prompt", {"type": "object"})
+
+        self.assertEqual(result, {"ok": True})
+        self.assertEqual(calls, ["MiniMaxAI/MiniMax-M2.7", "zai-org/GLM-5.3-Flash"])
+        self.assertEqual(service.last_model_used, "zai-org/GLM-5.3-Flash")
+
+    def test_missing_api_key_raises_auth_error(self):
+        from resumes.services.llm_service import LLMAuthError
+        service = self.make_service(api_key="")
+        with self.assertRaises(LLMAuthError):
+            service.generate_structured("prompt", {})
+
+    def test_probe_model_success(self):
+        service = self.make_service()
+        body = json.dumps({"choices": [{"message": {"content": '{"ok": true}'}}]}).encode("utf-8")
+        with patch("resumes.services.llm_service.urlopen", return_value=_fake_response(body)):
+            ok, detail = service.probe_model("MiniMaxAI/MiniMax-M2.7")
+        self.assertTrue(ok)
+        self.assertIn("answered in", detail)
+
+    @override_settings(
+        LLM_PROVIDER="dahl",
+        LLM_FALLBACK_PROVIDER="",
+        DAHL_API_KEY="token",
+        DAHL_MODEL="MiniMaxAI/MiniMax-M2.7",
+        DAHL_BASE_URL="https://inference.dahl.global/v1",
+    )
+    def test_get_llm_service_returns_dahl_client_when_configured(self):
+        self.assertIsInstance(get_llm_service(), DahlLLMService)
+
+
 class GeminiLLMServiceTests(SimpleTestCase):
     def make_service(self, api_key="test-key", model="gemini-3.8-flash", fallback_models=()):
         return GeminiLLMService(
@@ -912,3 +1021,138 @@ class ResumeUploadValidationMessageTests(TestCase):
             self._upload("scan.pdf")
 
         mock_parse.assert_not_called()
+
+
+class APIKeyPoolTests(SimpleTestCase):
+    def test_parse_keys_various_delimiters(self):
+        from resumes.services.llm_service import _parse_api_keys, APIKeyPool
+
+        raw = "key1, key2\nkey3; key4,key1"
+        parsed = _parse_api_keys(raw)
+        self.assertEqual(parsed, ["key1", "key2", "key3", "key4"])
+
+    def test_cooldown_and_active_keys_rotation(self):
+        from resumes.services.llm_service import APIKeyPool
+        from django.core.cache import cache
+
+        pool = APIKeyPool("token_a, token_b, token_c", provider_name="test_provider")
+        self.assertEqual(pool.active_keys(), ["token_a", "token_b", "token_c"])
+        self.assertEqual(pool.primary_key, "token_a")
+
+        # Mark token_a exhausted
+        pool.mark_exhausted("token_a", cooldown=60)
+        self.assertTrue(pool.is_on_cooldown("token_a"))
+        self.assertEqual(pool.active_keys(), ["token_b", "token_c"])
+        self.assertEqual(pool.primary_key, "token_b")
+
+        # Clear cooldown
+        pool.mark_healthy("token_a")
+        self.assertFalse(pool.is_on_cooldown("token_a"))
+        self.assertEqual(pool.active_keys(), ["token_a", "token_b", "token_c"])
+
+
+class MultiTokenFailoverTests(SimpleTestCase):
+    def test_gemini_rotates_tokens_on_429(self):
+        from urllib.error import HTTPError
+        from resumes.services.llm_service import GeminiLLMService
+
+        service = GeminiLLMService(
+            api_keys="key_one, key_two",
+            model="gemini-3.8-flash",
+            fallback_models=[],
+            discover_models=False,
+        )
+
+        attempts = []
+        def mock_post_generate(model, prompt, schema, thinking, max_output_tokens=None, api_key=None):
+            attempts.append(api_key)
+            if api_key == "key_one":
+                raise HTTPError("url", 429, "Resource exhausted", {"status": "RESOURCE_EXHAUSTED"}, None)
+            return {"candidates": [{"content": {"parts": [{"text": '{"result": "ok"}'}]}}]}
+
+        with patch.object(service, "_post_generate", side_effect=mock_post_generate):
+            res = service.generate_structured("prompt", {})
+            self.assertEqual(res, {"result": "ok"})
+            self.assertEqual(attempts, ["key_one", "key_two"])
+            self.assertTrue(service.key_pool.is_on_cooldown("key_one"))
+
+    def test_gemini_all_tokens_and_models_exhausted_raises_high_demand(self):
+        from urllib.error import HTTPError
+        from resumes.services.llm_service import GeminiLLMService, LLMHighDemandError
+
+        service = GeminiLLMService(
+            api_keys="key_a, key_b",
+            model="gemini-3.8-flash",
+            fallback_models=["gemini-3.7-flash"],
+            discover_models=False,
+        )
+
+        def mock_post_generate(model, prompt, schema, thinking, max_output_tokens=None, api_key=None):
+            raise HTTPError("url", 429, "Resource exhausted", {"status": "RESOURCE_EXHAUSTED"}, None)
+
+        with patch.object(service, "_post_generate", side_effect=mock_post_generate):
+            with self.assertRaises(LLMHighDemandError) as ctx:
+                service.generate_structured("prompt", {})
+            self.assertEqual(ctx.exception.code, "AI_HIGH_DEMAND_CAPACITY")
+            self.assertIn("Due to high demand", str(ctx.exception))
+
+    def test_dahl_rotates_tokens_on_429(self):
+        from urllib.error import HTTPError
+        from resumes.services.llm_service import DahlLLMService
+
+        service = DahlLLMService(
+            api_keys="dahl_1, dahl_2",
+            model="MiniMaxAI/MiniMax-M2.7",
+            fallback_models=[],
+        )
+
+        attempts = []
+        def mock_urlopen(request, timeout):
+            import io
+            headers = dict(request.header_items())
+            auth = headers.get("Authorization", "")
+            key = auth.replace("Bearer ", "").strip()
+            attempts.append(key)
+            if key == "dahl_1":
+                fp = io.BytesIO(b'{"error": {"code": 429, "message": "rate limit"}}')
+                raise HTTPError("url", 429, "Rate limit", {}, fp)
+            fp = io.BytesIO(b'{"choices": [{"message": {"content": "{\\"status\\": \\"success\\"}"}}]}')
+            return fp
+
+        with patch("resumes.services.llm_service.urlopen", side_effect=mock_urlopen):
+            res = service.generate_structured("test", {})
+            self.assertEqual(res, {"status": "success"})
+            self.assertEqual(attempts, ["dahl_1", "dahl_2"])
+
+
+class AdminTestAIEndpointTests(TestCase):
+    def setUp(self):
+        self.staff_user = User.objects.create_user(
+            name="Admin Staff", email="staff-ai-test@example.com", phone="9998887771",
+            password="safe-password", is_staff=True,
+        )
+        self.normal_user = User.objects.create_user(
+            name="Normal User", email="normal-user@example.com", phone="9998887772",
+            password="safe-password", is_staff=False,
+        )
+        self.client = APIClient()
+
+    def test_forbidden_for_non_staff(self):
+        self.client.force_authenticate(user=self.normal_user)
+        response = self.client.post("/api/admin/config/test-ai/", {"provider": "gemini"})
+        self.assertEqual(response.status_code, 403)
+
+    def test_staff_can_test_gemini(self):
+        self.client.force_authenticate(user=self.staff_user)
+        with patch("resumes.services.llm_service.GeminiLLMService.probe_model", return_value=(True, "answered in 0.2s")):
+            response = self.client.post("/api/admin/config/test-ai/", {
+                "provider": "gemini",
+                "api_key": "test_token_1, test_token_2",
+                "model": "gemini-3.8-flash",
+            })
+            self.assertEqual(response.status_code, 200)
+            self.assertTrue(response.data["ok"])
+            self.assertEqual(response.data["provider"], "gemini")
+            self.assertEqual(response.data["token_count"], 2)
+            self.assertEqual(response.data["active_tokens"], 2)
+            self.assertIn("responded successfully", response.data["message"])

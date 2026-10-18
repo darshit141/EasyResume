@@ -4,6 +4,7 @@ from .views.readiness import readiness_check
 from .views.admin_views import (
     SystemConfigurationListUpdateAPIView,
     SystemConfigurationResetAPIView,
+    SystemConfigurationTestAIAPIView,
     AdminUserListAPIView,
     AdminUserToggleActiveAPIView,
     AdminUserToggleStaffAPIView,
@@ -61,6 +62,7 @@ urlpatterns = [
     # Admin endpoints
     path("admin/config/", SystemConfigurationListUpdateAPIView.as_view(), name="admin-config"),
     path("admin/config/reset/", SystemConfigurationResetAPIView.as_view(), name="admin-config-reset"),
+    path("admin/config/test-ai/", SystemConfigurationTestAIAPIView.as_view(), name="admin-config-test-ai"),
     path("admin/users/", AdminUserListAPIView.as_view(), name="admin-users"),
     path("admin/stats/", AdminStatsAPIView.as_view(), name="admin-stats"),
     path("admin/business-metrics/", AdminBusinessMetricsAPIView.as_view(), name="admin-business-metrics"),
