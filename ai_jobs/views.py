@@ -61,4 +61,14 @@ class AIJobListAPIView(ListAPIView):
     serializer_class = AIJobSerializer
 
     def get_queryset(self):
-        return AIJob.objects.filter(user=self.request.user)
+        qs = AIJob.objects.filter(user=self.request.user)
+        curation_id = self.request.query_params.get("curation_id")
+        if curation_id:
+            qs = qs.filter(curation_id=curation_id)
+        job_type = self.request.query_params.get("job_type")
+        if job_type:
+            qs = qs.filter(job_type=job_type)
+        status_param = self.request.query_params.get("status")
+        if status_param:
+            qs = qs.filter(status=status_param)
+        return qs
