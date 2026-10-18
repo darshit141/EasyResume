@@ -110,8 +110,11 @@ services:
     environment:
       DATABASE_URL: postgres://${POSTGRES_USER:-intelliresume}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-intelliresume}
       REDIS_URL: redis://redis:6379/0
-      OLLAMA_BASE_URL: http://ollama:11434
-    command: celery -A config worker --loglevel=info --concurrency=4
+    # Uses Celery's threads pool for high concurrency (25 concurrent tasks).
+    # Since AI jobs are I/O bound (waiting on external LLM HTTP responses),
+    # threads release the GIL during network calls and consume very little RAM,
+    # allowing dozens of concurrent resume tailoring jobs without CPU bottlenecks.
+    command: celery -A config worker --loglevel=info --pool=threads --concurrency=25
     volumes:
       - backend-media:/app/media
     depends_on:

@@ -150,19 +150,44 @@ class APIKeyPool:
         if api_key:
             cache.delete(self._cooldown_key(api_key))
 
-    def active_keys(self):
+    def active_keys(self, rotate=True):
         """Returns non-cooldown keys first. If all configured keys are on cooldown,
-        falls back to all configured keys so transient cooldowns do not lock out indefinitely."""
+        falls back to all configured keys so transient cooldowns do not lock out indefinitely.
+
+        Multi-Key Concurrency Optimization:
+        When `rotate=True` and multiple keys are configured (e.g. GEMINI_API_KEY="k1,k2,k3"),
+        this applies a round-robin rotation using an atomic Redis counter.
+        This distributes concurrent generation requests evenly across all configured API keys,
+        multiplying effective rate limits (e.g. 3 x 15 RPM = 45 RPM) and avoiding premature 429
+        throttling on the first key.
+        """
         if not self.keys:
             return []
         available = [k for k in self.keys if not self.is_on_cooldown(k)]
-        if available:
-            return available
-        return list(self.keys)
+        candidates = available if available else list(self.keys)
+
+        if not rotate or len(candidates) <= 1:
+            return candidates
+
+        counter_key = f"llm:key_rr:{self.provider_name}"
+        try:
+            try:
+                rr = cache.incr(counter_key)
+            except ValueError:
+                cache.set(counter_key, 1, timeout=86400)
+                rr = 1
+        except Exception:
+            # Fall back to un-rotated list if cache backend doesn't support incr or fails
+            rr = 0
+
+        offset = rr % len(candidates)
+        if offset == 0:
+            return candidates
+        return candidates[offset:] + candidates[:offset]
 
     @property
     def primary_key(self):
-        active = self.active_keys()
+        active = self.active_keys(rotate=False)
         return active[0] if active else (self.keys[0] if self.keys else "")
 
     def __len__(self):

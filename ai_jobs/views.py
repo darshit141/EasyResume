@@ -45,6 +45,38 @@ class AIJobStatusAPIView(RetrieveAPIView):
     def get_queryset(self):
         return AIJob.objects.filter(user=self.request.user)
 
+    def retrieve(self, request, *args, **kwargs):
+        """High-concurrency Redis cache lookup.
+
+        When dozens of users poll every 2 seconds, serving status from Redis
+        memory bypasses PostgreSQL SELECT queries entirely, keeping database
+        connections free and latency sub-millisecond.
+        """
+        from django.core.cache import cache
+        from rest_framework.response import Response
+
+        job_id = self.kwargs.get(self.lookup_url_kwarg)
+        cache_key = f"ai_job_poll:{job_id}"
+        cached = cache.get(cache_key)
+
+        # Enforce multi-tenant security: cached job must belong to requesting user
+        if cached and isinstance(cached, dict) and cached.get("user_id") == request.user.id:
+            return Response(cached.get("data"))
+
+        # Fallback to database query on cache miss
+        response = super().retrieve(request, *args, **kwargs)
+
+        # Populate cache on read
+        try:
+            status = response.data.get("status")
+            is_terminal = status in AIJob.TERMINAL_STATUSES
+            timeout = 300 if is_terminal else 60
+            cache.set(cache_key, {"user_id": request.user.id, "data": response.data}, timeout=timeout)
+        except Exception:
+            pass
+
+        return response
+
 
 @extend_schema(
     tags=["AI Jobs"],
