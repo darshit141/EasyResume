@@ -86,7 +86,12 @@ class JobGapAnalysisService:
             return curation
 
         if curation.status != "completed" or not curation.analysis_data:
-            raise JobRequirementsUnavailableError()
+            if curation.job_description and curation.job_description.strip():
+                from resumes.services.job_curation_service import JobCurationService
+                JobCurationService(llm_service=self.llm_service, user=user).run_analysis(curation)
+                curation.refresh_from_db()
+            else:
+                raise JobRequirementsUnavailableError()
 
         candidate_data = self.build_candidate_data(user, resume_id=curation.resume_id)
         job_requirements = self.build_job_requirements(curation.analysis_data)
