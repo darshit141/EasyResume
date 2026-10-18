@@ -71,6 +71,22 @@ class TokenRefreshAPITests(TestCase):
         )
         self.assertEqual(second_use.status_code, 401)
 
+    def test_refresh_via_httponly_cookie(self):
+        refresh = RefreshToken.for_user(self.user)
+        self.client.cookies["refresh_token"] = str(refresh)
+
+        # POST without refresh token in body — must be read from HttpOnly cookie
+        response = self.client.post("/api/auth/refresh/", {}, format="json")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("access", response.data)
+        self.assertIn("refresh_token", response.cookies)
+        cookie = response.cookies["refresh_token"]
+        self.assertTrue(cookie["httponly"])
+        self.assertEqual(cookie["samesite"], "Lax")
+        # Ensure CSP header is present
+        self.assertIn("Content-Security-Policy", response.headers)
+
 
 class LogoutAPITests(TestCase):
     def setUp(self):
@@ -112,6 +128,24 @@ class LogoutAPITests(TestCase):
         )
 
         self.assertEqual(response.status_code, 400)
+
+    def test_logout_with_httponly_cookie(self):
+        refresh = RefreshToken.for_user(self.user)
+        self.authenticate()
+        self.client.cookies["refresh_token"] = str(refresh)
+
+        # Empty body — refresh token taken from cookie and deleted
+        response = self.client.post("/api/auth/logout/", {}, format="json")
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("refresh_token", response.cookies)
+        self.assertEqual(response.cookies["refresh_token"].value, "")
+
+        # Verify token was blacklisted
+        self.client.force_authenticate(user=None)
+        refresh_response = self.client.post(
+            "/api/auth/refresh/", {"refresh": str(refresh)}, format="json"
+        )
+        self.assertEqual(refresh_response.status_code, 401)
 
 
 class ProfileAPITests(TestCase):

@@ -38,6 +38,7 @@ JOB_ID_PARAMETER = OpenApiParameter(
 )
 class AIJobStatusAPIView(RetrieveAPIView):
     permission_classes = [IsAuthenticated]
+    throttle_scope = "ai_job_poll"
     serializer_class = AIJobSerializer
     lookup_url_kwarg = "job_id"
 

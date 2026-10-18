@@ -56,7 +56,8 @@ class VerifyLoginOTPAPIView(APIView):
                 return Response(body, status=result["status"])
             user = result["user"]
 
-            return Response(
+            from authentication.utils.jwt_cookie import set_refresh_token_cookie
+            response = Response(
                 {
                     "message": result["message"],
                     "access": result["access"],
@@ -71,6 +72,7 @@ class VerifyLoginOTPAPIView(APIView):
                 },
                 status=status.HTTP_200_OK,
             )
+            return set_refresh_token_cookie(response, result.get("refresh"))
 
         return Response(
             serializer.errors,

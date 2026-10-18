@@ -906,6 +906,7 @@ class SystemConfigurationTestAIAPIView(APIView):
     API keys/tokens before saving them to SystemConfiguration.
     """
     permission_classes = [permissions.IsAdminUser]
+    throttle_scope = "admin_test_ai"
 
     def post(self, request):
         provider = (request.data.get("provider") or "").strip().lower()
@@ -1088,6 +1089,12 @@ class AdminUserToggleActiveAPIView(APIView):
             user = User.objects.get(id=user_id)
         except User.DoesNotExist:
             return Response({"detail": "User not found."}, status=status.HTTP_404_NOT_FOUND)
+
+        if user.is_superuser and not request.user.is_superuser:
+            return Response(
+                {"detail": "Only superusers can modify another superuser account."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
             
         user.is_active = not user.is_active
         user.save()
@@ -1118,6 +1125,12 @@ class AdminUserSecurityResetAPIView(APIView):
             user = User.objects.get(id=user_id)
         except User.DoesNotExist:
             return Response({"detail": "User not found."}, status=status.HTTP_404_NOT_FOUND)
+
+        if user.is_superuser and not request.user.is_superuser:
+            return Response(
+                {"detail": "Only superusers can modify another superuser account."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
 
         unlock = bool(request.data.get("unlock"))
         remove_two_factor = bool(request.data.get("remove_two_factor"))
@@ -1150,6 +1163,12 @@ class AdminUserToggleStaffAPIView(APIView):
     permission_classes = [permissions.IsAdminUser]
 
     def post(self, request, user_id):
+        if not request.user.is_superuser:
+            return Response(
+                {"detail": "Only superusers can grant or revoke admin privileges."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
         if request.user.id == user_id:
             return Response(
                 {"detail": "You cannot remove your own admin status."},

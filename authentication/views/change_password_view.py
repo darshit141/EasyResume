@@ -65,7 +65,9 @@ class ChangePasswordAPIView(APIView):
 
         # The other devices' tokens are revoked, so this device is handed
         # replacements to keep its own session.
-        return Response(
+        from authentication.utils.jwt_cookie import set_refresh_token_cookie
+        response = Response(
             {"message": result["message"], **result["tokens"]},
             status=status.HTTP_200_OK,
         )
+        return set_refresh_token_cookie(response, result.get("tokens", {}).get("refresh"))

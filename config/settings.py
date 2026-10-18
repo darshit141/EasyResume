@@ -43,8 +43,8 @@ SECRET_KEY = os.getenv("SECRET_KEY")
 CONFIG_ENCRYPTION_KEY = os.getenv("CONFIG_ENCRYPTION_KEY", "")
 # SECURITY WARNING: don't run with debug turned on in production! Real
 # deployments must set DEBUG=False explicitly via environment — this
-# defaults to True only for local-dev convenience.
-DEBUG = os.getenv("DEBUG", "True") == "True"
+# defaults to False so missing the variable in production fails safely.
+DEBUG = os.getenv("DEBUG", "False").strip().lower() in ("true", "1", "yes")
 
 ALLOWED_HOSTS = [
     host.strip() for host in os.getenv("ALLOWED_HOSTS", "").split(",") if host.strip()
@@ -57,10 +57,28 @@ CORS_ALLOW_ALL_ORIGINS = DEBUG
 CORS_ALLOWED_ORIGINS = [
     origin.strip() for origin in os.getenv("CORS_ALLOWED_ORIGINS", "").split(",") if origin.strip()
 ]
+# Allow cookies to be sent with cross-origin requests (for HttpOnly refresh tokens)
+CORS_ALLOW_CREDENTIALS = True
 
 CSRF_TRUSTED_ORIGINS = [
     origin.strip() for origin in os.getenv("CSRF_TRUSTED_ORIGINS", "").split(",") if origin.strip()
 ]
+
+# Strict Content Security Policy (CSP): whitelists Google OAuth, Analytics, Ads, and Stripe
+CONTENT_SECURITY_POLICY = os.getenv(
+    "CONTENT_SECURITY_POLICY",
+    (
+        "default-src 'self'; "
+        "script-src 'self' https://accounts.google.com https://www.googletagmanager.com https://pagead2.googlesyndication.com https://js.stripe.com; "
+        "connect-src 'self' https://accounts.google.com https://www.google-analytics.com https://pagead2.googlesyndication.com https://api.stripe.com; "
+        "frame-src 'self' https://accounts.google.com https://js.stripe.com https://googleads.g.doubleclick.net; "
+        "img-src 'self' data: https: blob:; "
+        "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
+        "font-src 'self' data: https://fonts.gstatic.com; "
+        "object-src 'none'; "
+        "base-uri 'self';"
+    ),
+)
 
 # Production-only hardening (all inert under DEBUG=True so local dev over
 # plain http:// keeps working unchanged).
@@ -121,6 +139,7 @@ MIDDLEWARE = [
     "django.contrib.messages.middleware.MessageMiddleware",
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
     "api.middleware.RequestIDMiddleware",
+    "api.middleware.ContentSecurityPolicyMiddleware",
 ]
 
 ROOT_URLCONF = 'config.urls'
@@ -266,6 +285,10 @@ REST_FRAMEWORK = {
         # our IP. Tight on purpose: nobody legitimately saves an API key
         # more than a few times an hour.
         "user_ai_key": os.getenv("THROTTLE_USER_AI_KEY", "10/hour"),
+        # Background AI job polling from frontend processing views.
+        "ai_job_poll": os.getenv("THROTTLE_AI_JOB_POLL", "120/min"),
+        # Diagnostic test calls to external LLM providers from the admin panel.
+        "admin_test_ai": os.getenv("THROTTLE_ADMIN_TEST_AI", "15/min"),
     },
 }
 

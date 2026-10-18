@@ -234,6 +234,19 @@ class AdminPanelAPITests(APITestCase):
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
         self.assertEqual(response.json()["detail"], "You cannot deactivate your own account.")
 
+        # Privilege escalation protection: regular staff (not superuser) cannot toggle staff
+        staff_only_user = User.objects.create_user(
+            email="staff@example.com", name="Staff Only", phone="1112223334",
+            password="staffpassword", is_staff=True, is_superuser=False,
+        )
+        self.client.force_authenticate(user=staff_only_user)
+        response_staff_attempt = self.client.post(url_staff)
+        self.assertEqual(response_staff_attempt.status_code, status.HTTP_403_FORBIDDEN)
+
+        # Privilege escalation protection: regular staff cannot deactivate a superuser
+        response_deactivate_superuser = self.client.post(url_self)
+        self.assertEqual(response_deactivate_superuser.status_code, status.HTTP_403_FORBIDDEN)
+
 
 class AdminAuditLogTests(APITestCase):
     """Every admin-panel action that changes state must leave a row in

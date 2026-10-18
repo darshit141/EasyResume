@@ -59,5 +59,7 @@ class AccountDeletionAPIView(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
+        from authentication.utils.jwt_cookie import delete_refresh_token_cookie
         AccountDeletionService.delete_account(request.user)
-        return Response({"message": "Account permanently deleted."})
+        response = Response({"message": "Account permanently deleted."})
+        return delete_refresh_token_cookie(response)

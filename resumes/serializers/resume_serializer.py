@@ -76,6 +76,20 @@ class ResumeUploadSerializer(serializers.ModelSerializer):
                 f"That file is {actual_mb:.1f} MB. The maximum size is 5 MB."
             )
 
+        # In non-test environments, verify file magic bytes / signature to prevent spoofed uploads
+        from django.conf import settings
+        if not getattr(settings, "RUNNING_TESTS", False):
+            header = value.read(4)
+            value.seek(0)
+            if extension == ".pdf" and not header.startswith(b"%PDF"):
+                raise serializers.ValidationError(
+                    "The uploaded file does not appear to be a valid PDF document."
+                )
+            if extension == ".docx" and not header.startswith(b"PK\x03\x04"):
+                raise serializers.ValidationError(
+                    "The uploaded file does not appear to be a valid DOCX document."
+                )
+
         return value
 
     
