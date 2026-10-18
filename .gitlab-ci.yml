@@ -72,19 +72,19 @@ deploy:
     - ssh-keyscan -H "$DEPLOY_HOST" >> ~/.ssh/known_hosts 2>/dev/null
   script:
     - |
-      ssh "$DEPLOY_USER@$DEPLOY_HOST" bash -s <<'REMOTE'
+      ssh -i ~/.ssh/id_ed25519 -o StrictHostKeyChecking=accept-new "$DEPLOY_USER@$DEPLOY_HOST" bash -s <<'REMOTE'
       set -euo pipefail
       cd /opt/intelliresume/backend
       git fetch origin main
       git checkout main
       git reset --hard origin/main
       cd /opt/intelliresume
-      docker compose build backend worker beat
+      docker compose build backend worker
       # --force-recreate is load-bearing: without it compose can leave a
       # container on the OLD image even though a new one was just built,
       # producing a green deploy that shipped nothing (this actually
       # happened to the frontend deploy).
-      docker compose up -d --force-recreate backend worker beat
+      docker compose up -d --force-recreate backend worker
       # Assert the running container is on the image we just built, so a
       # silent no-op deploy fails the job instead of passing.
       RUNNING=$(docker inspect intelliresume-backend-1 --format '{{.Image}}')
@@ -109,10 +109,10 @@ deploy:
     # is also the only address this check - or anyone else - can reach the
     # app on, so checking it is strictly better: it proves nginx, TLS and
     # routing all work, not just that the container is up.
-    - curl -fsS "https://intelliresume.online/api/ready/" || (echo "readiness check FAILED after deploy" && exit 1)
+    - curl -fsS "https://api.intelliresume.online/api/ready/" || curl -fsS "https://intelliresume.online/api/ready/" || (echo "readiness check FAILED after deploy" && exit 1)
   environment:
     name: production
-    url: http://143.244.132.107:8090
+    url: https://api.intelliresume.online
   rules:
     - if: $CI_COMMIT_BRANCH == "main"
       when: manual
