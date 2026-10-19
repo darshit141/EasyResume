@@ -494,9 +494,11 @@ class UserAIKey(models.Model):
     # offering it here would be nonsense.
     PROVIDER_GEMINI = "gemini"
     PROVIDER_DAHL = "dahl"
+    PROVIDER_NVIDIA = "nvidia"
     PROVIDER_CHOICES = [
         (PROVIDER_GEMINI, "Google Gemini"),
         (PROVIDER_DAHL, "Dahl Global"),
+        (PROVIDER_NVIDIA, "NVIDIA NIM"),
     ]
 
     user = models.ForeignKey(

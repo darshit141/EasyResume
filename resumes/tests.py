@@ -20,6 +20,7 @@ from resumes.services.llm_service import (
     LLMServiceError,
     LLMSchemaValidationError,
     LLMTimeoutError,
+    NvidiaLLMService,
     OllamaLLMService,
     SUPPORTED_PROVIDERS,
     _to_gemini_schema,
@@ -612,6 +613,152 @@ class DahlLLMServiceTests(SimpleTestCase):
     )
     def test_get_llm_service_returns_dahl_client_when_configured(self):
         self.assertIsInstance(get_llm_service(), DahlLLMService)
+
+
+class NvidiaLLMServiceTests(SimpleTestCase):
+    """NVIDIA NIM (integrate.api.nvidia.com/v1) tests covering multi-model failover,
+    endpoint formatting, auth error handling, reasoning tag stripping, and provider resolution."""
+
+    def make_service(
+        self,
+        api_key="test-nvidia-key",
+        model="meta/llama-3.3-70b-instruct",
+        fallback_models=("nvidia/llama-3.1-nemotron-70b-instruct", "deepseek-ai/deepseek-r1"),
+    ):
+        return NvidiaLLMService(
+            api_key=api_key,
+            model=model,
+            timeout=5,
+            max_retries=0,
+            temperature=0,
+            base_url="https://integrate.api.nvidia.com/v1",
+            fallback_models=fallback_models,
+        )
+
+    def test_nvidia_is_a_supported_provider(self):
+        self.assertIn("nvidia", SUPPORTED_PROVIDERS)
+
+    def test_candidate_models_includes_primary_and_fallbacks(self):
+        service = self.make_service()
+        self.assertEqual(
+            service.candidate_models(),
+            ["meta/llama-3.3-70b-instruct", "nvidia/llama-3.1-nemotron-70b-instruct", "deepseek-ai/deepseek-r1"],
+        )
+
+    def test_successful_completion_returns_parsed_json(self):
+        service = self.make_service()
+        body = json.dumps({
+            "choices": [{"message": {"content": json.dumps({"skills": ["Django", "Python"]})}}]
+        }).encode("utf-8")
+        with patch("resumes.services.llm_service.urlopen", return_value=_fake_response(body)):
+            result = service.generate_structured("prompt", {"type": "object"})
+        self.assertEqual(result, {"skills": ["Django", "Python"]})
+        self.assertEqual(service.last_model_used, "meta/llama-3.3-70b-instruct")
+
+    def test_request_hits_configured_base_url_with_bearer_auth(self):
+        service = self.make_service()
+        body = json.dumps({"choices": [{"message": {"content": "{}"}}]}).encode("utf-8")
+        captured = {}
+
+        def fake_urlopen(request, timeout=None):
+            captured["request"] = request
+            return _fake_response(body)
+
+        with patch("resumes.services.llm_service.urlopen", side_effect=fake_urlopen):
+            service.generate_structured("prompt", {"type": "object"})
+
+        request = captured["request"]
+        self.assertEqual(request.full_url, "https://integrate.api.nvidia.com/v1/chat/completions")
+        self.assertEqual(request.get_header("Authorization"), "Bearer test-nvidia-key")
+        payload = json.loads(request.data.decode("utf-8"))
+        self.assertEqual(payload["model"], "meta/llama-3.3-70b-instruct")
+        self.assertEqual(payload["response_format"], {"type": "json_object"})
+
+    def test_model_fallback_when_primary_model_fails(self):
+        service = self.make_service()
+        primary_error = HTTPError(
+            "https://integrate.api.nvidia.com/v1/chat/completions",
+            503, "Service Unavailable", {}, None
+        )
+        fallback_body = json.dumps({
+            "choices": [{"message": {"content": json.dumps({"ok": True})}}]
+        }).encode("utf-8")
+
+        calls = []
+        def fake_urlopen(request, timeout=None):
+            calls.append(json.loads(request.data.decode("utf-8"))["model"])
+            if len(calls) == 1:
+                raise primary_error
+            return _fake_response(fallback_body)
+
+        with patch("resumes.services.llm_service.urlopen", side_effect=fake_urlopen):
+            result = service.generate_structured("prompt", {"type": "object"})
+
+        self.assertEqual(result, {"ok": True})
+        self.assertEqual(calls, ["meta/llama-3.3-70b-instruct", "nvidia/llama-3.1-nemotron-70b-instruct"])
+        self.assertEqual(service.last_model_used, "nvidia/llama-3.1-nemotron-70b-instruct")
+
+    def test_strips_reasoning_tags_from_deepseek_r1(self):
+        service = self.make_service()
+        body = json.dumps({
+            "choices": [{
+                "message": {
+                    "content": "<think>\nThinking about resume tailoring...\n</think>\n```json\n{\"skills\": [\"PyTorch\"]}\n```"
+                }
+            }]
+        }).encode("utf-8")
+        with patch("resumes.services.llm_service.urlopen", return_value=_fake_response(body)):
+            result = service.generate_structured("prompt", {"type": "object"})
+        self.assertEqual(result, {"skills": ["PyTorch"]})
+
+    def test_missing_api_key_raises_auth_error(self):
+        from resumes.services.llm_service import LLMAuthError
+        service = self.make_service(api_key="")
+        with self.assertRaises(LLMAuthError):
+            service.generate_structured("prompt", {})
+
+    def test_probe_model_success(self):
+        service = self.make_service()
+        body = json.dumps({"choices": [{"message": {"content": '{"ok": true}'}}]}).encode("utf-8")
+        with patch("resumes.services.llm_service.urlopen", return_value=_fake_response(body)):
+            ok, detail = service.probe_model("meta/llama-3.3-70b-instruct")
+        self.assertTrue(ok)
+        self.assertIn("answered in", detail)
+
+    @override_settings(
+        LLM_PROVIDER="nvidia",
+        LLM_FALLBACK_PROVIDER="",
+        NVIDIA_API_KEY="token",
+        NVIDIA_MODEL="meta/llama-3.3-70b-instruct",
+        NVIDIA_BASE_URL="https://integrate.api.nvidia.com/v1",
+    )
+    def test_get_llm_service_returns_nvidia_client_when_configured(self):
+        self.assertIsInstance(get_llm_service(), NvidiaLLMService)
+
+    def test_nvidia_rotates_tokens_on_429(self):
+        service = NvidiaLLMService(
+            api_keys="nvidia_1, nvidia_2",
+            model="meta/llama-3.3-70b-instruct",
+            timeout=5,
+            max_retries=0,
+            fallback_models=[],
+        )
+        attempts = []
+
+        def fake_urlopen(request, timeout=None):
+            auth = request.get_header("Authorization") or ""
+            key = auth.replace("Bearer ", "").strip()
+            attempts.append(key)
+            if key == "nvidia_1":
+                raise HTTPError("https://integrate.api.nvidia.com/v1/chat/completions", 429, "Too Many Requests", {}, None)
+            return _fake_response(json.dumps({
+                "choices": [{"message": {"content": '{"ok": true}'}}]
+            }).encode("utf-8"))
+
+        with patch("resumes.services.llm_service.urlopen", side_effect=fake_urlopen):
+            res = service.generate_structured("hi", {"type": "object"})
+            self.assertEqual(res, {"ok": True})
+            self.assertEqual(attempts, ["nvidia_1", "nvidia_2"])
 
 
 class GeminiLLMServiceTests(SimpleTestCase):

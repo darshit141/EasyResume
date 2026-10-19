@@ -28,6 +28,7 @@ from resumes.services.llm_service import (
     SUPPORTED_PROVIDERS,
     DahlLLMService,
     GeminiLLMService,
+    NvidiaLLMService,
     LLMServiceError,
     _parse_api_keys,
     get_llm_service,
@@ -49,13 +50,16 @@ CONFIG_KEYS = (
     "DAHL_MODEL",
     "DAHL_FALLBACK_MODELS",
     "DAHL_BASE_URL",
+    "NVIDIA_MODEL",
+    "NVIDIA_FALLBACK_MODELS",
+    "NVIDIA_BASE_URL",
     "GROQ_MODEL",
     "KIRA_MODEL",
     "OLLAMA_MODEL",
     "LLM_TIMEOUT",
     "LLM_MAX_RETRIES",
 )
-KEY_SETTINGS = ("GEMINI_API_KEY", "DAHL_API_KEY", "GROQ_API_KEY", "KIRA_API_KEY")
+KEY_SETTINGS = ("GEMINI_API_KEY", "DAHL_API_KEY", "NVIDIA_API_KEY", "GROQ_API_KEY", "KIRA_API_KEY")
 NEW_GEMINI_KEY_ADVICE = (
     "Create a key at https://aistudio.google.com/apikey and paste it into GEMINI_API_KEY in the admin "
     "Configuration tab. It takes effect on the next request - no restart needed."
@@ -91,6 +95,8 @@ class Command(BaseCommand):
             ok = self._check_gemini(generate)
         elif provider == "dahl":
             ok = self._check_dahl(generate)
+        elif provider == "nvidia":
+            ok = self._check_nvidia(generate)
         else:
             ok = self._check_generic(provider, generate)
 
@@ -254,6 +260,49 @@ class Command(BaseCommand):
 
         if not working:
             self.stdout.write("  No Dahl model answered.")
+            return False
+        if working[0] != chain[0]:
+            self.stdout.write(self.style.WARNING(
+                f"  {chain[0]} is not answering right now; requests will be served by fallback {working[0]}."
+            ))
+        return True
+
+    def _check_nvidia(self, generate):
+        service = get_llm_service(provider="nvidia")
+        if not isinstance(service, NvidiaLLMService):
+            return self._check_generic("nvidia", generate)
+
+        if not service.api_key:
+            self.stdout.write(self.style.ERROR("  No NVIDIA API key is configured."))
+            self.stdout.write("  Add NVIDIA_API_KEY in the admin Configuration tab or .env file.")
+            return False
+
+        chain = service.candidate_models()
+        self.stdout.write(f"  Models are tried in this order: {' -> '.join(chain) or '(none)'}")
+        if not chain:
+            self.stdout.write("  No NVIDIA model configured.")
+            return False
+
+        try:
+            service.check_model_available()
+            self.stdout.write("  Provider reachable.")
+        except LLMServiceError as exc:
+            self.stdout.write(self.style.WARNING(f"  Provider check returned: {exc.code} - {exc}"))
+
+        if not generate:
+            return True
+
+        working = []
+        for model in chain:
+            ok, detail = service.probe_model(model)
+            if ok:
+                working.append(model)
+                self.stdout.write(self.style.SUCCESS(f"  [ok]   {model}: {detail}"))
+            else:
+                self.stdout.write(self.style.ERROR(f"  [fail] {model}: {detail}"))
+
+        if not working:
+            self.stdout.write("  No NVIDIA model answered.")
             return False
         if working[0] != chain[0]:
             self.stdout.write(self.style.WARNING(

@@ -31,6 +31,7 @@ _LLM_PROVIDER_CHOICES = [
     {"value": "kira", "label": "Kira (hosted, large context, high limits)"},
     {"value": "openrouter", "label": "OpenRouter (hosted, hundreds of models, Pro/Max only)"},
     {"value": "dahl", "label": "Dahl Global (hosted: MiniMax, GLM, DeepSeek)"},
+    {"value": "nvidia", "label": "NVIDIA NIM (Free: Llama-3.3-70B, Nemotron, DeepSeek-R1, Mistral, Qwen)"},
 ]
 
 # Every AI setting - provider, models, fallbacks and the provider API keys - is
@@ -46,7 +47,7 @@ DEFAULT_CONFIGS = [
         "key": "LLM_PROVIDER",
         "category": "llm",
         "value_type": "string",
-        "description": "Default LLM provider (ollama, groq, gemini, kira, openrouter, dahl)",
+        "description": "Default LLM provider (ollama, groq, gemini, kira, openrouter, dahl, nvidia)",
         "choices": _LLM_PROVIDER_CHOICES,
     },
     {
@@ -268,6 +269,33 @@ DEFAULT_CONFIGS = [
         "category": "llm",
         "value_type": "string",
         "description": "Dahl Global API key(s). Supports multiple comma or newline-separated tokens for automatic failover pool. Stored encrypted.",
+    },
+    {
+        "key": "NVIDIA_MODEL",
+        "category": "llm",
+        "value_type": "string",
+        "description": (
+            "First-choice NVIDIA NIM model id (e.g. meta/llama-3.3-70b-instruct, "
+            "nvidia/llama-3.1-nemotron-70b-instruct, deepseek-ai/deepseek-r1)."
+        ),
+    },
+    {
+        "key": "NVIDIA_FALLBACK_MODELS",
+        "category": "llm",
+        "value_type": "list",
+        "description": "Comma-separated NVIDIA NIM models to try, in order, when the first choice is unavailable or rate-limited.",
+    },
+    {
+        "key": "NVIDIA_BASE_URL",
+        "category": "llm",
+        "value_type": "string",
+        "description": "Base URL for the NVIDIA NIM API (default: https://integrate.api.nvidia.com/v1)",
+    },
+    {
+        "key": "NVIDIA_API_KEY",
+        "category": "llm",
+        "value_type": "string",
+        "description": "NVIDIA API key(s) (nvapi-...). Supports multiple comma or newline-separated tokens for automatic failover pool. Stored encrypted.",
     },
     {
         "key": "TAILOR_ADD_MISSING_SKILLS_DEFAULT",
