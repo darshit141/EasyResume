@@ -11,6 +11,7 @@ from .views.admin_views import (
     AdminUserSecurityResetAPIView,
     AdminStatsAPIView,
     AdminAuditLogListAPIView,
+    AdminAIModelStatsAPIView,
 )
 from .views.business_metrics_view import AdminBusinessMetricsAPIView
 from .views.analytics_views import TrackEventAPIView
@@ -65,6 +66,7 @@ urlpatterns = [
     path("admin/config/test-ai/", SystemConfigurationTestAIAPIView.as_view(), name="admin-config-test-ai"),
     path("admin/users/", AdminUserListAPIView.as_view(), name="admin-users"),
     path("admin/stats/", AdminStatsAPIView.as_view(), name="admin-stats"),
+    path("admin/ai-model-stats/", AdminAIModelStatsAPIView.as_view(), name="admin-ai-model-stats"),
     path("admin/business-metrics/", AdminBusinessMetricsAPIView.as_view(), name="admin-business-metrics"),
     path("admin/users/<int:user_id>/toggle-active/", AdminUserToggleActiveAPIView.as_view(), name="admin-user-toggle-active"),
     path("admin/users/<int:user_id>/toggle-staff/", AdminUserToggleStaffAPIView.as_view(), name="admin-user-toggle-staff"),

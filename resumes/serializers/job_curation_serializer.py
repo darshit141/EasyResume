@@ -83,6 +83,13 @@ class JobCurationRequestSerializer(serializers.Serializer):
         default=None,
         help_text="When true, automatically incorporates identified missing job skills into the tailored resume.",
     )
+    tailoring_mode = serializers.ChoiceField(
+        choices=["system_baseline", "rephrase_only", "full_tailored"],
+        required=False,
+        allow_null=True,
+        default=None,
+        help_text="Tailoring mode: 'system_baseline' (instant ATS master), 'rephrase_only' (active-verb polish), or 'full_tailored' (deep AI adaptation).",
+    )
     resume_id = serializers.IntegerField(
         required=False,
         allow_null=True,
@@ -410,6 +417,13 @@ class ResumeCurationGenerateRequestSerializer(serializers.Serializer):
         default=None,
         help_text="When true, automatically incorporates identified missing job skills into the tailored resume.",
     )
+    tailoring_mode = serializers.ChoiceField(
+        choices=["system_baseline", "rephrase_only", "full_tailored"],
+        required=False,
+        allow_null=True,
+        default=None,
+        help_text="Tailoring mode: 'system_baseline' (instant ATS master), 'rephrase_only' (active-verb polish), or 'full_tailored' (deep AI adaptation).",
+    )
 
 
 class PersonalInformationSerializer(serializers.Serializer):
@@ -457,4 +471,5 @@ class TailoredResumeDataSerializer(serializers.Serializer):
     projects = TailoredResumeItemSerializer(many=True)
     education = TailoredResumeItemSerializer(many=True)
     certifications = TailoredResumeItemSerializer(many=True)
+    tailoring_mode = serializers.CharField(required=False, allow_blank=True, default="system_baseline")
 

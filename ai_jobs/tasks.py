@@ -91,6 +91,7 @@ def _run_tailored_resume_generation(job):
     ai_model = job.input_params.get("ai_model")
     ai_fallback_provider = job.input_params.get("ai_fallback_provider")
     add_missing_skills = job.input_params.get("add_missing_skills")
+    tailoring_mode = job.input_params.get("tailoring_mode")
     curation, version = JobResumeCurationService(
         provider=job.provider or None,
         user=job.user,
@@ -101,6 +102,7 @@ def _run_tailored_resume_generation(job):
         curation_id=job.curation_id,
         regenerate=regenerate,
         add_missing_skills=add_missing_skills,
+        mode=tailoring_mode,
     )
     # Reuses the gap-analysis result `generate()` just cached — regenerate
     # is always False here, matching the original synchronous view, which
@@ -127,6 +129,7 @@ def _run_tailored_resume_generation(job):
         ),
         "gap_review": gap_review,
         "version_comparison": version_comparison,
+        "tailoring_mode": (curation.tailored_resume_data or {}).get("tailoring_mode", "system_baseline"),
         "created_at": curation.created_at,
         "updated_at": curation.updated_at,
     }
@@ -205,6 +208,9 @@ def run_ai_job(self, job_id):
     job.save(update_fields=["status", "started_at", "celery_task_id", "attempt_count", "updated_at"])
     _cache_status(job)
 
+    from resumes.services.llm_service import reset_last_llm_execution, get_last_llm_execution
+    reset_last_llm_execution()
+
     start = time.monotonic()
     try:
         runner(job)
@@ -259,6 +265,12 @@ _ACTION_BY_JOB_TYPE = None
 def _record_usage(job, latency_ms):
     from billing.models import AIUsageLog
     from billing.services.entitlements_service import EntitlementsService
+    from resumes.services.llm_service import get_last_llm_execution
+
+    if job.job_type == AIJob.JOB_TYPE_TAILORED_RESUME_GENERATION:
+        mode = (job.input_params or {}).get("tailoring_mode")
+        if mode == "system_baseline":
+            return
 
     global _ACTION_BY_JOB_TYPE
     if _ACTION_BY_JOB_TYPE is None:
@@ -273,6 +285,11 @@ def _record_usage(job, latency_ms):
     action = _ACTION_BY_JOB_TYPE.get(job.job_type)
     if action is None:
         return
+
+    last_model, last_provider = get_last_llm_execution()
+    model_name = last_model or (job.input_params or {}).get("ai_model") or ""
+    provider = last_provider or job.provider or ""
+
     EntitlementsService.record_ai_usage(
-        job.user, action, job.provider, job=job, latency_ms=latency_ms
+        job.user, action, provider, job=job, latency_ms=latency_ms, model_name=model_name
     )

@@ -7,6 +7,7 @@ import json
 import logging
 import re
 import socket
+import threading
 import time
 from urllib.error import HTTPError, URLError
 from urllib.parse import quote
@@ -256,8 +257,27 @@ def _parse_json_content(content):
     raise LLMInvalidResponseError()
 
 
+_execution_context = threading.local()
+
+
+def set_last_llm_execution(model, provider):
+    _execution_context.last_model = model
+    _execution_context.last_provider = provider
+
+
+def get_last_llm_execution():
+    return getattr(_execution_context, "last_model", None), getattr(_execution_context, "last_provider", None)
+
+
+def reset_last_llm_execution():
+    _execution_context.last_model = None
+    _execution_context.last_provider = None
+
+
 class LLMService(ABC):
     """The only LLM dependency used by application services."""
+
+    last_model_used = None
 
     @abstractmethod
     def generate_structured(self, prompt, schema):
@@ -321,6 +341,8 @@ class OllamaLLMService(LLMService):
                 content = body.get("response")
                 if not isinstance(content, str) or not content.strip():
                     raise LLMEmptyResponseError()
+                self.last_model_used = self.model
+                set_last_llm_execution(self.model, "ollama")
                 return _parse_json_content(content)
             except HTTPError as exc:
                 if exc.code == 404:
@@ -456,6 +478,7 @@ class GroqLLMService(LLMService):
                         if not isinstance(content, str) or not content.strip():
                             raise LLMEmptyResponseError()
                         self.last_model_used = model
+                        set_last_llm_execution(model, self.provider_name)
                         if index:
                             logger.warning("%s served by fallback model %s (first choice: %s).", self.provider_name, model, candidates[0])
                         return _parse_json_content(content)
@@ -734,6 +757,7 @@ class DahlLLMService(LLMService):
                             raise LLMEmptyResponseError()
                         result = _parse_json_content(content)
                         self.last_model_used = model
+                        set_last_llm_execution(model, self.provider_name)
                         if index:
                             logger.warning(
                                 "Served by fallback Dahl model %s (first choice: %s).",
@@ -1290,6 +1314,7 @@ class GeminiLLMService(LLMService):
                             logger.info("Gemini model %s rejects thinkingBudget=0; it will be sent without it.", model)
                             _remember_thinking_budget_rejected(model)
                         self.last_model_used = model
+                        set_last_llm_execution(model, "gemini")
                         if index:
                             logger.warning(
                                 "Served by fallback Gemini model %s (first choice: %s).", model, candidates[0]
@@ -1458,6 +1483,20 @@ class FallbackLLMService(LLMService):
         self.fallback = fallback
         self.fallback_provider_name = fallback_provider_name
         self.used_fallback = False
+
+    @property
+    def last_model_used(self):
+        if self.used_fallback and hasattr(self.fallback, "last_model_used"):
+            return self.fallback.last_model_used
+        if hasattr(self.primary, "last_model_used"):
+            return self.primary.last_model_used
+        return None
+
+    @property
+    def last_provider_used(self):
+        if self.used_fallback:
+            return self.fallback_provider_name
+        return getattr(self.primary, "provider_name", None)
 
     def generate_structured(self, prompt, schema):
         try:
