@@ -60,6 +60,7 @@ class JobResumeCurationRegenerationResponseSerializer(serializers.Serializer):
         allow_null=True,
         required=False,
     )
+    tailoring_mode = serializers.CharField(required=False, allow_blank=True, default="system_baseline")
     created_at = serializers.DateTimeField()
     updated_at = serializers.DateTimeField()
 

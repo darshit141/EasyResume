@@ -331,6 +331,52 @@ JOB_REQUIREMENTS:
 %s""" % (candidate_data, job_requirements)
 
 
+TAILOR_MODE_SYSTEM_BASELINE = "system_baseline"
+TAILOR_MODE_REPHRASE_ONLY = "rephrase_only"
+TAILOR_MODE_FULL_TAILORED = "full_tailored"
+TAILOR_MODES = (TAILOR_MODE_SYSTEM_BASELINE, TAILOR_MODE_REPHRASE_ONLY, TAILOR_MODE_FULL_TAILORED)
+
+
+def build_resume_rephrase_prompt(
+    candidate_source_data,
+    retry_feedback=None,
+):
+    feedback_block = ""
+    if retry_feedback:
+        feedback_block = (
+            "\nThe previous attempt violated the rules below and was rejected. "
+            "Correct every one of these in this attempt:\n- "
+            + "\n- ".join(retry_feedback)
+            + "\n"
+        )
+
+    return """You are an expert resume editor polishing a candidate's resume for active voice, conciseness, and high readability.
+Use ONLY facts present in CANDIDATE_SOURCE_DATA. Never invent, infer, or alter candidate facts.
+
+STRICT REPHRASING RULES:
+- Rephrase and polish the wording of existing achievements and responsibilities to use strong active verbs (e.g., 'Led', 'Architected', 'Spearheaded', 'Engineered', 'Streamlined', 'Delivered').
+- Eliminate passive voice, wordiness, and grammatical awkwardness.
+- ABSOLUTELY FORBIDDEN:
+  - Never change or invent employer/company names, educational degrees, schools, or job titles.
+  - Never alter start dates, end dates, years, or employment durations.
+  - Never change or inflate numbers, percentages, team sizes, or numeric metrics.
+  - Never add new technical skills, tools, or certifications not already in CANDIDATE_SOURCE_DATA.
+- "skills": must be an exact subset of CANDIDATE_SOURCE_DATA.skills, preserved and spelled accurately.
+- For "experience", "projects", "education", and "certifications":
+  - Every returned item must include the integer "source_index" referencing the candidate's entry.
+  - Provide "tailored_text" containing the polished text.
+  - Provide "header": the identifying line only (title, organization, dates).
+  - Provide "bullets": list of polished achievement bullet points from that entry.
+%s
+Return only JSON conforming exactly to the supplied schema. Do not include commentary outside the JSON.
+
+CANDIDATE_SOURCE_DATA:
+%s""" % (
+        feedback_block,
+        candidate_source_data,
+    )
+
+
 def build_resume_curation_prompt(
     candidate_source_data,
     job_title,

@@ -89,6 +89,17 @@ class EntitlementsService:
         dispatched through ai_jobs.tasks.run_ai_job, left blank for any
         AI-calling endpoint not yet migrated onto that queue.
         """
+        if not model_name:
+            try:
+                from resumes.services.llm_service import get_last_llm_execution
+                last_model, last_prov = get_last_llm_execution()
+                if last_model:
+                    model_name = last_model
+                if not provider and last_prov:
+                    provider = last_prov
+            except Exception:
+                pass
+
         AIUsageLog.objects.create(
             user=user,
             action=action,

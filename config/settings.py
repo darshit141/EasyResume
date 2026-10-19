@@ -670,6 +670,7 @@ GROQ_FALLBACK_MODELS = [
 LLM_KEY_ROTATION_ENABLED = os.getenv("LLM_KEY_ROTATION_ENABLED", "True") == "True"
 LLM_KEY_COOLDOWN_SECONDS = int(os.getenv("LLM_KEY_COOLDOWN_SECONDS", "300"))
 TAILOR_ADD_MISSING_SKILLS_DEFAULT = os.getenv("TAILOR_ADD_MISSING_SKILLS_DEFAULT", "False") == "True"
+TAILOR_DEFAULT_MODE = os.getenv("TAILOR_DEFAULT_MODE", "full_tailored").strip()
 
 # Gemini: free-tier API. Get a key at https://aistudio.google.com/apikey
 #
@@ -759,6 +760,27 @@ DAHL_FALLBACK_MODELS = [
     if model.strip()
 ]
 DAHL_BASE_URL = os.getenv("DAHL_BASE_URL", "https://inference.dahl.global/v1").rstrip("/")
+
+# NVIDIA NIM: hosted free-tier models at https://build.nvidia.com/models
+# OpenAI-compatible API at https://integrate.api.nvidia.com/v1
+# Supports multi-model failover across free models and multi-key rotation.
+NVIDIA_API_KEY = os.getenv("NVIDIA_API_KEY", "").strip()
+NVIDIA_MODEL = os.getenv("NVIDIA_MODEL", "meta/llama-3.3-70b-instruct").strip()
+NVIDIA_FALLBACK_MODELS = [
+    model.strip()
+    for model in os.getenv(
+        "NVIDIA_FALLBACK_MODELS",
+        "nvidia/llama-3.1-nemotron-70b-instruct, "
+        "deepseek-ai/deepseek-r1, "
+        "meta/llama-3.1-70b-instruct, "
+        "mistralai/mistral-large-2-instruct, "
+        "qwen/qwen2.5-72b-instruct, "
+        "google/gemma-2-27b-it, "
+        "meta/llama-3.1-8b-instruct",
+    ).split(",")
+    if model.strip()
+]
+NVIDIA_BASE_URL = os.getenv("NVIDIA_BASE_URL", "https://integrate.api.nvidia.com/v1").rstrip("/")
 
 # --- Rewarded ads -> earned credits ---------------------------------------
 # A free-tier user can watch an opt-in rewarded video to earn a credit (one

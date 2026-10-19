@@ -279,6 +279,7 @@ class JobResumeCurationGenerateAPIView(APIView):
         ai_model = requested_model(serializer.validated_data.get("ai_model"))
         ai_fallback_provider = requested_fallback_provider(serializer.validated_data.get("ai_fallback_provider"))
         add_missing_skills = serializer.validated_data.get("add_missing_skills")
+        tailoring_mode = serializer.validated_data.get("tailoring_mode")
 
         # Plan gates run before any AI call, so a user who is over quota gets
         # an instant, clear answer instead of waiting out a generation we
@@ -301,7 +302,7 @@ class JobResumeCurationGenerateAPIView(APIView):
 
         try:
             EntitlementsService.check_ai_provider_allowed(request.user, provider)
-            if creates_new_version:
+            if creates_new_version and tailoring_mode != "system_baseline":
                 EntitlementsService.check_can_generate_tailored_resume(request.user)
                 EntitlementsService.check_can_use_ai(request.user, provider=provider)
         except PlanRestrictionError as exc:
@@ -318,6 +319,7 @@ class JobResumeCurationGenerateAPIView(APIView):
                 curation_id=curation_id,
                 regenerate=False,
                 add_missing_skills=add_missing_skills,
+                mode=tailoring_mode,
             )
             gap_review = MissingInformationReviewService(
                 provider=provider, user=request.user, model=ai_model, fallback_provider=ai_fallback_provider
@@ -341,6 +343,7 @@ class JobResumeCurationGenerateAPIView(APIView):
                 ),
                 "gap_review": gap_review,
                 "version_comparison": version_comparison,
+                "tailoring_mode": (curation.tailored_resume_data or {}).get("tailoring_mode", "system_baseline"),
                 "created_at": curation.created_at,
                 "updated_at": curation.updated_at,
             }
@@ -364,6 +367,7 @@ class JobResumeCurationGenerateAPIView(APIView):
                 "ai_model": ai_model,
                 "ai_fallback_provider": ai_fallback_provider,
                 "add_missing_skills": add_missing_skills,
+                "tailoring_mode": tailoring_mode,
             },
         )
         return Response(AIJobSerializer(job).data, status=status.HTTP_202_ACCEPTED)

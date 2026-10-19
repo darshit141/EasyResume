@@ -398,7 +398,7 @@ class BYOKEndpointTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertTrue(response.data["enabled"])
         self.assertEqual(
-            [entry["provider"] for entry in response.data["keys"]], ["gemini", "dahl"]
+            [entry["provider"] for entry in response.data["keys"]], ["gemini", "dahl", "nvidia"]
         )
         self.assertFalse(response.data["keys"][0]["configured"])
 

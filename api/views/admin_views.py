@@ -31,6 +31,7 @@ _LLM_PROVIDER_CHOICES = [
     {"value": "kira", "label": "Kira (hosted, large context, high limits)"},
     {"value": "openrouter", "label": "OpenRouter (hosted, hundreds of models, Pro/Max only)"},
     {"value": "dahl", "label": "Dahl Global (hosted: MiniMax, GLM, DeepSeek)"},
+    {"value": "nvidia", "label": "NVIDIA NIM (Free: Llama-3.3-70B, Nemotron, DeepSeek-R1, Mistral, Qwen)"},
 ]
 
 # Every AI setting - provider, models, fallbacks and the provider API keys - is
@@ -46,7 +47,7 @@ DEFAULT_CONFIGS = [
         "key": "LLM_PROVIDER",
         "category": "llm",
         "value_type": "string",
-        "description": "Default LLM provider (ollama, groq, gemini, kira, openrouter, dahl)",
+        "description": "Default LLM provider (ollama, groq, gemini, kira, openrouter, dahl, nvidia)",
         "choices": _LLM_PROVIDER_CHOICES,
     },
     {
@@ -270,6 +271,33 @@ DEFAULT_CONFIGS = [
         "description": "Dahl Global API key(s). Supports multiple comma or newline-separated tokens for automatic failover pool. Stored encrypted.",
     },
     {
+        "key": "NVIDIA_MODEL",
+        "category": "llm",
+        "value_type": "string",
+        "description": (
+            "First-choice NVIDIA NIM model id (e.g. meta/llama-3.3-70b-instruct, "
+            "nvidia/llama-3.1-nemotron-70b-instruct, deepseek-ai/deepseek-r1)."
+        ),
+    },
+    {
+        "key": "NVIDIA_FALLBACK_MODELS",
+        "category": "llm",
+        "value_type": "list",
+        "description": "Comma-separated NVIDIA NIM models to try, in order, when the first choice is unavailable or rate-limited.",
+    },
+    {
+        "key": "NVIDIA_BASE_URL",
+        "category": "llm",
+        "value_type": "string",
+        "description": "Base URL for the NVIDIA NIM API (default: https://integrate.api.nvidia.com/v1)",
+    },
+    {
+        "key": "NVIDIA_API_KEY",
+        "category": "llm",
+        "value_type": "string",
+        "description": "NVIDIA API key(s) (nvapi-...). Supports multiple comma or newline-separated tokens for automatic failover pool. Stored encrypted.",
+    },
+    {
         "key": "TAILOR_ADD_MISSING_SKILLS_DEFAULT",
         "category": "llm",
         "value_type": "boolean",
@@ -277,6 +305,17 @@ DEFAULT_CONFIGS = [
             "Default setting for whether to automatically incorporate verified missing job requirements "
             "into tailored resumes when not explicitly specified in the tailoring request."
         ),
+    },
+    {
+        "key": "TAILOR_DEFAULT_MODE",
+        "category": "llm",
+        "value_type": "string",
+        "description": "Default mode for tailoring resumes: 'system_baseline' (instant master resume in ATS layout), 'rephrase_only' (safe active-verb polish), or 'full_tailored' (deep AI adaptation).",
+        "choices": [
+            {"value": "system_baseline", "label": "System Baseline (Instant, 0 cost, 100% genuine)"},
+            {"value": "rephrase_only", "label": "Rephrase Only (Active voice & polish, no fact changes)"},
+            {"value": "full_tailored", "label": "Full AI Tailored (Role-specific deep adaptation)"},
+        ],
     },
     {
         "key": "BYOK_ENABLED",
@@ -1267,3 +1306,104 @@ class AdminAuditLogListAPIView(APIView):
         page = paginator.paginate_queryset(queryset, request, view=self)
         serializer = AdminAuditLogSerializer(page, many=True)
         return paginator.get_paginated_response(serializer.data)
+
+
+class AdminAIModelStatsAPIView(APIView):
+    """Aggregate statistics on AI model usage and latency for admin observability."""
+
+    permission_classes = [permissions.IsAdminUser]
+
+    def get(self, request):
+        from datetime import timedelta
+        from django.utils import timezone
+        from django.db.models import Avg, Count, Max
+        from billing.models import AIUsageLog
+
+        time_range = request.query_params.get("range", "7d").strip().lower()
+        now = timezone.now()
+        qs = AIUsageLog.objects.all()
+
+        if time_range == "24h":
+            qs = qs.filter(created_at__gte=now - timedelta(hours=24))
+        elif time_range == "7d":
+            qs = qs.filter(created_at__gte=now - timedelta(days=7))
+        elif time_range == "30d":
+            qs = qs.filter(created_at__gte=now - timedelta(days=30))
+        # "all" does not filter created_at
+
+        total_calls = qs.count()
+
+        model_stats_raw = (
+            qs.values("model_name", "provider")
+            .annotate(
+                count=Count("id"),
+                avg_latency=Avg("latency_ms"),
+                last_used=Max("created_at"),
+            )
+            .order_by("-count")
+        )
+        models = [
+            {
+                "model_name": item["model_name"] or "default",
+                "provider": item["provider"],
+                "total_calls": item["count"],
+                "avg_latency_ms": int(item["avg_latency"]) if item["avg_latency"] is not None else None,
+                "last_used": item["last_used"].isoformat() if item["last_used"] else None,
+            }
+            for item in model_stats_raw
+        ]
+
+        provider_stats_raw = (
+            qs.values("provider")
+            .annotate(
+                count=Count("id"),
+                avg_latency=Avg("latency_ms"),
+            )
+            .order_by("-count")
+        )
+        providers = [
+            {
+                "provider": item["provider"] or "unknown",
+                "total_calls": item["count"],
+                "avg_latency_ms": int(item["avg_latency"]) if item["avg_latency"] is not None else None,
+            }
+            for item in provider_stats_raw
+        ]
+
+        action_stats_raw = (
+            qs.values("action")
+            .annotate(count=Count("id"))
+            .order_by("-count")
+        )
+        actions = [
+            {
+                "action": item["action"],
+                "total_calls": item["count"],
+            }
+            for item in action_stats_raw
+        ]
+
+        recent_calls = [
+            {
+                "id": log.id,
+                "user_email": log.user.email if log.user else "",
+                "model_name": log.model_name or "default",
+                "provider": log.provider,
+                "action": log.action,
+                "latency_ms": log.latency_ms,
+                "created_at": log.created_at.isoformat() if log.created_at else None,
+            }
+            for log in qs.select_related("user").order_by("-created_at")[:25]
+        ]
+
+        overall_avg_latency = qs.aggregate(avg=Avg("latency_ms"))["avg"]
+
+        return Response({
+            "range": time_range,
+            "total_calls": total_calls,
+            "avg_latency_ms": int(overall_avg_latency) if overall_avg_latency is not None else None,
+            "models": models,
+            "providers": providers,
+            "actions": actions,
+            "recent_calls": recent_calls,
+        }, status=status.HTTP_200_OK)

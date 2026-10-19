@@ -7,6 +7,7 @@ import json
 import logging
 import re
 import socket
+import threading
 import time
 from urllib.error import HTTPError, URLError
 from urllib.parse import quote
@@ -81,7 +82,7 @@ class LLMHighDemandError(LLMQuotaExceededError):
     message = "Due to high demand, our AI services are temporarily at capacity. Please try again after some time."
 
 
-SUPPORTED_PROVIDERS = ("ollama", "groq", "gemini", "kira", "openrouter", "dahl")
+SUPPORTED_PROVIDERS = ("ollama", "groq", "gemini", "kira", "openrouter", "dahl", "nvidia")
 
 # Resume upload/parsing has one extra choice unavailable elsewhere: a
 # deterministic, non-AI parser (see StandardResumeParserService). The other
@@ -256,8 +257,27 @@ def _parse_json_content(content):
     raise LLMInvalidResponseError()
 
 
+_execution_context = threading.local()
+
+
+def set_last_llm_execution(model, provider):
+    _execution_context.last_model = model
+    _execution_context.last_provider = provider
+
+
+def get_last_llm_execution():
+    return getattr(_execution_context, "last_model", None), getattr(_execution_context, "last_provider", None)
+
+
+def reset_last_llm_execution():
+    _execution_context.last_model = None
+    _execution_context.last_provider = None
+
+
 class LLMService(ABC):
     """The only LLM dependency used by application services."""
+
+    last_model_used = None
 
     @abstractmethod
     def generate_structured(self, prompt, schema):
@@ -321,6 +341,8 @@ class OllamaLLMService(LLMService):
                 content = body.get("response")
                 if not isinstance(content, str) or not content.strip():
                     raise LLMEmptyResponseError()
+                self.last_model_used = self.model
+                set_last_llm_execution(self.model, "ollama")
                 return _parse_json_content(content)
             except HTTPError as exc:
                 if exc.code == 404:
@@ -456,6 +478,7 @@ class GroqLLMService(LLMService):
                         if not isinstance(content, str) or not content.strip():
                             raise LLMEmptyResponseError()
                         self.last_model_used = model
+                        set_last_llm_execution(model, self.provider_name)
                         if index:
                             logger.warning("%s served by fallback model %s (first choice: %s).", self.provider_name, model, candidates[0])
                         return _parse_json_content(content)
@@ -734,6 +757,7 @@ class DahlLLMService(LLMService):
                             raise LLMEmptyResponseError()
                         result = _parse_json_content(content)
                         self.last_model_used = model
+                        set_last_llm_execution(model, self.provider_name)
                         if index:
                             logger.warning(
                                 "Served by fallback Dahl model %s (first choice: %s).",
@@ -790,6 +814,275 @@ class DahlLLMService(LLMService):
                         attempt += 1
                         if attempt == attempts:
                             logger.error("Dahl was unreachable for model %s after %s attempt(s): %s", model, attempt, exc)
+                            last_exc = LLMServiceError()
+                            if not is_last_model:
+                                break
+
+                if not key_exhausted:
+                    # Model issue rather than key quota: don't burn other keys on this dead model
+                    break
+
+        if isinstance(last_exc, LLMQuotaExceededError):
+            raise LLMHighDemandError()
+
+        raise last_exc or LLMModelUnavailableError()
+
+    def probe_model(self, model=None, api_key=None):
+        """One tiny real generation against model for diagnostics."""
+        target_model = model or self.model
+        target_key = api_key or self.api_key
+        if not target_model or not target_key:
+            return False, "No model or API key configured"
+
+        started = time.monotonic()
+        payload = json.dumps({
+            "model": target_model,
+            "messages": [{"role": "user", "content": 'Reply with {"ok": true} and nothing else.'}],
+            "temperature": self.temperature,
+            "max_tokens": 64,
+        }).encode("utf-8")
+        request = Request(
+            f"{self.base_url}/chat/completions",
+            data=payload,
+            headers={
+                "Content-Type": "application/json",
+                "Authorization": f"Bearer {target_key}",
+                "User-Agent": "IntelliResume/1.0",
+            },
+            method="POST",
+        )
+        try:
+            with urlopen(request, timeout=min(self.timeout, 15)) as response:
+                body = json.loads(response.read().decode("utf-8"))
+            choices = body.get("choices")
+            if isinstance(choices, list) and choices:
+                return True, f"answered in {time.monotonic() - started:.1f}s"
+            return False, "empty choices returned"
+        except HTTPError as exc:
+            detail = exc.read().decode(errors="replace") if hasattr(exc, "read") else ""
+            return False, f"HTTP {exc.code}: {detail[:120]}".strip()
+        except LLMServiceError as exc:
+            return False, exc.code
+        except (socket.timeout, TimeoutError):
+            return False, "timed out"
+        except (URLError, ConnectionError) as exc:
+            return False, f"network error: {exc}"
+
+    def check_model_available(self):
+        if not self.model or not self.api_key:
+            raise LLMModelUnavailableError()
+        request = Request(
+            f"{self.base_url}/models",
+            headers={
+                "Authorization": f"Bearer {self.api_key}",
+                "User-Agent": "IntelliResume/1.0",
+            },
+            method="GET",
+        )
+        try:
+            with urlopen(request, timeout=min(self.timeout, 10)) as response:
+                body = json.loads(response.read().decode("utf-8"))
+            models = body.get("data")
+            if isinstance(models, list):
+                model_ids = {item.get("id") for item in models if isinstance(item, dict)}
+                candidates = self.candidate_models()
+                if any(m in model_ids for m in candidates):
+                    return True
+                raise LLMModelUnavailableError()
+            return True
+        except HTTPError as exc:
+            if exc.code in (401, 403):
+                raise LLMAuthError() from exc
+            if exc.code == 404:
+                return True
+            raise LLMServiceError() from exc
+        except (socket.timeout, TimeoutError) as exc:
+            raise LLMTimeoutError() from exc
+        except (URLError, ConnectionError) as exc:
+            raise LLMServiceError() from exc
+
+
+class NvidiaLLMService(LLMService):
+    """Client for NVIDIA NIM (integrate.api.nvidia.com/v1), an OpenAI-compatible
+    inference platform hosting free, high-performance models including
+    Meta Llama 3.3 70B, NVIDIA Nemotron 70B, DeepSeek R1, Mistral Large 2,
+    and Qwen 2.5 72B.
+
+    Supports an in-provider fallback chain across candidate models and
+    multi-key rotation via APIKeyPool with rate-limit cooldown tracking.
+    """
+
+    provider_name = "nvidia"
+
+    DEFAULT_MODEL = "meta/llama-3.3-70b-instruct"
+    DEFAULT_FALLBACK_MODELS = (
+        "nvidia/llama-3.1-nemotron-70b-instruct",
+        "deepseek-ai/deepseek-r1",
+        "meta/llama-3.1-70b-instruct",
+        "mistralai/mistral-large-2-instruct",
+        "qwen/qwen2.5-72b-instruct",
+        "google/gemma-2-27b-it",
+        "meta/llama-3.1-8b-instruct",
+    )
+
+    def __init__(
+        self,
+        api_key=None,
+        model=None,
+        timeout=30,
+        max_retries=2,
+        temperature=0.0,
+        base_url="https://integrate.api.nvidia.com/v1",
+        fallback_models=None,
+        max_output_tokens=8192,
+        api_keys=None,
+    ):
+        self.key_pool = APIKeyPool(api_keys or api_key or "", provider_name="nvidia")
+        self.model = (model or self.DEFAULT_MODEL).strip()
+        self.timeout = timeout
+        self.max_retries = max_retries
+        self.temperature = temperature
+        self.base_url = (base_url or "https://integrate.api.nvidia.com/v1").rstrip("/")
+        if fallback_models is not None:
+            self.fallback_models = _as_list(fallback_models)
+        else:
+            self.fallback_models = list(self.DEFAULT_FALLBACK_MODELS)
+        self.max_output_tokens = max_output_tokens
+        self.last_model_used = None
+
+    @property
+    def api_key(self):
+        return self.key_pool.primary_key
+
+    @api_key.setter
+    def api_key(self, val):
+        self.key_pool = APIKeyPool(val, provider_name="nvidia")
+
+    @property
+    def api_keys(self):
+        return self.key_pool.keys
+
+    def candidate_models(self):
+        """Candidate models tried in order: primary model followed by configured fallbacks."""
+        return _dedupe([self.model, *self.fallback_models])
+
+    def generate_structured(self, prompt, schema):
+        if not self.key_pool:
+            logger.error("No NVIDIA API key is configured - add NVIDIA_API_KEY in the admin Configuration tab.")
+            raise LLMAuthError()
+
+        candidates = self.candidate_models()
+        if not candidates:
+            logger.error("No usable NVIDIA NIM model configured.")
+            raise LLMModelUnavailableError()
+
+        full_prompt = (
+            f"{prompt}\n\nRespond with a single JSON object only, with no "
+            f"surrounding text, conforming exactly to this JSON schema:\n"
+            f"{json.dumps(schema)}"
+        )
+
+        last_exc = None
+        for index, model in enumerate(candidates):
+            is_last_model = index == len(candidates) - 1
+            active_keys = self.key_pool.active_keys(rotate=True)
+
+            for key_index, current_key in enumerate(active_keys):
+                attempts = self.max_retries + 1
+                attempt = 0
+                use_json_object_format = True
+                key_exhausted = False
+
+                while attempt < attempts:
+                    payload_dict = {
+                        "model": model,
+                        "messages": [{"role": "user", "content": full_prompt}],
+                        "temperature": self.temperature,
+                        "max_tokens": self.max_output_tokens,
+                    }
+                    if use_json_object_format:
+                        payload_dict["response_format"] = {"type": "json_object"}
+
+                    payload = json.dumps(payload_dict).encode("utf-8")
+                    request = Request(
+                        f"{self.base_url}/chat/completions",
+                        data=payload,
+                        headers={
+                            "Content-Type": "application/json",
+                            "Authorization": f"Bearer {current_key}",
+                            "User-Agent": "IntelliResume/1.0",
+                        },
+                        method="POST",
+                    )
+
+                    try:
+                        with urlopen(request, timeout=self.timeout) as response:
+                            body = json.loads(response.read().decode("utf-8"))
+                        choices = body.get("choices")
+                        if not isinstance(choices, list) or not choices:
+                            raise LLMEmptyResponseError()
+                        content = (choices[0].get("message") or {}).get("content")
+                        if not isinstance(content, str) or not content.strip():
+                            raise LLMEmptyResponseError()
+                        result = _parse_json_content(content)
+                        self.last_model_used = model
+                        set_last_llm_execution(model, self.provider_name)
+                        if index:
+                            logger.warning(
+                                "Served by fallback NVIDIA model %s (first choice: %s).",
+                                model, candidates[0],
+                            )
+                        if key_index:
+                            logger.info(
+                                "Served by fallback token in NVIDIA key pool (token #%s).", key_index + 1
+                            )
+                        return result
+                    except HTTPError as exc:
+                        detail = exc.read().decode(errors="replace") if hasattr(exc, "read") else ""
+                        if exc.code in (401, 403):
+                            logger.error("NVIDIA rejected the API key (HTTP %s) for model %s: %s", exc.code, model, detail)
+                            self.key_pool.mark_exhausted(current_key, cooldown=600)
+                            if key_index == len(active_keys) - 1 and len(active_keys) == 1:
+                                raise LLMAuthError() from exc
+                            key_exhausted = True
+                            break
+                        if exc.code == 400 and use_json_object_format and "response_format" in detail.lower():
+                            use_json_object_format = False
+                            continue
+                        if exc.code == 404:
+                            logger.warning("NVIDIA model %s is unavailable (HTTP 404): %s", model, detail)
+                            last_exc = LLMModelUnavailableError()
+                            break
+                        if exc.code == 429:
+                            logger.warning("NVIDIA rate-limited model %s on key %s... (HTTP 429): %s", model, current_key[:8], detail)
+                            self.key_pool.mark_exhausted(current_key)
+                            last_exc = LLMQuotaExceededError()
+                            key_exhausted = True
+                            break
+                        elif exc.code >= 500:
+                            logger.warning("NVIDIA model %s server error (HTTP %s): %s", model, exc.code, detail)
+                            last_exc = LLMServiceError()
+                            if not is_last_model:
+                                break
+                        else:
+                            logger.error("NVIDIA request to %s failed (HTTP %s): %s", model, exc.code, detail)
+                            last_exc = LLMServiceError()
+                            if not is_last_model:
+                                break
+                        attempt += 1
+                        if attempt < attempts:
+                            time.sleep(min(2 ** (attempt - 1), 4))
+                    except (socket.timeout, TimeoutError) as exc:
+                        attempt += 1
+                        if attempt == attempts:
+                            logger.warning("NVIDIA timed out calling model %s after %s attempt(s).", model, attempt)
+                            last_exc = LLMTimeoutError()
+                            if not is_last_model:
+                                break
+                    except (URLError, ConnectionError) as exc:
+                        attempt += 1
+                        if attempt == attempts:
+                            logger.error("NVIDIA was unreachable for model %s after %s attempt(s): %s", model, attempt, exc)
                             last_exc = LLMServiceError()
                             if not is_last_model:
                                 break
@@ -1290,6 +1583,7 @@ class GeminiLLMService(LLMService):
                             logger.info("Gemini model %s rejects thinkingBudget=0; it will be sent without it.", model)
                             _remember_thinking_budget_rejected(model)
                         self.last_model_used = model
+                        set_last_llm_execution(model, "gemini")
                         if index:
                             logger.warning(
                                 "Served by fallback Gemini model %s (first choice: %s).", model, candidates[0]
@@ -1458,6 +1752,20 @@ class FallbackLLMService(LLMService):
         self.fallback = fallback
         self.fallback_provider_name = fallback_provider_name
         self.used_fallback = False
+
+    @property
+    def last_model_used(self):
+        if self.used_fallback and hasattr(self.fallback, "last_model_used"):
+            return self.fallback.last_model_used
+        if hasattr(self.primary, "last_model_used"):
+            return self.primary.last_model_used
+        return None
+
+    @property
+    def last_provider_used(self):
+        if self.used_fallback:
+            return self.fallback_provider_name
+        return getattr(self.primary, "provider_name", None)
 
     def generate_structured(self, prompt, schema):
         try:
@@ -1630,6 +1938,20 @@ def _build_client(provider, timeout, max_retries, temperature, max_output_tokens
             temperature=temperature,
             base_url=get_config_value("DAHL_BASE_URL", settings.DAHL_BASE_URL),
             fallback_models=get_config_value("DAHL_FALLBACK_MODELS", settings.DAHL_FALLBACK_MODELS),
+            max_output_tokens=max_output_tokens,
+        )
+
+    if provider == "nvidia":
+        keys = _parse_api_keys(api_key_override) if api_key_override else _provider_api_keys("NVIDIA_API_KEY")
+        return NvidiaLLMService(
+            api_key=keys[0] if keys else "",
+            api_keys=keys,
+            model=model_override or get_config_value("NVIDIA_MODEL", getattr(settings, "NVIDIA_MODEL", NvidiaLLMService.DEFAULT_MODEL)),
+            timeout=timeout,
+            max_retries=max_retries,
+            temperature=temperature,
+            base_url=get_config_value("NVIDIA_BASE_URL", getattr(settings, "NVIDIA_BASE_URL", "https://integrate.api.nvidia.com/v1")),
+            fallback_models=get_config_value("NVIDIA_FALLBACK_MODELS", getattr(settings, "NVIDIA_FALLBACK_MODELS", NvidiaLLMService.DEFAULT_FALLBACK_MODELS)),
             max_output_tokens=max_output_tokens,
         )
 

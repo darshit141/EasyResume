@@ -60,6 +60,16 @@ class ResumeCurationAIService:
         "practices", "responsibilities", "achievements", "contributions", "collaborated",
         "led", "built", "managed", "designed", "implemented", "delivered", "maintained",
         "resolved", "improved", "optimized", "developed", "created", "spearheaded",
+        "orchestrated", "engineered", "architected", "streamlined", "automated", "accelerated",
+        "facilitated", "executed", "mentored", "partnered", "supervised", "administered",
+        "revamped", "championed", "directed", "pioneered", "formulated", "standardized",
+        "consolidated", "maximized", "minimized", "modernized", "secured", "strengthened",
+        "transformed", "validated", "audited", "authored", "conducted", "deployed",
+        "established", "expanded", "identified", "initiated", "instituted", "launched",
+        "operated", "organized", "oversaw", "performed", "planned", "prepared", "produced",
+        "promoted", "provided", "reduced", "reorganized", "restructured", "simplified",
+        "trained", "upgraded", "utilized", "leveraged", "integrated", "configured",
+        "analyzed", "tested", "reviewed", "documented", "monitored",
         "year", "years", "month", "months", "day", "days", "time", "present", "current",
         # English grammatical sentence openers
         "as", "at", "in", "on", "of", "by", "from", "during", "while", "after",
@@ -126,11 +136,39 @@ class ResumeCurationAIService:
 
         raise last_error
 
+    def rephrase_resume(self, candidate_source_data):
+        from resumes.prompts import build_resume_rephrase_prompt
+
+        retry_feedback = None
+        last_error = None
+
+        for attempt in range(1, self.MAX_ATTEMPTS + 1):
+            prompt = build_resume_rephrase_prompt(
+                candidate_source_data=json.dumps(
+                    candidate_source_data, ensure_ascii=False, sort_keys=True
+                ),
+                retry_feedback=retry_feedback,
+            )
+            raw = self.llm_service.generate_structured(prompt, TAILORED_RESUME_SCHEMA)
+            try:
+                return self.validate_and_ground(raw, candidate_source_data)
+            except ResumeCurationGroundingError as exc:
+                last_error = exc
+                retry_feedback = exc.violations
+                logger.warning(
+                    "Resume rephrase attempt %s/%s grounding failed: %s",
+                    attempt,
+                    self.MAX_ATTEMPTS,
+                    exc.violations,
+                )
+
+        raise last_error
+
     @classmethod
     def validate_and_ground(cls, raw, candidate_source_data, allowed_missing_skills=None):
         cls._validate_shape(raw)
 
-        candidate_text = cls._candidate_text_blob(candidate_source_data)
+        candidate_text = cls._candidate_text_blob(candidate_source_data, allowed_missing_skills=allowed_missing_skills)
         candidate_skill_terms = {
             cls._normalise_text(skill)
             for skill in candidate_source_data.get("skills", [])
@@ -341,12 +379,22 @@ class ResumeCurationAIService:
         return False
 
     @classmethod
-    def _candidate_text_blob(cls, candidate_source_data):
+    def _candidate_text_blob(cls, candidate_source_data, allowed_missing_skills=None):
         groundable = {
             key: value
             for key, value in candidate_source_data.items()
             if key not in {"resume_id", "personal_information"}
         }
+        if allowed_missing_skills:
+            groundable["allowed_missing_skills"] = list(allowed_missing_skills)
+            from resumes.services.job_gap_analysis_service import TECH_ALIASES
+            extra_aliases = []
+            for skill in allowed_missing_skills:
+                norm = cls._normalise_text(skill)
+                if norm in TECH_ALIASES:
+                    extra_aliases.extend(TECH_ALIASES[norm])
+            if extra_aliases:
+                groundable["allowed_missing_skills_aliases"] = extra_aliases
         return cls._normalise_text(
             json.dumps(groundable, ensure_ascii=False, sort_keys=True)
         )
