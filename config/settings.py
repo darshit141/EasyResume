@@ -670,7 +670,7 @@ GROQ_FALLBACK_MODELS = [
 LLM_KEY_ROTATION_ENABLED = os.getenv("LLM_KEY_ROTATION_ENABLED", "True") == "True"
 LLM_KEY_COOLDOWN_SECONDS = int(os.getenv("LLM_KEY_COOLDOWN_SECONDS", "300"))
 TAILOR_ADD_MISSING_SKILLS_DEFAULT = os.getenv("TAILOR_ADD_MISSING_SKILLS_DEFAULT", "False") == "True"
-TAILOR_DEFAULT_MODE = os.getenv("TAILOR_DEFAULT_MODE", "system_baseline").strip()
+TAILOR_DEFAULT_MODE = os.getenv("TAILOR_DEFAULT_MODE", "full_tailored").strip()
 
 # Gemini: free-tier API. Get a key at https://aistudio.google.com/apikey
 #

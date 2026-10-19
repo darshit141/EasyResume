@@ -51,10 +51,10 @@ class JobResumeCurationService:
         if not mode:
             mode = get_config_value(
                 "TAILOR_DEFAULT_MODE",
-                getattr(settings, "TAILOR_DEFAULT_MODE", TAILOR_MODE_SYSTEM_BASELINE),
+                getattr(settings, "TAILOR_DEFAULT_MODE", TAILOR_MODE_FULL_TAILORED),
             )
         if mode not in TAILOR_MODES:
-            mode = TAILOR_MODE_SYSTEM_BASELINE
+            mode = TAILOR_MODE_FULL_TAILORED
 
         if curation.tailored_resume_data and not regenerate:
             return curation, self._latest_version(curation)
